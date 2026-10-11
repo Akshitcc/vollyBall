@@ -28,6 +28,18 @@ describe('tap a player to score (1.3.2)', () => {
     assert.deepEqual(doc.events.map((e: { playerId?: string }) => e.playerId), ['bob']);
   });
 
+  it('1.3.3: a team point (scoreboard panel, no player) is scorer-only too', async () => {
+    const id = await createMatch(h);
+    for (const who of ['bob', 'aarav', 'eve'] as const) {
+      const r = await h.as(who).put(`/api/matches/${id}/progress`).send({ events: [pt('B', 1)] });
+      assert.equal(r.status, 403, `${who} should be refused`);
+    }
+    assert.equal((await h.as('cap').put(`/api/matches/${id}/progress`).send({ events: [pt('B', 1)] })).status, 200);
+    const rows = await h.db('points').where({ match_id: id });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].player_key ?? null, null);
+  });
+
   it('rejects a credit to a player of the other team (or nobody on the roster)', async () => {
     const id = await createMatch(h);
     for (const bad of ['aarav', 'eve']) {

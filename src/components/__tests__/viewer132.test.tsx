@@ -104,6 +104,10 @@ test('scoreboard, serving pill, LIVE, last rally, read-only chip counts and rece
   // read-only: no chip is a button
   expect(within(court).getByTestId('court-tile-b3').props.accessibilityRole).toBe('text');
   expect(screen.getByTestId('recent-rallies')).toBeTruthy();
+  // 1.3.3: the last rally was a team point – logged as "Team point" – and viewers get no tap panels
+  expect(within(screen.getByTestId('recent-rallies')).getByText('Mumbai Blockers · Team point')).toBeTruthy();
+  expect(screen.queryByTestId('team-panel-A')).toBeNull();
+  expect(screen.queryByTestId('team-panel-hint-B')).toBeNull();
 });
 
 test('tabs are 48 dp; the photos tab offers Gallery (Camera only on phones)', async () => {

@@ -9,8 +9,8 @@ import type { Match } from '../../core/types';
 import i18n from '../../i18n';
 import ScoreScreen from '../../app/match/[id]/score';
 
-// These suites cover the v1 team-half scoring model (still behind core/liveFlags TEAM_HALF_TAP).
-jest.mock('../../core/liveFlags', () => ({ TEAM_HALF_TAP: true, CHIP_DEBOUNCE_MS: 250 }));
+// These suites cover the v1 team-half scoring model (still behind core/liveFlags LEGACY_HALVES).
+jest.mock('../../core/liveFlags', () => ({ LEGACY_HALVES: true, TEAM_HALF_TAP: true, CHIP_DEBOUNCE_MS: 250 }));
 jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null, MaterialCommunityIcons: () => null }));
 jest.mock('expo-haptics', () => ({ impactAsync: () => Promise.resolve(), selectionAsync: () => Promise.resolve(), notificationAsync: () => Promise.resolve(), ImpactFeedbackStyle: { Medium: 'm', Light: 'l' }, NotificationFeedbackType: { Success: 's' } }));

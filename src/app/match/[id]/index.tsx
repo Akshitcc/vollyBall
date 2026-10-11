@@ -58,13 +58,14 @@ export default function MatchPage() {
   const rallyText = (e: MatchEvent) =>
     e.type === 'timeout'
       ? tr('match.timeoutFor', { team: e.side === 'A' ? m.teamA.name : m.teamB.name })
-      : [e.playerId ? (playerName(e.playerId) ?? tr('common.player')).split(' ')[0] : e.side === 'A' ? m.teamA.name : m.teamB.name, e.kind ? tr(`kinds.${e.kind}`) : null].filter(Boolean).join(' · ');
+      : [e.playerId ? (playerName(e.playerId) ?? tr('common.player')).split(' ')[0] : e.side === 'A' ? m.teamA.name : m.teamB.name, e.playerId ? null : tr('liveV2.teamPoint'), e.kind ? tr(`kinds.${e.kind}`) : null].filter(Boolean).join(' · ');
   const pts = m.events.filter((e): e is Extract<MatchEvent, { type: 'point' }> => e.type === 'point');
   const lastPt = pts[pts.length - 1];
   const tickerText = lastPt ? rallyText(lastPt) : '';
   const dots = pts.slice(-4).map((e) => (e.side === 'A' ? m.teamA.color : m.teamB.color));
-  const oppErrors = { A: 0, B: 0 };
-  for (const e of acceptedEvents(m.rules, m.events, m.firstServe)) if (e.type === 'point' && !e.playerId) oppErrors[e.side]++;
+  // 1.3.3: team points (scoreboard panel taps, legacy uncredited rallies) – never credited to a player
+  const teamOnly = { A: 0, B: 0 };
+  for (const e of acceptedEvents(m.rules, m.events, m.firstServe)) if (e.type === 'point' && !e.playerId) teamOnly[e.side]++;
   const recent = derived.tl.slice(-2).reverse();
   const ago = (at: number) => {
     const sec = Math.max(0, Math.round((Date.now() - at) / 1000));
@@ -292,7 +293,7 @@ export default function MatchPage() {
             {[
               [tr('match.points'), derived.totals.points.A, derived.totals.points.B],
               // 1.3.2: team-only points ("+1 · Opp. error" – no player credit, never toward POTM)
-              [tr('liveV2.oppErrors'), oppErrors.A, oppErrors.B],
+              [tr('liveV2.teamPointsNoPlayer'), teamOnly.A, teamOnly.B],
               [tr('match.spikes'), derived.totals.byKind.A.kill, derived.totals.byKind.B.kill],
               [tr('match.blocks'), derived.totals.byKind.A.block, derived.totals.byKind.B.block],
               [tr('match.aces'), derived.totals.byKind.A.ace, derived.totals.byKind.B.ace],

@@ -926,6 +926,10 @@ const hi: Translations = {
     recentRallies: "हाल की रैलियाँ",
   },
   liveV2: {
+    tapTeamHint: "टैप · टीम +1",
+    teamPoint: "टीम अंक",
+    teamPanelA11y: "{{team}}, {{score}} अंक। किसी खिलाड़ी को श्रेय दिए बिना {{team}} को अंक देने के लिए दो बार टैप करें।",
+    teamPointsNoPlayer: "टीम अंक (बिना खिलाड़ी)",
     tapPlayerToScore: "अंक देने के लिए खिलाड़ी पर टैप करें",
     oppError: "विरोधी की गलती",
     teamPointA11y: "विरोधी की गलती पर {{team}} को अंक। किसी खिलाड़ी को श्रेय नहीं मिलेगा।",

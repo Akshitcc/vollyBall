@@ -235,7 +235,7 @@ export function CourtCard({
     const fg = onColor(team.color); // white or navy text on the chip (≥ 4.5:1)
     const best = Math.max(0, ...team.positions.map((id) => (id ? (pts[id] ?? 0) : 0)));
     return (
-      <View style={s.courtHalf} testID={`court-${team.side}`} accessibilityLabel={t('rotation.courtA11y', { team: team.name })}>
+      <View style={[s.courtHalf, onPlayer && { gap: 8 }]} testID={`court-${team.side}`} accessibilityLabel={t('rotation.courtA11y', { team: team.name })}>
         {grid.map((row, r) => (
           <View key={r} style={s.courtRow}>
             {row.map((pos) => {
@@ -401,7 +401,7 @@ function PlayerTile(p: {
         accessibilityState={{ disabled: p.disabled }}
         accessibilityLabel={label}
         accessibilityHint={t('score.tileHint', { name: p.fullName || p.name, team: p.team.name })}
-        style={[s.tile, border, elevation.e1, p.disabled && { opacity: 0.4 }]}
+        style={[s.tile, s.tileScorer, border, elevation.e1, p.disabled && { opacity: 0.4 }]}
         testID={`court-tile-${p.id}`}
       >
         {({ pressed }: { pressed: boolean }) => body(pressed && !p.disabled)}
@@ -410,38 +410,6 @@ function PlayerTile(p: {
   );
 }
 
-/**
- * "+1 · Opp. error" (§11.1): a TEAM point only – no player credit, so it never counts toward the
- * Player of the Match. Light haptic, the +1 tile pulses (press scale), the score rolls.
- */
-export function TeamPointButton({ side, name, color, disabled, onPress }: { side: Side; name: string; color: string; disabled?: boolean; onPress: () => void }) {
-  const { t } = useTranslation();
-  const fg = teamInk(color).fg;
-  return (
-    <PressableScale
-      onPress={onPress}
-      disabled={disabled}
-      scaleTo={0.94}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: !!disabled }}
-      accessibilityLabel={t('liveV2.teamPointA11y', { team: name })}
-      style={[s.teamBtn, disabled && { opacity: 0.4 }]}
-      testID={`team-point-${side}`}
-    >
-      <View style={[s.teamBtnTile, { backgroundColor: color }]}>
-        <Text style={{ color: fg, fontWeight: '900', fontSize: 15 }}>+1</Text>
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={s.teamBtnName} numberOfLines={1}>
-          {name.split(/\s+/)[0]}
-        </Text>
-        <Text style={s.teamBtnSub} numberOfLines={1}>
-          {t('liveV2.oppError')}
-        </Text>
-      </View>
-    </PressableScale>
-  );
-}
 
 const s = StyleSheet.create({
   halfOuter: { borderRadius: radius.lg, ...elevation.e2, backgroundColor: 'transparent' },
@@ -476,6 +444,8 @@ const s = StyleSheet.create({
   cell: { flex: 1 },
   tile: { minHeight: 84, borderRadius: 16, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', paddingTop: 12, paddingBottom: 8, paddingHorizontal: 3 },
   tileViewer: {},
+  /** 1.3.3: the Opp. error row is gone, so scorer chips grow to 70×90 in 98 dp rows (§11.1); viewer stays 84. */
+  tileScorer: { minHeight: 90 },
   tileEmpty: { backgroundColor: colors.white, borderColor: colors.border, borderStyle: 'dashed' },
   tilePos: { position: 'absolute', top: 5, left: 5, width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   tilePosText: { fontSize: 10, fontWeight: '800' },
@@ -489,8 +459,4 @@ const s = StyleSheet.create({
   ring: { position: 'absolute', top: -4, left: -4, right: -4, bottom: -4, borderRadius: 19, borderWidth: 3, borderColor: colors.primary },
   bump: { position: 'absolute', top: -10, alignSelf: 'center', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 },
   bumpText: { color: colors.white, fontWeight: '900', fontSize: 12 },
-  teamBtn: { flex: 1, minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.white, borderRadius: 14, borderWidth: 1.5, borderColor: colors.hairline, paddingHorizontal: 10, ...elevation.e1 },
-  teamBtnTile: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  teamBtnName: { color: colors.text, fontWeight: '800', fontSize: 15 },
-  teamBtnSub: { color: colors.muted, fontWeight: '600', fontSize: 12 },
 });

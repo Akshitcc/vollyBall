@@ -1,6 +1,7 @@
 /**
- * 1.3.2 Live match v2 (design-spec §11): tap a player chip to score (one atomic event, live counts,
- * undo label, team-only "Opp. error" point, debounce, ≥48 dp targets, disabled when finished), the
+ * 1.3.2/1.3.3 Live match v2 (design-spec §11): tap a player chip to score (one atomic event, live
+ * counts, undo label, debounce, ≥48 dp targets, disabled when finished), tap a team's scoreboard panel
+ * for a team point (1.3.3: no player credit, Light haptic, "Team point"), the
  * safe-area bottom bar, the gallery multi-select through the photo checks, and the photo sheet.
  */
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
@@ -10,7 +11,7 @@ import { INDOOR_RULES } from '../../core/rules';
 import type { Match } from '../../core/types';
 import i18n from '../../i18n';
 import ScoreScreen from '../../app/match/[id]/score';
-import { TEAM_HALF_TAP } from '../../core/liveFlags';
+import { LEGACY_HALVES, TEAM_HALF_TAP } from '../../core/liveFlags';
 import { queuePickedPhotos } from '../../services/photoPick';
 
 let mockInsets = { top: 0, bottom: 0, left: 0, right: 0 };
@@ -109,8 +110,9 @@ afterEach(async () => {
 });
 
 describe('score screen v2: tap a player to score', () => {
-  it('ships with team-half tapping OFF (waits on product confirmation)', () => {
-    expect(TEAM_HALF_TAP).toBe(false);
+  it('1.3.3 ships with team tapping ON (scoreboard panels) and the v1 halves layout OFF', () => {
+    expect(TEAM_HALF_TAP).toBe(true);
+    expect(LEGACY_HALVES).toBe(false);
   });
 
   it('a chip tap saves ONE event (team +1 and player +1); the chip count, the score and the undo label follow', async () => {
@@ -142,20 +144,109 @@ describe('score screen v2: tap a player to score', () => {
     expect(lastSaved()).toHaveLength(2);
   });
 
-  it('"+1 · Opp. error" is a team point with no player credit', async () => {
+  it('the separate "+1 · Opp. error" buttons are gone', async () => {
     await open();
-    await fireEvent.press(screen.getByTestId('team-point-B'));
+    expect(screen.queryByTestId('team-point-row')).toBeNull();
+    expect(screen.queryByTestId('team-point-A')).toBeNull();
+    expect(screen.queryByTestId('team-point-B')).toBeNull();
+  });
+
+  it('tapping a team score panel: team +1, no player credit, Light haptic, "Team point" in the rally strip', async () => {
+    await open();
+    expect(screen.getByTestId('team-panel-hint-A')).toBeTruthy();
+    await fireEvent.press(screen.getByTestId('team-panel-B'));
+    expect(mockSave).toHaveBeenCalledTimes(1);
     expect(lastSaved()).toHaveLength(1);
     expect(lastSaved()[0]).toMatchObject({ type: 'point', side: 'B' });
     expect((lastSaved()[0] as { playerId?: string }).playerId).toBeUndefined();
     expect(txt('viewer-score-B')).toBe('1');
+    expect(mockHaptic).toHaveBeenCalledWith('impact', 'l');
+    expect(mockHaptic).not.toHaveBeenCalledWith('impact', 'm');
+    expect(screen.getByText(/Team point/)).toBeTruthy();
+    expect(screen.getByTestId('team-panel-bump-B')).toBeTruthy();
+    // no player's count moved
+    for (const id of ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6']) expect(txt(`court-pts-${id}`)).toMatch(/^0/);
   });
 
-  it('chips are ≥ 48 dp (84 dp tall) and are disabled once the match is over', async () => {
+  it('a chip tap is Medium, a panel tap is Light (the scorer can feel the difference)', async () => {
+    await open();
+    await fireEvent.press(screen.getByTestId('court-tile-a1'));
+    expect(mockHaptic).toHaveBeenLastCalledWith('impact', 'm');
+    await fireEvent.press(screen.getByTestId('team-panel-A'));
+    expect(mockHaptic).toHaveBeenLastCalledWith('impact', 'l');
+  });
+
+  it('a panel point and a chip point for the same team score and serve the same; only the credit differs', async () => {
+    await open();
+    await fireEvent.press(screen.getByTestId('team-panel-B'));
+    const teamEv = lastSaved()[0];
+    await fireEvent.press(screen.getByTestId('undo'));
+    await fireEvent.press(screen.getByTestId('court-tile-b1'));
+    const chipEv = lastSaved()[0];
+    const { playerId, ...rest } = chipEv as { playerId?: string };
+    expect(playerId).toBe('b1');
+    expect(Object.keys(rest).sort()).toEqual(Object.keys(teamEv).sort());
+    expect(rest).toMatchObject({ type: 'point', side: 'B' });
+    expect(screen.getByTestId('serving-B')).toBeTruthy();
+  });
+
+  it('undo of a team point takes back only the team point and says so; undo of a player point takes back both', async () => {
+    await open();
+    await fireEvent.press(screen.getByTestId('court-tile-a2'));
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(300);
+    });
+    await fireEvent.press(screen.getByTestId('team-panel-A'));
+    expect(txt('viewer-score-A')).toBe('2');
+    expect(txt('undo-sub')).toBe('Delhi −1 · Back to 1–0');
+    await fireEvent.press(screen.getByTestId('undo'));
+    expect(lastSaved()).toEqual([expect.objectContaining({ side: 'A', playerId: 'a2' })]);
+    expect(txt('viewer-score-A')).toBe('1');
+    expect(txt('court-pts-a2')).toMatch(/^1/); // the player's count untouched by a team undo
+    expect(txt('undo-sub')).toBe('A2 −1 · Back to 0–0');
+    await fireEvent.press(screen.getByTestId('undo'));
+    expect(lastSaved()).toEqual([]);
+    expect(txt('viewer-score-A')).toBe('0');
+    expect(txt('court-pts-a2')).toMatch(/^0/);
+  });
+
+  it('a double tap on the same panel within 250 ms counts once', async () => {
+    await open();
+    await fireEvent.press(screen.getByTestId('team-panel-A'));
+    await fireEvent.press(screen.getByTestId('team-panel-A'));
+    expect(mockSave).toHaveBeenCalledTimes(1);
+    await fireEvent.press(screen.getByTestId('team-panel-B')); // a different panel always counts
+    expect(lastSaved()).toHaveLength(2);
+  });
+
+  it('the panel is ≥ 48 dp, labelled teamPanelA11y, and inert once the match is over', async () => {
+    await open([{ type: 'point', side: 'A', at: 1 }]);
+    const panel = screen.getByTestId('team-panel-A');
+    expect(panel.props.accessibilityRole).toBe('button');
+    expect(panel.props.accessibilityLabel).toBe('Delhi Spikers, 1 points. Double-tap to give Delhi Spikers a point with no player credit.');
+    expect(StyleSheet.flatten(panel.props.style).minHeight).toBeGreaterThanOrEqual(48);
+    await screen.unmount();
+    const win = (side: 'A' | 'B', n: number, at0: number) => Array.from({ length: n }, (_, i) => ({ type: 'point' as const, side, at: at0 + i }));
+    await open([...win('A', 5, 1), ...win('A', 5, 10)], { status: 'finished' } as Partial<Match>);
+    mockSave.mockClear();
+    await fireEvent.press(screen.getByTestId('team-panel-B'));
+    expect(mockSave).not.toHaveBeenCalled();
+    expect(screen.getByTestId('team-panel-B').props.accessibilityState).toMatchObject({ disabled: true });
+  });
+
+  it('only the scorer gets the panels: anyone else sees the "not the scorer" page with no tap targets', async () => {
+    await open([], { scorerId: 'someone-else' } as Partial<Match>);
+    expect(screen.getByText(i18n.t('score.notScorer'))).toBeTruthy();
+    expect(screen.queryByTestId('team-panel-A')).toBeNull();
+    expect(screen.queryByTestId('court-tile-a1')).toBeNull();
+    expect(mockSave).not.toHaveBeenCalled();
+  });
+
+  it('chips are ≥ 48 dp (90 dp tall) and are disabled once the match is over', async () => {
     const win = (side: 'A' | 'B', n: number, at0: number) => Array.from({ length: n }, (_, i) => ({ type: 'point' as const, side, at: at0 + i }));
     await open();
     const st = StyleSheet.flatten(screen.getByTestId('court-tile-a1').props.style);
-    expect((st.minHeight ?? st.height) as number).toBeGreaterThanOrEqual(48);
+    expect(st.minHeight).toBe(90); // 1.3.3: 70×90 chips (98 dp rows) now the Opp. error row is gone
     await screen.unmount();
     await open([...win('A', 5, 1), ...win('A', 5, 10)], { status: 'finished' } as Partial<Match>);
     mockSave.mockClear();

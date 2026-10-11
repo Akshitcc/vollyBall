@@ -4,9 +4,13 @@
  * pill on the serving team, and in the centre the sets count with the finished set chips and the
  * current set chip. A score change rolls in (up for a point, down for an undo) with a light-blue glow;
  * Reduce Motion turns that into a 150 ms fade.
+ *
+ * 1.3.3 (scorer only): with `onTeamPoint` each team column is a tap panel (≥ 48 dp, ~127×179) –
+ * team +1 with no player credit. Press: scale 0.97 + white/blue ring + 14% white fill; a green +1
+ * bump on the panel's top edge for 450 ms. The viewer passes no `onTeamPoint`: no panel, no hint.
  */
 import { Ionicons } from '@expo/vector-icons';
-import React, { forwardRef, useEffect, useRef } from 'react';
+import React, { forwardRef, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
 import Animated, { Easing, FadeIn, runOnJS, SlideInDown, SlideInUp, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
@@ -14,6 +18,7 @@ import type { MatchState, Side } from '../core/scoring';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 import { letterSpacing } from '../i18n/format';
 import { colors } from '../theme';
+import { PressableScale } from './PressableScale';
 
 /** What a score change looks like: a roll, or with Reduce Motion a fade (never movement). */
 export const bumpKind = (reduceMotion: boolean): 'bump' | 'fade' => (reduceMotion ? 'fade' : 'bump');
@@ -89,8 +94,18 @@ export const LiveScoreboard = forwardRef<View, {
   left?: Side;
   scoreRefs?: Partial<Record<Side, React.RefObject<View | null>>>;
   testID?: string;
-}>(function LiveScoreboard({ teamA, teamB, st, setsNeeded, live, left = 'A', scoreRefs, testID = 'live-scoreboard' }, ref) {
+  /** Scorer only: tap a team's panel → team point (no player credit). */
+  onTeamPoint?: (side: Side) => boolean | void;
+  disabled?: boolean;
+}>(function LiveScoreboard({ teamA, teamB, st, setsNeeded, live, left = 'A', scoreRefs, testID = 'live-scoreboard', onTeamPoint, disabled }, ref) {
   const { t } = useTranslation();
+  const reduce = useReduceMotion();
+  const [bump, setBump] = useState<{ side: Side; k: number } | null>(null);
+  useEffect(() => {
+    if (!bump) return;
+    const tm = setTimeout(() => setBump((b) => (b?.k === bump.k ? null : b)), 450);
+    return () => clearTimeout(tm);
+  }, [bump]);
   const order: Side[] = left === 'A' ? ['A', 'B'] : ['B', 'A'];
   const score = (side: Side) => (live ? (side === 'A' ? st.current.a : st.current.b) : side === 'A' ? st.setsWon.A : st.setsWon.B);
   const lead = score('A') === score('B') ? null : score('A') > score('B') ? 'A' : 'B';
@@ -120,23 +135,62 @@ export const LiveScoreboard = forwardRef<View, {
                 )}
               </View>
             )}
-            <View style={{ flex: 1, alignItems: 'center' }} testID={`viewer-team-${side}`}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', maxWidth: '100%' }}>
-                <View style={[st2.dot, { backgroundColor: team.color }]} />
-                <Text style={st2.name} numberOfLines={1}>
-                  {team.name}
-                </Text>
-              </View>
-              <View ref={scoreRefs?.[side]} collapsable={false}>
-                <RollScore value={score(side)} style={lead && lead !== side ? { color: TRAILING_SCORE } : null} testID={`viewer-score-${side}`} />
-              </View>
-              <View style={{ flexDirection: 'row', gap: 4 }} accessibilityLabel={t('viewer.setsWon', { count: won })} testID={`sets-won-${side}`}>
-                {Array.from({ length: setsNeeded }, (_, k) => (
-                  <View key={k} style={[st2.pip, k < won && { backgroundColor: colors.primary }]} />
-                ))}
-              </View>
-              {serving ? <ServingPill testID={`serving-${side}`} /> : <View style={{ height: 38 }} />}
-            </View>
+            {(() => {
+              const content = (pressed: boolean) => (
+                <View style={{ alignItems: 'center', width: '100%' }} testID={`viewer-team-${side}`}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', maxWidth: '100%' }}>
+                    <View style={[st2.dot, { backgroundColor: team.color }]} />
+                    <Text style={st2.name} numberOfLines={1}>
+                      {team.name}
+                    </Text>
+                  </View>
+                  <View ref={scoreRefs?.[side]} collapsable={false}>
+                    <RollScore value={score(side)} style={lead && lead !== side ? { color: TRAILING_SCORE } : null} testID={`viewer-score-${side}`} />
+                  </View>
+                  <View style={{ flexDirection: 'row', gap: 4 }} accessibilityLabel={t('viewer.setsWon', { count: won })} testID={`sets-won-${side}`}>
+                    {Array.from({ length: setsNeeded }, (_, k) => (
+                      <View key={k} style={[st2.pip, k < won && { backgroundColor: colors.primary }]} />
+                    ))}
+                  </View>
+                  {serving ? <ServingPill testID={`serving-${side}`} /> : <View style={{ height: 38 }} />}
+                  {onTeamPoint && (
+                    <View style={[st2.hint, pressed && { backgroundColor: 'rgba(255,255,255,0.14)' }]} testID={`team-panel-hint-${side}`}>
+                      <Ionicons name="add-circle" size={14} color={colors.white} />
+                      <Text style={st2.hintText} numberOfLines={1}>
+                        {t('liveV2.tapTeamHint')}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              );
+              if (!onTeamPoint) return <View style={{ flex: 1, alignItems: 'center' }}>{content(false)}</View>;
+              return (
+                <PressableScale
+                  onPress={() => {
+                    if (disabled) return;
+                    if (onTeamPoint(side) !== false) setBump({ side, k: Date.now() });
+                  }}
+                  disabled={disabled}
+                  scaleTo={0.97}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: !!disabled }}
+                  accessibilityLabel={t('liveV2.teamPanelA11y', { team: team.name, score: score(side) })}
+                  style={({ pressed }: { pressed: boolean }) => [st2.panel, pressed && !disabled && st2.panelPressed, disabled && { opacity: 0.55 }]}
+                  testID={`team-panel-${side}`}
+                >
+                  {({ pressed }: { pressed: boolean }) => (
+                    <>
+                      {content(pressed && !disabled)}
+                      {bump?.side === side && (
+                        <Animated.View key={bump.k} entering={FadeIn.duration(reduce ? 150 : 120)} pointerEvents="none" style={st2.bump} testID={`team-panel-bump-${side}`}>
+                          <Text style={st2.bumpText}>+1</Text>
+                        </Animated.View>
+                      )}
+                    </>
+                  )}
+                </PressableScale>
+              );
+            })()}
           </React.Fragment>
         );
       })}
@@ -163,6 +217,12 @@ const st2 = StyleSheet.create({
   dot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5, borderColor: colors.white, marginRight: 6 },
   name: { color: colors.white, fontWeight: '800', fontSize: 14, flexShrink: 1 },
   pip: { width: 18, height: 5, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.25)' },
+  panel: { flex: 1, minHeight: 48, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', backgroundColor: 'rgba(255,255,255,0.07)', paddingVertical: 10, paddingHorizontal: 6, alignItems: 'center' },
+  panelPressed: { backgroundColor: 'rgba(255,255,255,0.14)', borderWidth: 3, borderColor: colors.primary, paddingVertical: 8, paddingHorizontal: 4 },
+  hint: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 24, borderRadius: 999, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(255,255,255,0.45)', paddingHorizontal: 10, marginTop: 8, maxWidth: '100%' },
+  hintText: { color: colors.white, fontSize: 11, fontWeight: '700', flexShrink: 1 },
+  bump: { position: 'absolute', top: -10, right: 10, backgroundColor: colors.success, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, borderWidth: 2, borderColor: colors.white },
+  bumpText: { color: colors.white, fontWeight: '900', fontSize: 12 },
 });
 
 export interface Flight {

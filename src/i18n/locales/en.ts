@@ -926,6 +926,10 @@ const en = {
     recentRallies: "Recent rallies",
   },
   liveV2: {
+    tapTeamHint: "Tap · team +1",
+    teamPoint: "Team point",
+    teamPanelA11y: "{{team}}, {{score}} points. Double-tap to give {{team}} a point with no player credit.",
+    teamPointsNoPlayer: "Team points (no player)",
     tapPlayerToScore: "Tap a player to score",
     oppError: "Opp. error",
     teamPointA11y: "Point to {{team}} for an opponent error. No player gets credit.",

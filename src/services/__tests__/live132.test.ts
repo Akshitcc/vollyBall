@@ -43,7 +43,13 @@ describe('the atomic tap event', () => {
     expect(computeState(R, ev, 'A').finished).toBe(true);
     expect(tap(ev, 'A', 'a1')).toHaveLength(3);
   });
-  it('a team-only point (opponent error) credits nobody and never helps the Player of the Match', () => {
+  it('1.3.3: a chip point is exactly addPoint() with the player; a team-panel point is addPoint() without', () => {
+    let ev: MatchEvent[] = addPoint(R, [], 'A', { at: 1, firstServe: 'A' });
+    expect(tap(ev, 'B', onCourt(ev, 'B')[0]!)).toEqual(addPoint(R, ev, 'B', { at: 1, firstServe: 'A', playerId: onCourt(ev, 'B')[0]! }));
+    ev = addPoint(R, ev, 'B', { at: 2, firstServe: 'A' });
+    expect(ev[1]).toEqual({ type: 'point', side: 'B', at: 2 });
+  });
+  it('a team-only point (team panel) credits nobody and never helps the Player of the Match', () => {
     const ev = addPoint(R, [], 'B', { at: 1, firstServe: 'A' });
     expect(ev[0]).toEqual({ type: 'point', side: 'B', at: 1 });
     expect(playerPointCounts(R, ev, 'A')).toEqual({});
@@ -117,6 +123,32 @@ describe('per-player counts flow into stats, Profile, rankings, POTM and the wal
     expect(potmProblem({ ...m, playerOfMatchId: null } as Match, 'a1', 'a5', m.finishedServerAt! + 1000)).toBe('potm_no_points');
     expect(potmNoPoints(m, 'a2')).toBe(false);
   });
+  it('1.3.3: team-panel points never count for any player, rankings, the wallet or POTM', () => {
+    // A wins 3–0 on two team-panel points and ONE chip point by a4
+    let e: MatchEvent[] = addPoint(R, [], 'A', { at: 1, firstServe: 'A' });
+    e = addPoint(R, e, 'A', { at: 2, firstServe: 'A' });
+    e = tap(e, 'A', 'a4');
+    const m = finished(3, e);
+    expect(computeState(R, e, 'A').winner).toBe('A');
+    expect(playerPointCounts(R, e, 'A', m)).toEqual({ a4: 1 });
+    expect(Object.values(playerStats(R, e, 'A', m)).reduce((n, l) => n + l.points, 0)).toBe(1);
+    expect(pickPlayerOfMatch(m)).toBe('a4');
+    for (const id of ['a1', 'a2', 'a3', 'a5', 'a6', 'b1']) expect(potmNoPoints(m, id)).toBe(true);
+    expect(careerStats('a1', [m]).points).toBe(0);
+    const done = { ...m, playerOfMatchId: 'a4' } as Match; // completed (POTM set) → counted for rankings
+    expect(countedTotals([done]).find((x) => x.playerId === 'a4')?.points).toBe(1);
+    expect(countedTotals([done]).reduce((n, x) => n + x.points, 0)).toBe(1);
+    expect(playerWallet([done], 'a1').points).toBe(0);
+    expect(playerWallet([done], 'a4').points).toBe(1);
+    // all-team-point match: team points give nobody a point, so there is no automatic pick
+    // (the existing rule then leaves the choice to the scorer, as for legacy uncredited matches)
+    let t: MatchEvent[] = [];
+    for (let i = 0; i < 3; i++) t = addPoint(R, t, 'B', { at: i + 1, firstServe: 'A' });
+    const m2 = finished(4, t);
+    expect(playerPointCounts(R, t, 'A', m2)).toEqual({});
+    expect(pickPlayerOfMatch(m2)).toBeNull();
+    expect(careerStats('b1', [m2]).points).toBe(0);
+  });
   it('Profile career, rankings totals and the wallet use the tapped counts', () => {
     const ms = [finished(1, ev, 'a2'), finished(2, ev, 'a2')];
     expect(careerStats('a2', ms).points).toBe(4);
@@ -162,6 +194,9 @@ describe('scorer-only on the demo backend', () => {
     const other = await signedIn(7);
     (other as unknown as { db: unknown }).db = db(scorer);
     await expect(other.saveMatchProgress('match_live', { events: next, summary, status: 'live' })).rejects.toThrow(/scorer/i);
+    // 1.3.3: a team-panel point (no player credit) is scorer-only too
+    const teamNext = addPoint(m.rules, m.events, 'B', { firstServe: m.firstServe });
+    await expect(other.saveMatchProgress('match_live', { events: teamNext, summary: summarize(computeState(m.rules, teamNext, m.firstServe)), status: 'live' })).rejects.toThrow(/scorer/i);
 
     await scorer.saveMatchProgress('match_live', { events: next, summary, status: 'live' });
     expect(db(scorer).matches.match_live.events.at(-1)).toMatchObject({ type: 'point', side: 'A', playerId: pos.positions.A[0] });

@@ -975,6 +975,12 @@ describe('1.3.2: tap a player to score', () => {
     await assertFails(updateDoc(m1('cap'), { events: [{ type: 'point', side: 'A', at: Date.now(), playerId: 'zz' }] }));
     await assertSucceeds(updateDoc(m1('cap'), { events: [{ type: 'point', side: 'B', at: Date.now() }] }));
   });
+  test('1.3.3: a team point (scoreboard panel, no player credit) is scorer-only', async () => {
+    const team = [{ type: 'point', side: 'B', at: Date.now() }];
+    await assertFails(updateDoc(m1('eve'), { events: team })); // captain of B
+    await assertFails(updateDoc(m1('p1'), { events: team }));
+    await assertSucceeds(updateDoc(m1('cap'), { events: team }));
+  });
   test('one rally per write, and undo pops it', async () => {
     const at = Date.now();
     const two = [{ type: 'point', side: 'A', at, playerId: 'p2' }, { type: 'point', side: 'A', at, playerId: 'p3' }];
