@@ -1,0 +1,263 @@
+%% VolleyLive MySQL schema (server/migrations/0001_init.sql). Generated from information_schema.
+erDiagram
+  challenges {
+    varchar id PK
+    varchar from_team_id FK
+    varchar to_team_id FK
+    varchar from_captain_id FK
+    varchar to_captain_id FK
+    varchar from_team_name
+    varchar to_team_name
+    datetime scheduled_for
+    varchar location_name
+    decimal location_lat
+    decimal location_lng
+    varchar message
+    bigint rule_set_id FK
+    enum status
+    varchar match_id FK
+    datetime created_at
+    datetime responded_at
+  }
+  courts {
+    varchar id PK
+    varchar name
+    varchar location_name
+    decimal location_lat
+    decimal location_lng
+    enum surface
+    varchar added_by FK
+    datetime created_at
+  }
+  device_tokens {
+    bigint id PK
+    varchar user_id FK
+    varchar token UK
+    varchar platform
+    datetime created_at
+    datetime updated_at
+  }
+  fixtures {
+    varchar tournament_id PK,FK
+    varchar fixture_key PK
+    smallint round
+    smallint idx
+    varchar home_key FK
+    varchar away_key FK
+    varchar home_from
+    varchar away_from
+    varchar match_id FK
+  }
+  match_participants {
+    varchar match_id PK,FK
+    varchar user_id PK,FK
+  }
+  match_photos {
+    varchar id PK
+    varchar match_id FK
+    varchar uploaded_by FK
+    varchar storage_key UK
+    varchar content_type
+    int size_bytes
+    datetime created_at
+  }
+  match_players {
+    varchar match_id PK,FK
+    varchar player_key PK
+    enum side FK
+    varchar user_id FK
+    varchar name
+    varchar photo_url
+    smallint sort_order
+  }
+  match_sides {
+    varchar match_id PK,FK
+    enum side PK
+    varchar team_id FK
+    varchar name
+    varchar color
+  }
+  matches {
+    varchar id PK
+    varchar title
+    bigint rule_set_id FK
+    enum first_serve
+    enum status
+    varchar created_by FK
+    varchar scorer_id FK
+    varchar location_name
+    decimal location_lat
+    decimal location_lng
+    datetime scheduled_at
+    datetime started_at
+    datetime finished_at
+    varchar tournament_id FK
+    varchar fixture_key
+    varchar challenge_id FK
+    enum stream_provider
+    varchar stream_playback_url
+    varchar stream_ingest_url
+    tinyint stream_live
+    int event_count
+    int version
+    json summary
+    datetime created_at
+    datetime updated_at
+  }
+  play_requests {
+    varchar match_id PK,FK
+    varchar user_id PK,FK
+    datetime created_at
+  }
+  points {
+    varchar match_id PK,FK
+    int seq PK
+    tinyint set_number
+    enum side
+    varchar player_key
+    enum kind
+    enum serving_side
+    varchar server_key
+    datetime at
+  }
+  rule_sets {
+    bigint id PK
+    enum preset
+    tinyint best_of
+    tinyint points_per_set
+    tinyint deciding_set_points
+    tinyint win_by
+    tinyint point_cap
+    tinyint timeouts_per_set
+    tinyint side_switch_every
+    tinyint deciding_side_switch_every
+    tinyint deciding_switch_at
+  }
+  set_lineups {
+    varchar match_id PK,FK
+    tinyint set_number PK
+    enum side PK
+    tinyint position PK
+    varchar player_key FK
+  }
+  sets {
+    varchar match_id PK,FK
+    tinyint set_number PK
+    smallint score_a
+    smallint score_b
+    enum winner
+    tinyint timeouts_a
+    tinyint timeouts_b
+    smallint rotations_a
+    smallint rotations_b
+  }
+  team_invites {
+    bigint id PK
+    varchar team_id FK
+    varchar phone
+    varchar invited_user_id FK
+    varchar invited_by FK
+    enum status
+    datetime created_at
+    datetime responded_at
+    varchar pending_phone
+  }
+  team_members {
+    varchar team_id PK,FK
+    varchar user_id PK,FK
+    enum role
+    smallint sort_order
+    datetime joined_at
+  }
+  teams {
+    varchar id PK
+    varchar name
+    varchar name_lower
+    varchar color
+    varchar captain_id FK
+    varchar city
+    datetime created_at
+    datetime updated_at
+  }
+  timeouts {
+    varchar match_id PK,FK
+    int seq PK
+    tinyint set_number
+    enum side
+    datetime at
+  }
+  tournament_teams {
+    varchar tournament_id PK,FK
+    varchar team_key PK
+    varchar team_id FK
+    varchar name
+    varchar color
+    smallint sort_order
+  }
+  tournaments {
+    varchar id PK
+    varchar name
+    varchar organizer_id FK
+    enum format
+    bigint rule_set_id FK
+    datetime start_date
+    datetime end_date
+    varchar location_name
+    decimal location_lat
+    decimal location_lng
+    enum status
+    datetime created_at
+    datetime updated_at
+  }
+  users {
+    varchar id PK
+    varchar name
+    varchar phone UK
+    varchar photo_url
+    enum position
+    varchar city
+    datetime created_at
+    datetime updated_at
+  }
+  users ||--o{ challenges : "challenges_from_captain"
+  teams ||--o{ challenges : "challenges_from_team"
+  matches ||--o{ challenges : "challenges_match"
+  rule_sets ||--o{ challenges : "challenges_rules"
+  users ||--o{ challenges : "challenges_to_captain"
+  teams ||--o{ challenges : "challenges_to_team"
+  users ||--o{ courts : "courts_added_by"
+  users ||--o{ device_tokens : "device_tokens_user"
+  tournament_teams ||--o{ fixtures : "fixtures_away"
+  tournament_teams ||--o{ fixtures : "fixtures_home"
+  matches ||--o{ fixtures : "fixtures_match"
+  tournaments ||--o{ fixtures : "fixtures_tournament"
+  matches ||--o{ match_participants : "match_participants_match"
+  users ||--o{ match_participants : "match_participants_user"
+  matches ||--o{ match_photos : "match_photos_match"
+  users ||--o{ match_photos : "match_photos_user"
+  match_sides ||--o{ match_players : "match_players_side"
+  users ||--o{ match_players : "match_players_user"
+  matches ||--o{ match_sides : "match_sides_match"
+  teams ||--o{ match_sides : "match_sides_team"
+  challenges ||--o{ matches : "matches_challenge"
+  users ||--o{ matches : "matches_created_by"
+  rule_sets ||--o{ matches : "matches_rules"
+  users ||--o{ matches : "matches_scorer"
+  tournaments ||--o{ matches : "matches_tournament"
+  matches ||--o{ play_requests : "play_requests_match"
+  users ||--o{ play_requests : "play_requests_user"
+  matches ||--o{ points : "points_match"
+  matches ||--o{ set_lineups : "set_lineups_match"
+  match_players ||--o{ set_lineups : "set_lineups_player"
+  matches ||--o{ sets : "sets_match"
+  users ||--o{ team_invites : "team_invites_by"
+  teams ||--o{ team_invites : "team_invites_team"
+  users ||--o{ team_invites : "team_invites_user"
+  teams ||--o{ team_members : "team_members_team"
+  users ||--o{ team_members : "team_members_user"
+  users ||--o{ teams : "teams_captain"
+  matches ||--o{ timeouts : "timeouts_match"
+  teams ||--o{ tournament_teams : "tournament_teams_team"
+  tournaments ||--o{ tournament_teams : "tournament_teams_tournament"
+  users ||--o{ tournaments : "tournaments_organizer"
+  rule_sets ||--o{ tournaments : "tournaments_rules"

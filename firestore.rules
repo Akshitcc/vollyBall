@@ -1,0 +1,859 @@
+rules_version = '2';
+
+// VolleyLive Firestore security rules (Firebase-direct mode).
+// With the API server (server/), the same rules are enforced in server/src/domain; see server/RULES.md.
+// Key guarantees:
+//  * Only the assigned scorer can change a match's score (events/summary/status).
+//  * Only a team's captain can edit the team and can only invite REGISTERED numbers;
+//    players can only accept/decline
+//    their own invite (verified by the phone number on their auth token) or leave.
+//  * Users can only claim their own verified phone number.
+//  * Match players are registered users (by id), 12 max per team, 6 before scoring starts,
+//    and they can't change after the first rally (see "match rosters").
+//  * 1.3.0: every write needs the current T&C accepted (terms/{uid}, written only by the accept
+//    action with request.time); results are confirmed by the opposing captain or reviewed by an
+//    admin (custom claim `admin`, set by the operator with the Admin SDK: nothing in the app creates
+//    it); completed/abandoned matches are terminal; start/finish times are the server's.
+//    Points, the win bonus and the wallet are DERIVED (src/core/antifraud.ts): no collection stores
+//    them and there is no catch-all rule, so wallets/ledger/redemptions/payouts writes are denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function myPhone() { return request.auth.token.phone_number; }
+    // Indian mobile numbers only, E.164: same pattern as src/core/phone.ts (E164_IN_RE) and the API.
+    function validPhone(p) { return p is string && p.matches('^[+]91[6-9][0-9]{9}$'); }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    // ---------- T&C (1.3.0) ----------
+    // Must equal src/core/terms.ts TERMS_VERSION (rules-tests compare them).
+    function termsVersion() { return '2026-10-draft-1'; }
+    // The caller accepted the CURRENT version (a missing doc fails the get = denied). 1 read.
+    function termsOk() { return get(/databases/$(database)/documents/terms/$(uid())).data.version == termsVersion(); }
+    // Admin = custom claim set by the operator (Admin SDK) for ADMIN_UIDS; the app never sets claims.
+    function isAdmin() { return request.auth.token.get('admin', false) == true; }
+
+    // ---------- shared input checks (QA G1/G3/G7/G14/G15) ----------
+    // Text limits are the same table as src/core/limits.ts (LIMITS); rules-tests compare the numbers.
+    // Text must already be cleaned by the client (src/core/text.ts cleanText): trimmed, no zero-width
+    // characters, no control characters, no bidi overrides/isolates/marks. Names need a letter or digit.
+    // Checked on write only (create, or update of that field): stored documents are never rewritten.
+    // One regex each (cheap in the rules' 1000-expression budget). Allowed characters exclude
+    // control (C0/C1, incl. tab/newline), soft hyphen, zero-width, bidi marks/overrides/isolates, BOM.
+    // textRe: empty, or starts and ends with a character JavaScript's trim() keeps: not ASCII space,
+    // no-break space, U+1680, U+2000-200A, line/paragraph separator, U+202F, U+205F, U+3000, and
+    // not an invisible filler (Hangul U+115F/1160/3164/FFA0, braille blank U+2800), the same set
+    // src/core/text.ts cleanText trims (QA retest 217 #4, #7). U+180E is refused anywhere (the app
+    // removes it). nameRe: same, plus a letter or digit somewhere that is not a filler.
+    // Lengths: size() counts UTF-16 units and so does the app (text.ts textLength, retest 217 #6).
+    function textRe() { return '^([^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]([^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}])?)?$'; }
+    function nameRe() { return '^((?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})|(?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})[^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]|[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}][^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*(?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})|[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}][^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*(?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})[^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}])$'; }
+    function textOk(s, max) { return s is string && s.size() <= max && s.matches(textRe()); }
+    function optTextOk(s, max) { return s == null || textOk(s, max); }
+    function nameOk(s, min, max) { return s is string && s.size() >= min && s.size() <= max && s.matches(nameRe()); }
+    function noBadChars(s) { return s.matches('[^\\x{0}-\\x{9}\\x{B}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*'); }  // multi-line text: newline allowed
+    function intIn(v, lo, hi) { return v is int && v >= lo && v <= hi; }
+    function optIntIn(v, lo, hi) { return v == null || intIn(v, lo, hi); }
+    function msOk(v) { return v is int && v >= 0; }
+    function optMsOk(v) { return v == null || msOk(v); }
+    function nowMs() { return request.time.toMillis(); }
+    // Start times may be up to 15 minutes in the past (src/core/dates.ts PAST_GRACE_MS).
+    function notPast(v) { return msOk(v) && v >= nowMs() - 900000; }
+    // Keys being written: every key on create, the changed ones on update.
+    function writtenKeys() { return resource == null ? request.resource.data.keys() : changed(); }
+    function placeOk(p) {
+      // A missing key or a non-number makes a comparison fail to evaluate, which denies the write.
+      return p.keys().hasOnly(['name', 'lat', 'lng'])
+        && p.name.size() <= 160 && p.name.matches(nameRe())
+        && p.lat >= -90 && p.lat <= 90 && p.lng >= -180 && p.lng <= 180;
+    }
+    // #RRGGBB only: the same pattern as the app and the API (src/core/limits.ts HEX_COLOR_RE).
+    function colorOk(c) { return c is string && c.matches('^#[0-9A-Fa-f]{6}$'); }
+    // Rule set: same ranges as the API (server/src/domain/schemas.ts ruleSetSchema) and the
+    // cross-field checks of src/core/rules.ts validateRules.
+    function rulesOk(r) {
+      // All 10 fields present (size 10, each read below) and nothing else; integer fields in range via
+      // one regex over their decimal form (a float like 1.5 or a negative number fails it), and the
+      // sum fails to evaluate (deny) if any required field is a string.
+      return r.size() == 10 && r.preset in ['indoor', 'beach', 'custom']
+        && (string(r.bestOf) + ',' + string(r.pointsPerSet) + ',' + string(r.decidingSetPoints) + ',' + string(r.winBy)
+            + ',' + string(r.timeoutsPerSet) + ',' + string(r.pointCap) + ',' + string(r.sideSwitchEvery)
+            + ',' + string(r.decidingSideSwitchEvery) + ',' + string(r.decidingSwitchAt))
+            .matches('^[135],[1-9][0-9]?,[1-9][0-9]?,[1-5],[0-9](,(null|[1-9][0-9]?)){4}$')
+        && r.bestOf + r.pointsPerSet + r.decidingSetPoints + r.winBy + r.timeoutsPerSet > 0
+        && (r.pointCap == null || r.pointCap >= r.pointsPerSet)
+        && (r.decidingSwitchAt == null || r.decidingSwitchAt <= r.decidingSetPoints);
+    }
+    // Photo URLs (QA G3): https on this project's Firebase Storage bucket, under the expected path.
+    // request.auth.token.aud is the project id; demo-* projects (emulator only) may use the emulator host.
+    function bucketRe() {
+      return request.auth.token.aud + '[.](appspot[.]com|firebasestorage[.]app)';
+    }
+    function photoUrlOk(url, encodedPrefix) {
+      let path = '/v0/b/' + bucketRe() + '/o/' + encodedPrefix + '[A-Za-z0-9._-]+([?][^\\s]*)?$';
+      return url is string && url.size() <= 2048
+        && (url.matches('^https://firebasestorage[.]googleapis[.]com' + path)
+          || (request.auth.token.aud.matches('^demo-.*')
+              && url.matches('^http://(127[.]0[.]0[.]1|localhost|10[.]0[.]2[.]2):9199' + path)));
+    }
+
+    // ---------- match rosters ----------
+    // Every player is a registered user referenced by id (no typed names or guests), at most
+    // maxPlayers() per team, nobody twice, nobody on both teams, and minPlayers() per team before
+    // scoring starts. minPlayers() must equal MIN_PLAYERS in src/core/roster.ts (rules-tests check it).
+    // Rules can't loop, so participantIds has one fixed order (core/roster.ts canonicalParticipants):
+    // team A's player ids, team B's player ids, then the creator/scorer if not already listed.
+    // Every backend (firebaseBackend, demo, API server) normalises to this order before writing, so
+    // the rules stay exact: any other order is rejected rather than checked with 24 unrolled `in`s.
+    // playersOk() compares each team's player ids with its part of participantIds.
+    // Limit: rules may read at most 10 documents per request. A registered team side (teamId
+    // set) is checked against that team's memberIds (only people who accepted an invite: 1 read).
+    // A side built by mobile number (teamId null) has every id format-checked, and its first
+    // byNumberChecked() players must have a users/{id} profile (1 read each; 2 teams + 2 x 4 = at
+    // most 10). Remaining gap: players 5-12 of a by-number side are format-checked only here; the
+    // app (firebaseBackend.assertPlayersRegistered) checks them all before writing, and the API
+    // server (server/src/domain/matches.ts) checks every player against the users table.
+    function minPlayers() { return 6; }
+    function maxPlayers() { return 12; }
+    function idOk(id) { return id is string && id.matches('^[A-Za-z0-9_-]{1,128}$'); }
+    function sideOk(t) {
+      return t.players is list && t.players.size() <= maxPlayers()
+        && t.name.size() <= 40 && t.name.matches(nameRe())
+        && t.get('color', '#000000').matches('^#[0-9A-Fa-f]{6}$')
+        && (t.get('teamId', null) == null || idOk(t.teamId));
+    }
+    // Player ids of a team (sizes above maxPlayers() are rejected before this runs). Unrolled
+    // by size (a binary split keeps it cheap) because rules have no loops and stop after
+    // 1000 evaluated expressions.
+    function playerIds(p) {
+      return (p.size() <= 6
+        ? (p.size() <= 3
+          ? (p.size() <= 1
+            ? (p.size() <= 0
+              ? []
+              : [p[0].id])
+            : (p.size() <= 2
+              ? [p[0].id, p[1].id]
+              : [p[0].id, p[1].id, p[2].id]))
+          : (p.size() <= 5
+            ? (p.size() <= 4
+              ? [p[0].id, p[1].id, p[2].id, p[3].id]
+              : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id])
+            : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id]))
+        : (p.size() <= 9
+          ? (p.size() <= 8
+            ? (p.size() <= 7
+              ? [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id]
+              : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id, p[7].id])
+            : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id, p[7].id, p[8].id])
+          : (p.size() <= 11
+            ? (p.size() <= 10
+              ? [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id, p[7].id, p[8].id, p[9].id]
+              : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id, p[7].id, p[8].id, p[9].id, p[10].id])
+            : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id, p[7].id, p[8].id, p[9].id, p[10].id, p[11].id])));
+    }
+    // Every id in a list has the user-id format (no typed names): one regex over the joined list,
+    // and the split count proves no element smuggled a '|' in. Cheaper than unrolling per player,
+    // which leaves room in the 1000-expression budget for the field checks (QA G1).
+    function listIdsOk(ids) {
+      let j = ids.join('|');
+      return ids.size() == 0
+        || (j.matches('^[A-Za-z0-9_-]{1,128}([|][A-Za-z0-9_-]{1,128})*$') && j.split('[|]').size() == ids.size());
+    }
+    // participantIds[off .. off+n) must be exactly this team's player ids, in order.
+    // participantIds is format-checked as a whole (listIdsOk), so equal ids are well-formed too.
+    function playersOk(p, ids, off) {
+      return p.size() == 0 || ids[off:off + p.size()] == playerIds(p);
+    }
+    function participantsOk(d) {
+      let n = d.teamA.players.size() + d.teamB.players.size();
+      let ids = d.participantIds;
+      return ids is list && ids.size() >= n && ids.size() <= n + 2
+        && ids.toSet().size() == ids.size() && listIdsOk(ids)
+        && (ids.size() == n || ids[n:ids.size()].toSet().hasOnly([d.createdBy, d.scorerId]));
+    }
+    function teamMembersOk(t, ids, off) {
+      return t.get('teamId', null) == null
+        || (exists(/databases/$(database)/documents/teams/$(t.teamId))
+            && (t.players.size() == 0
+                || get(/databases/$(database)/documents/teams/$(t.teamId)).data.memberIds
+                     .hasAll(ids[off:off + t.players.size()])));
+    }
+    // First 4 players of a by-number side must be registered users (see the read budget above).
+    function userExists(id) { return exists(/databases/$(database)/documents/users/$(id)); }
+    function byNumberUsersOk(t) {
+      let p = t.players;
+      return t.get('teamId', null) != null
+        || ((p.size() <= 0 || exists(/databases/$(database)/documents/users/$(p[0].id)))
+          && (p.size() <= 1 || exists(/databases/$(database)/documents/users/$(p[1].id)))
+          && (p.size() <= 2 || exists(/databases/$(database)/documents/users/$(p[2].id)))
+          && (p.size() <= 3 || exists(/databases/$(database)/documents/users/$(p[3].id))));
+    }
+    function scoringStarted(d) { return d.status == 'live' || d.get('events', []).size() > 0; }
+    function enoughPlayers(d) {
+      return !scoringStarted(d)
+        || (d.teamA.players.size() >= minPlayers() && d.teamB.players.size() >= minPlayers());
+    }
+    function validRoster(d) {
+      return sideOk(d.teamA) && sideOk(d.teamB) && participantsOk(d)
+        && playersOk(d.teamA.players, d.participantIds, 0)
+        && playersOk(d.teamB.players, d.participantIds, d.teamA.players.size())
+        && teamMembersOk(d.teamA, d.participantIds, 0)
+        && teamMembersOk(d.teamB, d.participantIds, d.teamA.players.size())
+        && byNumberUsersOk(d.teamA) && byNumberUsersOk(d.teamB)
+        && enoughPlayers(d);
+    }
+    function teamCanPlay(teamId) {
+      return get(/databases/$(database)/documents/teams/$(teamId)).data.memberIds.size() >= minPlayers();
+    }
+
+    // ---------- users ----------
+    match /users/{userId} {
+      allow read: if signedIn();
+      // Fields as src/core/types.ts UserProfile (pushToken: legacy docs only). No role/admin fields.
+      function profileOk(d, ks) {
+        return d.keys().hasOnly(['id', 'name', 'phone', 'photoURL', 'position', 'city', 'pushToken', 'createdAt', 'updatedAt'])
+          && (!ks.hasAny(['name']) || nameOk(d.name, 2, 60))
+          && (!ks.hasAny(['city']) || optTextOk(d.get('city', null), 80))
+          && (!ks.hasAny(['position']) || d.get('position', null) == null
+              || d.position in ['setter', 'outside', 'middle', 'opposite', 'libero', 'any'])
+          && (!ks.hasAny(['photoURL']) || d.get('photoURL', null) == null || photoUrlOk(d.photoURL, 'avatars%2F' + userId + '%2F'))
+          && (!ks.hasAny(['id']) || d.id == userId)
+          && (!ks.hasAny(['createdAt']) || optMsOk(d.get('createdAt', null)));
+      }
+      // The Indian format is required when the number is set or changed. A profile from before
+      // build 216 with another number can still be edited while it stays the same (fix-retest N4).
+      allow create, update: if signedIn() && uid() == userId
+        && request.resource.data.phone == myPhone()
+        && (validPhone(request.resource.data.phone) || (resource != null && resource.data.phone == request.resource.data.phone))
+        && request.resource.data.name is string
+        && profileOk(request.resource.data, writtenKeys())
+        && termsOk();
+      allow delete: if false;
+    }
+
+    // T&C acceptance (1.3.0): own doc only, exactly the current version, acceptedAt = server time,
+    // only forward (an older version can be replaced; the current one is never rewritten), no delete.
+    match /terms/{userId} {
+      allow get: if signedIn() && uid() == userId;
+      allow list: if false;
+      allow create, update: if signedIn() && uid() == userId
+        && request.resource.data.keys().hasOnly(['version', 'acceptedAt'])
+        && request.resource.data.version == termsVersion()
+        && request.resource.data.acceptedAt == request.time
+        && (resource == null || resource.data.version != termsVersion());
+      allow delete: if false;
+    }
+
+    // Private push token per user (read by Cloud Functions with admin access).
+    match /pushTokens/{userId} {
+      allow read, write: if signedIn() && uid() == userId;
+    }
+
+    // Lookup by mobile number: exact get only, listing is forbidden.
+    match /phoneIndex/{phone} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create, update: if signedIn() && phone == myPhone()
+        && (validPhone(phone) || (resource != null && resource.data.uid == uid()))
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == uid()
+        && termsOk();
+      allow delete: if false;
+    }
+
+    // ---------- teams ----------
+    match /teams/{teamId} {
+      function isCaptain() { return resource.data.captainId == uid(); }
+
+      function acceptingInvite() {
+        return myPhone() in resource.data.pendingPhones
+          && changed().hasOnly(['memberIds', 'pendingPhones', 'subIds'])
+          && request.resource.data.memberIds.toSet() == resource.data.memberIds.toSet().union([uid()].toSet())
+          && request.resource.data.pendingPhones.toSet() == resource.data.pendingPhones.toSet().difference([myPhone()].toSet())
+          && request.resource.data.subIds.toSet().difference(resource.data.subIds.toSet()).hasOnly([uid()]);
+      }
+      function decliningInvite() {
+        return myPhone() in resource.data.pendingPhones
+          && changed().hasOnly(['pendingPhones'])
+          && request.resource.data.pendingPhones.toSet() == resource.data.pendingPhones.toSet().difference([myPhone()].toSet());
+      }
+      function leaving() {
+        return uid() in resource.data.memberIds
+          && !isCaptain()
+          && changed().hasOnly(['memberIds', 'subIds'])
+          && request.resource.data.memberIds.toSet() == resource.data.memberIds.toSet().difference([uid()].toSet())
+          && request.resource.data.subIds.toSet() == resource.data.subIds.toSet().difference([uid()].toSet());
+      }
+
+      // Captains may only invite numbers that are already registered (present in
+      // phoneIndex). At most one new number per write, appended at the end of the list
+      // (the app and arrayUnion both append), so the rule can check it.
+      function invitesOnlyRegistered() {
+        let before = resource.data.pendingPhones.toSet();
+        let after = request.resource.data.pendingPhones;
+        let added = after.toSet().difference(before);
+        return added.size() == 0
+          || (added.size() == 1
+              && added.hasOnly([after[after.size() - 1]])
+              && validPhone(after[after.size() - 1])
+              && exists(/databases/$(database)/documents/phoneIndex/$(after[after.size() - 1])));
+      }
+
+      function teamOk(d, ks) {
+        return d.keys().hasOnly(['name', 'nameLower', 'color', 'captainId', 'memberIds', 'subIds', 'pendingPhones', 'city', 'createdAt', 'updatedAt'])
+          && (!ks.hasAny(['name']) || nameOk(d.name, 2, 40))
+          && (!ks.hasAny(['nameLower']) || (d.nameLower is string && d.nameLower.size() <= 40))
+          && (!ks.hasAny(['color']) || colorOk(d.color))
+          && (!ks.hasAny(['city']) || optTextOk(d.get('city', null), 80))
+          && (!ks.hasAny(['subIds']) || (d.subIds is list && d.subIds.size() <= 12))
+          && (!ks.hasAny(['createdAt']) || msOk(d.createdAt));
+      }
+      allow read: if signedIn();
+      allow create: if signedIn() && termsOk()
+        && request.resource.data.captainId == uid()
+        && request.resource.data.memberIds == [uid()]
+        && request.resource.data.pendingPhones.size() == 0
+        && request.resource.data.name is string
+        && teamOk(request.resource.data, writtenKeys());
+      allow update: if signedIn() && termsOk() && (
+        (isCaptain()
+          && teamOk(request.resource.data, writtenKeys())
+          && request.resource.data.captainId in request.resource.data.memberIds
+          && request.resource.data.memberIds.size() <= 12
+          // members join only by accepting an invite (PRD TEAM-05); the captain can remove, not add
+          && request.resource.data.memberIds.toSet().difference(resource.data.memberIds.toSet()).size() == 0
+          && request.resource.data.pendingPhones.size() <= 12
+          && invitesOnlyRegistered())
+        || acceptingInvite()
+        || decliningInvite()
+        || leaving()
+      );
+      allow delete: if signedIn() && isCaptain() && termsOk();
+    }
+
+    // ---------- matches ----------
+    // ---------- match documents (QA G1) ----------
+    // Same limits as the API (server/src/domain/schemas.ts). Only fields being written are checked
+    // (on update: the changed ones), so an older document can still be scored or closed.
+    // Rules can't loop over events, so the event log may only change by ONE scorer step per write
+    // (QA G1, retest 217): append 1 event (shape-checked at its index), undo exactly the last
+    // event, or change the player credit / shot type of one of the last 3 events (same rally:
+    // type, side and time unchanged). Everything before is compared as a whole with the stored
+    // log (one list comparison). One appended event per write (not 2-3) keeps a finishing write on
+    // a 12-a-side match with a long log inside the 1000-expression budget (rules-tests "G1 budget").
+    // The app writes a longer change (e.g. a log restored after a long time offline) as a sequence
+    // of such steps (src/core/eventSteps.ts, firebaseBackend.saveMatchProgress); the API server
+    // replays every event instead.
+    // One regex for type, side, shot type and credited player (each reference to e re-evaluates
+    // the list element passed in, so the checks are packed into few expressions).
+    function eventOk(e, d) {
+      return e.keys().hasOnly(['type', 'side', 'at', 'playerId', 'kind'])
+        && (e.type + '|' + e.side + '|' + string(e.get('kind', null)) + '|' + string(e.get('playerId', null)))
+             .matches('^(point|timeout)[|][AB][|](kill|block|ace|tip|null)[|]([A-Za-z0-9_-]{1,128}|null)$')
+        && e.at is int && e.at >= 0 && e.at <= nowMs() + 86400000
+        && creditOk(e, d);
+    }
+    // QA NB-R5 (retest 1.1.0): a credited player must be on the side that won the rally.
+    // participantIds start with exactly team A's players, then team B's (participantsOk).
+    // (Arguments are re-evaluated at every reference, so the values are passed down once each.)
+    function creditOk(e, d) {
+      return e.get('playerId', null) == null ? true
+        : creditIn(e.playerId, e.side, d.teamA.players.size(), d.teamB.players.size(), d.participantIds);
+    }
+    function creditIn(p, side, na, nb, ids) {
+      return p in (side == 'A' ? ids[0:na] : ids[na:na + nb]);
+    }
+    function sameRally(n, o, i, d) {
+      return eventOk(n[i], d) && n[i].type == o[i].type && n[i].side == o[i].side && n[i].at == o[i].at;
+    }
+    // Both sides of || and && are evaluated by the rules engine (only ?: skips a branch), so the
+    // step kind is picked with ?: and only its checks run. (An empty slice like l[0:0] is an
+    // evaluation error, hence the size tests.)
+    function appendOk(o, n, os, ns, d) {
+      let e = n[os];
+      return ns == os + 1 && (os == 0 ? true : n[0:os] == o) && eventOk(e, d);
+    }
+    function recreditOk(o, n, ns, d) {
+      return ns > 0 && (ns > 3 ? n[0:ns - 3] == o[0:ns - 3] : true)
+        && recreditOne(n, o, ns - 1, d) && (ns >= 2 ? recreditOne(n, o, ns - 2, d) : true) && (ns >= 3 ? recreditOne(n, o, ns - 3, d) : true);
+    }
+    // Only an event that actually changed is re-checked.
+    function recreditOne(n, o, i, d) {
+      return n[i] == o[i] ? true : sameRally(n, o, i, d);
+    }
+    // (let: each size is evaluated once; 1.3.0 needed the room in the 1000-expression budget.)
+    function eventsStepOk(o, n, d) {
+      let os = o.size();
+      let ns = n.size();
+      return ns <= 2000 && (ns > os ? appendOk(o, n, os, ns, d)
+        : ns < os ? (ns == os - 1 && (ns == 0 ? true : n == o[0:ns]))
+        : recreditOk(o, n, ns, d));
+    }
+    function eventsOk(d) {
+      return d.events is list && eventsStepOk(resource == null ? [] : resource.data.get('events', []), d.events, d);
+    }
+    // Two scores 0..199 in one regex (string() of an int has no leading zeros or decimals).
+    function pts2Ok(a, b) { return (string(a) + '|' + string(b)).matches('^1?[0-9]{1,2}[|]1?[0-9]{1,2}$'); }
+    function setScoreOk(x) { return x is map && x.keys().hasOnly(['a', 'b']) && pts2Ok(x.a, x.b); }
+    // Every completed set score in range (at most 5 sets, unrolled).
+    function setScoresOk(ss) {
+      return ss is list && ss.size() <= 5
+        && (ss.size() >= 1 ? setScoreOk(ss[0]) : true) && (ss.size() >= 2 ? setScoreOk(ss[1]) : true)
+        && (ss.size() >= 3 ? setScoreOk(ss[2]) : true) && (ss.size() >= 4 ? setScoreOk(ss[3]) : true)
+        && (ss.size() >= 5 ? setScoreOk(ss[4]) : true);
+    }
+    // Rallies in the current set (a finished match's "current" repeats its last set, so 0 then).
+    function curPts(m) { return m.get('winner', null) == null ? m.get('currentA', 0) + m.get('currentB', 0) : 0; }
+    // The summary may only move as far as the event change allows (QA G1, retest 217): at most 1
+    // rally per appended event, back by at most 1 per undone event, unchanged on a credit edit.
+    // Completed sets are only added at the end (append) or removed from the end (undo), at most
+    // one per write, and everything before is compared as a whole with the stored summary; the new
+    // set's score is range-checked (summaryOk), so by induction every stored set is in range.
+    // QA NB-R1 (retest 1.1.0): a stored document without a summary is compared with the EMPTY
+    // summary (no sets, 0-0), so it can't jump to a finished 3-0 after one event. (New matches must
+    // carry the empty summary, matchCreateOk; a legacy document that has events but no summary can
+    // no longer be scored in Firebase mode, only abandoned.)
+    function summaryStepOk(m, d) {
+      let om = resource.data.get('summary', null);
+      return summaryDeltaOk(m.get('setScores', []), om == null ? [] : om.get('setScores', []),
+        curPts(m), om == null ? 0 : curPts(om), d.get('events', []).size() - resource.data.get('events', []).size());
+    }
+    function setSum(x) { return x.a + x.b; }
+    // nss/oss: new/old completed sets; cn/co: new/old current-set rallies; k: events added (<0 undone).
+    // Append: same sets and the current set grows by 0..k, or exactly one set completes (its score
+    // plus the new current set is at most the old current set + k). Undo: same sets and the
+    // current set shrinks by at most -k, or the last completed set is re-opened.
+    function summaryDeltaOk(nss, oss, cn, co, k) {
+      let on = oss.size();
+      let nn = nss.size();
+      return k > 0
+        ? (nss == oss ? cn >= co && cn <= co + k
+            : nn == on + 1 && (on == 0 ? true : nss[0:on] == oss)
+              && cn < k && setSum(nss[on]) + cn <= co + k)
+        : k < 0
+          // undo: back within the current set, or the last completed set re-opened
+          ? (nss == oss ? cn <= co && cn >= co + k
+              : on == nn + 1 && (nn == 0 ? true : oss[0:nn] == nss))
+          : (nss == oss && cn == co);
+    }
+    function summaryOk(m, d) {
+      // Sets needed to win: (bestOf + 1) / 2 is right whether / truncates (ints) or not (floats);
+      // math.ceil(bestOf / 2) was 2 for best-of-5 with integer division, refusing a 3-2 result.
+      // (let: each value is read once; 1.3.0 needed the room in the 1000-expression budget.)
+      let win = (d.rules.bestOf + 1) / 2;
+      let sa = m.get('setsA', 0);
+      let sb = m.get('setsB', 0);
+      let ss = m.get('setScores', []);
+      let w = m.get('winner', null);
+      return m.keys().hasOnly(['setsA', 'setsB', 'currentA', 'currentB', 'setScores', 'winner', 'serving'])
+        && pts2Ok(sa, sb) && sa <= win && sb <= win
+        && pts2Ok(m.get('currentA', 0), m.get('currentB', 0))
+        && (w == null ? true : (w == 'A' ? sa == win : (w == 'B' && sb == win)))
+        && (m.get('serving', 'A') in ['A', 'B'])
+        && ss is list && ss.size() <= d.rules.bestOf
+        && (resource == null || resource.data.get('summary', null) == null
+              ? setScoresOk(ss)
+              : (ss.size() == 0 ? true : setScoreOk(ss[ss.size() - 1])))
+        && sa + sb == ss.size()
+        && (d.get('events', []).size() > 0 ? true
+            : (sa == 0 && sb == 0 && m.get('currentA', 0) == 0 && m.get('currentB', 0) == 0))
+        && summaryStepOk(m, d);
+    }
+    // Optional one-line text of at most 120 UTF-16 units (as the app counts): no control/zero-width/bidi characters and
+    // no leading/trailing space, in ONE regex (the roster checks use most of the rules'
+    // 1000-expression budget, so match checks are kept to a few expressions each).
+    function titleOk(t) { return t == null || (t is string && t.size() <= 120 && t.matches('^([^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]([^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]{0,118}[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}])?)?$')); }
+    function matchKeysOk(d) {
+      return d.keys().hasOnly(['title', 'teamA', 'teamB', 'rules', 'firstServe', 'events', 'summary', 'status', 'createdBy',
+            'scorerId', 'participantIds', 'location', 'scheduledAt', 'startedAt', 'finishedAt', 'tournamentId', 'fixtureId',
+            'challengeId', 'stream', 'interestedIds', 'lineups', 'playerOfMatchId', 'createdAt', 'updatedAt', 'serverUpdatedAt',
+            'finishedServerAt', 'captains', 'verification', 'startedServerAt']);
+    }
+    function timesOk(d) {
+      let st = d.get('startedAt', null);
+      let fin = d.get('finishedAt', null);
+      // QA G13: a match can't finish before it started. (?: instead of ||, which evaluates both sides.)
+      return fin == null ? (st == null ? true : msOk(st))
+        : (msOk(fin) && (st == null ? true : (msOk(st) && fin >= st)));
+    }
+    function scheduledOk(d) {
+      let at = d.get('scheduledAt', null);
+      // QA G9: a newly scheduled time can't already be over (15 min grace).
+      return at == null || (msOk(at) && (d.status != 'scheduled' || at >= nowMs() - 900000));
+    }
+    // Fields other than the roster and the score (title, rules, times, links, place).
+    function matchMetaOk(d, ks) {
+      return (ks.hasAny(['title']) ? titleOk(d.get('title', null)) : true)
+        && (ks.hasAny(['rules']) ? rulesOk(d.rules) : true)
+        && d.status in ['scheduled', 'live', 'finished', 'abandoned']
+        // finish times (QA NB-R3) and 'finished' needs a winner (QA NB-R2, a status-only write)
+        && (ks.hasAny(['status']) ? finishTimesOk(d) && statusMoveOk(d) : !ks.hasAny(['finishedAt', 'finishedServerAt']))
+        && (ks.hasAny(['startedAt', 'startedServerAt']) ? startTimesOk(d) : true)
+        // (already checked with the summary when the score changed)
+        && (ks.hasAny(['summary', 'events', 'rules']) ? true : finishedWinnerOk(d))
+        && d.get('firstServe', 'A') in ['A', 'B']
+        && timesOk(d)
+        // (?: first on the status, so a finishing write doesn't pay for the schedule check)
+        && (d.status == 'scheduled' ? (ks.hasAny(['scheduledAt', 'status']) ? scheduledOk(d) : true)
+            : (ks.hasAny(['scheduledAt']) ? optMsOk(d.get('scheduledAt', null)) : true))
+        && (ks.hasAny(['location']) ? d.get('location', null) == null || placeOk(d.location) : true)
+        && (ks.hasAny(['tournamentId', 'challengeId', 'fixtureId'])
+            ? [d.get('tournamentId', null), d.get('challengeId', null), d.get('fixtureId', null)].removeAll([null]).join('|').matches('^[A-Za-z0-9_|-]{0,200}$')
+            : true);
+    }
+    // New match: no events yet, the empty summary, valid metadata.
+    function matchCreateOk(d) {
+      return matchKeysOk(d)
+        && d.events == []
+        && d.status in ['scheduled', 'live']
+        && d.get('firstServe', 'A') in ['A', 'B']
+        // QA NB-R1: the empty summary is required (no sets, 0-0, no winner; every key present). One
+        // map diff instead of a check per key (create is close to the 1000-expression budget).
+        && d.summary.diff({'setsA': 0, 'setsB': 0, 'currentA': 0, 'currentB': 0, 'setScores': [], 'winner': null, 'serving': 'A'})
+             .affectedKeys().hasOnly(['serving'])
+        && rulesOk(d.rules)
+        && titleOk(d.get('title', null))
+        // Nothing finished, verified or timed by the client (only checked when such a key is sent).
+        && (d.keys().hasAny(['finishedAt', 'finishedServerAt', 'playerOfMatchId', 'verification', 'startedServerAt', 'startedAt']) ? createTimesOk(d) : true)
+        && scheduledOk(d)
+        && (d.get('location', null) == null || placeOk(d.location));
+    }
+    // 1.3.0 server time only: a live match may carry its start = now (startedServerAt = request.time,
+    // startedAt within 5 minutes of it); no finish, POTM or verification at create (QA AF-18, AF-51).
+    function createTimesOk(d) {
+      return d.get('finishedAt', null) == null && d.get('finishedServerAt', null) == null
+        && d.get('playerOfMatchId', null) == null && d.get('verification', null) == null
+        && (d.get('startedServerAt', null) == null || (d.status == 'live' && d.startedServerAt == request.time))
+        && (d.get('startedAt', null) == null || (d.status == 'live' && d.startedAt >= nowMs() - 300000 && d.startedAt <= nowMs() + 300000));
+    }
+    // Update: only the groups of fields being written are checked, so a roster change or a rally
+    // costs a couple of expressions here and an older document can still be scored or closed.
+    // Player of the Match (src/core/potm.ts potmProblem): set once, by the scorer, on a match that
+    // is ALREADY finished (stored status), within 24 h of the stored finish, to a player of team A
+    // or B (participantIds[0:n] are exactly the players, see participantsOk).
+    // QA NB-R3 (retest 1.1.0): it is locked once set – never changed or cleared, also when the
+    // winning rally is undone (the match re-opens with its POTM kept) – and the write that sets it
+    // can't touch the finish times, the status or the events, so the 24 h window can't be moved.
+    // The window runs from finishedServerAt (request.time of the finishing write) when present,
+    // else (older documents) from the stored finishedAt.
+    function potmOk(d, ks) {
+      let r = resource.data;
+      return r.scorerId == uid() && d.scorerId == uid()
+        && r.get('playerOfMatchId', null) == null && d.playerOfMatchId != null
+        && r.status == 'finished' && d.status == 'finished'
+        && !ks.hasAny(['finishedAt', 'finishedServerAt', 'status', 'events', 'summary'])
+        && (r.get('finishedServerAt', null) != null
+              ? request.time < r.finishedServerAt + duration.value(24, 'h')
+              : (r.get('finishedAt', null) is int && nowMs() - r.finishedAt < 86400000))
+        && d.playerOfMatchId in d.participantIds[0:d.teamA.players.size() + d.teamB.players.size()];
+    }
+    // 1.3.0 terminal statuses only move one way (src/core/antifraud.ts statusMoveOk): scheduled ->
+    // live/abandoned; live -> finished/abandoned (or back to scheduled before the first rally);
+    // finished -> live only by undo while the POTM is still open (a completed match is terminal, see
+    // notTerminal()); abandoned -> nothing. (Update only: create has its own status check.)
+    function statusMoveOk(d) {
+      // (only called when the status changed)
+      let from = resource.data.status;
+      return d.status == 'finished' ? from == 'live'
+          // scheduled -> live must stamp the server start (QA N121-3; startTimesOk checks the value)
+          : d.status == 'live' ? (from == 'scheduled' ? d.get('startedServerAt', null) == request.time : from == 'finished')
+          : d.status == 'abandoned' ? from in ['scheduled', 'live']
+          // live -> scheduled before the first rally clears the start
+          : (from == 'live' && resource.data.get('events', []).size() == 0 && d.get('events', []).size() == 0
+            && d.get('startedServerAt', null) == null && d.get('startedAt', null) == null);
+    }
+    // Server time only (QA AF-14/AF-17): startedAt/startedServerAt are written once, when the match
+    // goes live (startedServerAt = request.time; startedAt within 5 minutes of it), and cleared when it
+    // goes back to scheduled. Never backdated afterwards.
+    function startTimesOk(d) {
+      return d.status == 'scheduled'
+        ? d.get('startedAt', null) == null && d.get('startedServerAt', null) == null
+        : resource.data.get('startedServerAt', null) == null && resource.data.get('startedAt', null) == null
+          && d.status == 'live' && d.get('startedServerAt', null) == request.time
+          && d.startedAt is int && d.startedAt >= nowMs() - 300000 && d.startedAt <= nowMs() + 300000;
+    }
+    // Abandoned, or completed (finished + Player of the Match): closed for good.
+    // (a live match is never terminal; checked first because scoring writes are at the expression budget)
+    function terminal(r) {
+      let st = r.status;
+      return st == 'live' ? false : (st == 'finished' ? r.get('playerOfMatchId', null) != null : st == 'abandoned');
+    }
+
+    // ---------- result confirmation (1.3.0, src/core/antifraud.ts confirmProblem) ----------
+    // x plays for side A / B (participantIds start with exactly team A's then team B's players).
+    function onSide(r, sideIsA, x) {
+      return x in (sideIsA ? r.participantIds[0:r.teamA.players.size()]
+        : r.participantIds[r.teamA.players.size():r.teamA.players.size() + r.teamB.players.size()]);
+    }
+    function completed(r) {
+      return r.status == 'finished' && r.get('playerOfMatchId', null) != null && r.summary.winner in ['A', 'B'];
+    }
+    function vStatus(r) { return r.get('verification', {'status': 'pending'}).get('status', 'pending'); }
+    // The opposing captain: a captain who is not the scorer or the creator, and not on their side.
+    // Only from pending, once, writing only verification = {status, by: me, at: request.time, reason}.
+    function confirmOk(r, v) {
+      return completed(r) && vStatus(r) == 'pending' && r.get('captains', null) != null
+        && v.keys().hasOnly(['status', 'by', 'at', 'reason'])
+        && v.status in ['confirmed', 'disputed'] && v.by == uid() && v.at == request.time
+        && (v.status == 'disputed' ? optTextOk(v.get('reason', null), 200) : v.get('reason', null) == null)
+        && uid() != r.scorerId && uid() != r.createdBy
+        && (uid() == r.captains.A
+            ? !onSide(r, true, r.scorerId) && !onSide(r, true, r.createdBy)
+            : (uid() == r.captains.B && !onSide(r, false, r.scorerId) && !onSide(r, false, r.createdBy)));
+    }
+    // Admin review: approve (counts) or void (never counts) a completed match not yet reviewed; the
+    // captain's confirmation fields are kept as they were.
+    function reviewOk(r, v) {
+      let old = r.get('verification', {});
+      return completed(r) && !(vStatus(r) in ['approved', 'voided'])
+        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'reviewedBy', 'reviewedAt'])
+        && v.status in ['approved', 'voided'] && v.reviewedBy == uid() && v.reviewedAt == request.time
+        && v.get('by', null) == old.get('by', null) && v.get('at', null) == old.get('at', null)
+        && v.get('reason', null) == old.get('reason', null);
+    }
+    function verificationWriteOk() {
+      return changed().hasOnly(['verification', 'updatedAt'])
+        && (isAdmin() ? reviewOk(resource.data, request.resource.data.verification)
+          : confirmOk(resource.data, request.resource.data.verification));
+    }
+    // Captains (src/core/antifraud.ts captainsProblem): both set and different; a registered team's
+    // captain is the team's captainId (same team doc as teamMembersOk: no extra read); a side built
+    // by number names one of its own players.
+    // (Kept to a few expressions: match create is close to the 1000-expression budget.)
+    function captainsOk(d) {
+      let c = d.captains;
+      let na = d.teamA.players.size();
+      return c.keys().hasOnly(['A', 'B']) && c.A != c.B
+        && (d.teamA.get('teamId', null) == null ? c.A in d.participantIds[0:na]
+            : get(/databases/$(database)/documents/teams/$(d.teamA.teamId)).data.captainId == c.A)
+        && (d.teamB.get('teamId', null) == null ? c.B in d.participantIds[na:na + d.teamB.players.size()]
+            : get(/databases/$(database)/documents/teams/$(d.teamB.teamId)).data.captainId == c.B);
+    }
+
+    // QA NB-R2 (SCORE-04): 'finished' only with a winner in the summary.
+    function finishedWinnerOk(d) {
+      // (no summary or no winner key = evaluation error = denied)
+      return d.status == 'finished' ? d.summary.winner in ['A', 'B'] : true;
+    }
+    // QA NB-R3/NB-R4: finishedAt changes only together with the status, and never into the future
+    // (5 min allowance for device clocks). finishedServerAt is request.time of the write that
+    // finished the match (kept while finished, null otherwise); Firebase rankings order by it.
+    function finishTimesOk(d) {
+      return (d.get('finishedAt', null) == null ? true : d.finishedAt <= nowMs() + 300000)
+        && d.get('finishedServerAt', null) == (d.status == 'finished' ? request.time : null);
+    }
+    // Guards are written `ks.hasAny(..) ? check : true`: the rules engine evaluates both sides of
+    // || (so `!changed || check` would always pay for the check); ?: runs only the chosen side.
+    function matchUpdateOk(d, ks) {
+      return matchKeysOk(d)
+        && (ks.hasAny(['playerOfMatchId']) ? potmOk(d, ks) : true)
+        && (ks.hasAny(['events']) ? eventsOk(d) : true)
+        && (ks.hasAny(['summary', 'events', 'rules'])
+            ? (d.get('summary', null) == null ? resource.data.get('summary', null) == null : summaryOk(d.summary, d))
+              && finishedWinnerOk(d)
+            : true)
+        && (ks.hasAny(['interestedIds']) ? (d.interestedIds is list && d.interestedIds.size() <= 500) : true)
+        && (ks.hasAny(['title', 'rules', 'status', 'firstServe', 'startedAt', 'startedServerAt', 'finishedAt', 'finishedServerAt', 'scheduledAt', 'location',
+              'tournamentId', 'challengeId', 'fixtureId']) ? matchMetaOk(d, ks) : true);
+    }
+
+    match /matches/{matchId} {
+      function isScorer() { return resource.data.scorerId == uid(); }
+      function interestedToggle() {
+        let before = resource.data.get('interestedIds', []).toSet();
+        let after = request.resource.data.interestedIds.toSet();
+        return changed().hasOnly(['interestedIds', 'updatedAt'])
+          && after.difference(before).union(before.difference(after)).hasOnly([uid()]);
+      }
+
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.createdBy == uid()
+        && request.resource.data.scorerId is string
+        && uid() in request.resource.data.participantIds
+        && matchCreateOk(request.resource.data)
+        && validRoster(request.resource.data)
+        && captainsOk(request.resource.data)
+        && termsOk();
+      // A legacy match left short of players (before minPlayers(), or players removed later) can't be
+      // scored, but its scorer may still close it: only the status (to 'abandoned') and finish time change.
+      function abandonOnly() {
+        return request.resource.data.status == 'abandoned' && resource.data.status in ['scheduled', 'live']
+          && changed().hasOnly(['status', 'finishedAt', 'updatedAt']);
+      }
+      // The branches are chosen with ?: (both sides of || are always evaluated, and the scorer's
+      // finishing write on a big match is close to the 1000-expression budget).
+      function scorerWriteOk(ks, d) {
+        return d.createdBy == resource.data.createdBy
+          && (ks.hasAny(['teamA', 'teamB', 'participantIds', 'captains'])
+                ? (resource.data.get('events', []).size() == 0 && validRoster(d) && captainsOk(d))
+                : (enoughPlayers(d) ? true : abandonOnly()));
+      }
+      // ks / d are bound once (let) and passed down: a function argument is re-evaluated at every
+      // reference, and changed() is a full document diff (1.3.0: this freed the expression budget).
+      function updateAllowed() {
+        let ks = changed();
+        let d = request.resource.data;
+        return ks.hasAny(['verification']) ? verificationWriteOk() && termsOk()
+          : matchUpdateOk(d, ks) && (
+            // A completed or abandoned match is closed: only "I want to play" still changes.
+            terminal(resource.data) ? interestedToggle()
+            // The assigned scorer controls the score (but can't silently change who the scorer is here).
+            // Players can only change before the first rally; scoring needs minPlayers() per team.
+            : (isScorer() && d.scorerId == resource.data.scorerId)
+              ? (scorerWriteOk(ks, d) ? true : interestedToggle() && termsOk())
+              // The creator or the current scorer can hand scoring to someone else (that field only),
+              // while the match isn't over (QA PM-13).
+              : ((((resource.data.createdBy == uid() || isScorer()) && ks.hasOnly(['scorerId', 'updatedAt'])
+                  && resource.data.status in ['scheduled', 'live'])
+                // Anyone can add/remove themselves from "I want to play".
+                || interestedToggle()) && termsOk()));
+      }
+      // termsOk() (1 read) is required for every match write except the assigned scorer's own
+      // scoring writes: QA TC-13 allows an in-progress score to be saved after a T&C version bump
+      // (no data loss), and the finishing write of a big match is at the 1000-expression budget.
+      // Everyone who can be a scorer is a registered user, and a profile needs an accepted T&C.
+      allow update: if signedIn() && updateAllowed();
+      // 1.3.0 (QA AF-50/BN-11): a finished match is history: only an admin deletes it. Live: nobody.
+      allow delete: if signedIn() && resource.data.status != 'live'
+        && (isAdmin() || (resource.data.createdBy == uid() && resource.data.status != 'finished' && termsOk()));
+
+      match /photos/{photoId} {
+        // Players of team A or B and the scorer (src/core/photos.ts canAddMatchPhoto); not the
+        // creator alone, not followers. participantIds[0:n] are exactly the players (participantsOk).
+        function canAddPhoto(m) {
+          return uid() == m.scorerId || uid() in m.participantIds[0:m.teamA.players.size() + m.teamB.players.size()];
+        }
+        allow read: if signedIn();
+        // QA G3: the URL must be this project's Storage download URL for this match + uploader.
+        allow create: if signedIn()
+          && request.resource.data.keys().hasOnly(['matchId', 'url', 'storagePath', 'uploadedBy', 'createdAt'])
+          && request.resource.data.uploadedBy == uid()
+          && request.resource.data.get('matchId', matchId) == matchId
+          && photoUrlOk(request.resource.data.url, 'matches%2F' + matchId + '%2F' + uid() + '%2F')
+          && (request.resource.data.get('storagePath', null) == null
+              || request.resource.data.storagePath.matches('^matches/' + matchId + '/' + uid() + '/[A-Za-z0-9._-]+$'))
+          && optMsOk(request.resource.data.get('createdAt', null))
+          && canAddPhoto(get(/databases/$(database)/documents/matches/$(matchId)).data)
+          && termsOk();
+        allow delete: if signedIn() && resource.data.uploadedBy == uid();
+      }
+    }
+
+    // ---------- challenges ----------
+    match /challenges/{challengeId} {
+      allow read: if signedIn();
+      function fromTeam() { return get(/databases/$(database)/documents/teams/$(request.resource.data.fromTeamId)).data; }
+      function toTeam() { return get(/databases/$(database)/documents/teams/$(request.resource.data.toTeamId)).data; }
+      function challengeOk(d, ks) {
+        return d.keys().hasOnly(['fromTeamId', 'fromTeamName', 'fromCaptainId', 'toTeamId', 'toTeamName', 'toCaptainId',
+              'when', 'location', 'message', 'rules', 'status', 'matchId', 'createdAt'])
+          && idOk(d.fromTeamId) && idOk(d.toTeamId) && d.fromTeamId != d.toTeamId
+          && notPast(d.when)
+          && placeOk(d.location)
+          && rulesOk(d.rules)
+          && (d.get('message', null) == null || (d.message is string && d.message.size() <= 500 && d.message == d.message.trim() && noBadChars(d.message)))
+          && d.get('matchId', null) == null
+          && optMsOk(d.get('createdAt', null))
+          // QA G19: team names are copied from the team documents, not typed by the sender.
+          && d.fromTeamName == fromTeam().name && d.toTeamName == toTeam().name;
+      }
+      // Reads: 2 team documents (fromTeam/toTeam/teamCanPlay share them), well inside the 10 limit.
+      allow create: if signedIn() && termsOk()
+        && request.resource.data.fromCaptainId == uid()
+        && request.resource.data.status == 'pending'
+        && challengeOk(request.resource.data, writtenKeys())
+        && fromTeam().captainId == uid()
+        && toTeam().captainId == request.resource.data.toCaptainId
+        && teamCanPlay(request.resource.data.fromTeamId) && teamCanPlay(request.resource.data.toTeamId);
+      allow update: if signedIn() && termsOk() && (
+        (resource.data.toCaptainId == uid() && resource.data.status == 'pending'
+          && changed().hasOnly(['status', 'matchId'])
+          && request.resource.data.status in ['accepted', 'declined']
+          && (request.resource.data.status == 'declined'
+              || (teamCanPlay(resource.data.fromTeamId) && teamCanPlay(resource.data.toTeamId))))
+        || (resource.data.fromCaptainId == uid() && resource.data.status == 'pending'
+          && changed().hasOnly(['status']) && request.resource.data.status == 'cancelled')
+      );
+      allow delete: if false;
+    }
+
+    // ---------- tournaments ----------
+    // Tournament teams must be registered teams with minPlayers() members. Rules have no loops and
+    // may read 10 documents per request, so a tournament has at most 10 teams (src/core/limits.ts
+    // MAX_TOURNAMENT_TEAMS, same cap in the app and the API, QA G8 retest 217) and EVERY team is
+    // checked here (1 read each) on create and whenever teams[] changes. Every fixture match is
+    // then created through the matches rules above, which check the team exists and that every
+    // player is one of its members.
+    function tTeamOk(t) {
+      return t is map && idOk(t.id)
+        && get(/databases/$(database)/documents/teams/$(t.id)).data.memberIds.size() >= minPlayers();
+    }
+    function tournamentTeamsOk(ts) {
+      return ts is list && ts.size() >= 2 && ts.size() <= 10
+        && tTeamOk(ts[0]) && tTeamOk(ts[1])
+        && (ts.size() <= 2 || tTeamOk(ts[2]))
+        && (ts.size() <= 3 || tTeamOk(ts[3]))
+        && (ts.size() <= 4 || tTeamOk(ts[4]))
+        && (ts.size() <= 5 || tTeamOk(ts[5]))
+        && (ts.size() <= 6 || tTeamOk(ts[6]))
+        && (ts.size() <= 7 || tTeamOk(ts[7]))
+        && (ts.size() <= 8 || tTeamOk(ts[8]))
+        && (ts.size() <= 9 || tTeamOk(ts[9]));
+    }
+    // QA G8: 2 to 10 teams, no team twice (all ids compared), end on or after start, a new start
+    // date not in the past.
+    function tournamentTeamIdsUnique(ts) {
+      let ids = playerIds(ts);
+      return ts.size() <= 10 && ids.toSet().size() == ids.size();
+    }
+    function tournamentOk(d, ks) {
+      return d.keys().hasOnly(['name', 'organizerId', 'format', 'rules', 'startDate', 'endDate', 'location', 'teams',
+            'fixtures', 'status', 'createdAt', 'updatedAt'])
+        && (!ks.hasAny(['name']) || nameOk(d.name, 3, 80))
+        && (!ks.hasAny(['format']) || d.format in ['knockout', 'league'])
+        && (!ks.hasAny(['status']) || d.status in ['registration', 'running', 'finished'])
+        && (!ks.hasAny(['rules']) || rulesOk(d.rules))
+        && (!ks.hasAny(['location']) || placeOk(d.location))
+        && (!ks.hasAny(['startDate']) || notPast(d.startDate))
+        && (!ks.hasAny(['startDate', 'endDate']) || (msOk(d.startDate) && msOk(d.endDate) && d.endDate >= d.startDate))
+        && (!ks.hasAny(['teams']) || (d.teams is list && tournamentTeamIdsUnique(d.teams)))
+        && (!ks.hasAny(['fixtures']) || (d.fixtures is list && d.fixtures.size() <= 2000))
+        && (!ks.hasAny(['createdAt']) || optMsOk(d.get('createdAt', null)));
+    }
+    // T&C (1.3.0): a request may read at most 10 documents. A tournament write reads each team
+    // (max 10), so the terms check is skipped when that would be the 11th read. The API server
+    // always enforces T&C; a 10-team tournament's fixture matches are still gated by match create.
+    function tournamentTermsOk(teamsRead) {
+      return teamsRead && request.resource.data.get('teams', []).size() >= 10 ? true : termsOk();
+    }
+    match /tournaments/{tournamentId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && tournamentTermsOk(true) && request.resource.data.organizerId == uid()
+        && tournamentOk(request.resource.data, writtenKeys())
+        && tournamentTeamsOk(request.resource.data.teams);
+      allow update: if signedIn() && tournamentTermsOk(changed().hasAny(['teams'])) && resource.data.organizerId == uid()
+        && request.resource.data.organizerId == uid()
+        && tournamentOk(request.resource.data, writtenKeys())
+        && (!changed().hasAny(['teams']) || tournamentTeamsOk(request.resource.data.teams));
+      allow delete: if signedIn() && resource.data.organizerId == uid();
+    }
+
+    // ---------- courts ----------
+    match /courts/{courtId} {
+      allow read: if signedIn();
+      function courtOk(d, ks) {
+        return d.keys().hasOnly(['name', 'location', 'surface', 'addedBy', 'createdAt'])
+          && (!ks.hasAny(['name']) || nameOk(d.name, 2, 80))
+          && (!ks.hasAny(['location']) || placeOk(d.location))
+          && (!ks.hasAny(['surface']) || d.surface in ['indoor', 'beach', 'grass', 'outdoor'])
+          && (!ks.hasAny(['createdAt']) || optMsOk(d.get('createdAt', null)));
+      }
+      allow create: if signedIn() && termsOk() && request.resource.data.addedBy == uid() && courtOk(request.resource.data, writtenKeys());
+      allow update: if signedIn() && termsOk() && resource.data.addedBy == uid()
+        && request.resource.data.addedBy == uid() && courtOk(request.resource.data, writtenKeys());
+      allow delete: if signedIn() && resource.data.addedBy == uid();
+    }
+  }
+}

@@ -1,0 +1,60 @@
+# dependencies
+node_modules/
+
+# Expo / web builds
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+.metro-health-check*
+
+# generated native folders & build outputs
+/ios
+/android
+.gradle/
+build/
+.kotlin/
+*.apk
+*.aab
+*.ipa
+*.orig.*
+functions/lib/
+
+# test output
+coverage/
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# uploaded photos / local storage
+storage/
+uploads/
+server/storage/
+server/uploads/
+
+# secrets: env files (keep the .example templates)
+.env
+.env.*
+!.env.example
+.firebaserc
+
+# signing keys & credentials
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.pem
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist
+*service-account*.json
+*serviceAccount*.json
+*-firebase-adminsdk-*.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.tsbuildinfo

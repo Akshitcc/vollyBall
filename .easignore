@@ -1,0 +1,9 @@
+# Mirrors .gitignore but keeps .env so EAS Build can read EXPO_PUBLIC_* values.
+node_modules/
+.expo/
+dist/
+web-build/
+/ios
+/android
+functions/node_modules/
+functions/lib/

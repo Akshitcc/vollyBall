@@ -1,0 +1,117 @@
+OK               | B1a | 200 | profile name exactly max 60 (ASCII) | {"id":"dev_919000000050","name":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","phone":"+91900
+OK               | B1b | 400 | profile name max+1 61 | Invalid request: name – text_too_long
+OK               | B1c | 200 | profile name max 60 Hindi letters | {"id":"dev_919000000050","name":"आआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआ","phone":"+91900
+INFO             | B1d | 400 | profile name max 60 emoji (code points) | Invalid request: name – text_empty
+OK               | B1e | 200 | profile name max 60 NFD é (=120 code units, NFC 60) | {"id":"dev_919000000050","name":"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé","phone":"+91900
+OK               | B1f | 200 | profile name max 60 + 3 ZWSP (raw 63) | {"id":"dev_919000000050","name":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","phone":"+91900
+OK               | B1g | 200 | profile name exactly min 2 | {"id":"dev_919000000050","name":"xx","phone":"+919000000050","photoURL":null,"position":"any","city":"Delhi","
+OK               | B1h | 400 | profile name min-1 | Invalid request: name – text_too_short
+OK               | B1i | 400 | profile name min-1 real + ZWSP/ZWJ padding | Invalid request: name – text_too_short
+OK               | B2a | 200 | profile city exactly max 80 (ASCII) | {"id":"dev_919000000050","name":"Solo Captain","phone":"+919000000050","photoURL":null,"position":"any","city"
+OK               | B2b | 400 | profile city max+1 81 | Invalid request: city – text_too_long
+OK               | B2c | 200 | profile city max 80 Hindi letters | {"id":"dev_919000000050","name":"Solo Captain","phone":"+919000000050","photoURL":null,"position":"any","city"
+INFO             | B2d | 400 | profile city max 80 emoji (code points) | Invalid request: city – text_too_long
+OK               | B2e | 200 | profile city max 80 NFD é (=160 code units, NFC 80) | {"id":"dev_919000000050","name":"Solo Captain","phone":"+919000000050","photoURL":null,"position":"any","city"
+OK               | B2f | 200 | profile city max 80 + 3 ZWSP (raw 83) | {"id":"dev_919000000050","name":"Solo Captain","phone":"+919000000050","photoURL":null,"position":"any","city"
+OK               | B3a | 201 | team name exactly max 40 (ASCII) | {"id":"876cfbbd-336b-4105-9950-905987856b94"}
+OK               | B3b | 400 | team name max+1 41 | Invalid request: name – text_too_long
+OK               | B3c | 201 | team name max 40 Hindi letters | {"id":"d65230ea-2895-4c06-8599-fc4272657c2a"}
+INFO             | B3d | 400 | team name max 40 emoji (code points) | Invalid request: name – text_empty
+OK               | B3e | 201 | team name max 40 NFD é (=80 code units, NFC 40) | {"id":"2683159f-b2e2-43ec-8f86-ce523d739400"}
+OK               | B3f | 201 | team name max 40 + 3 ZWSP (raw 43) | {"id":"5c4049b3-5b78-4aae-8141-e312eb73aa90"}
+OK               | B3g | 201 | team name exactly min 2 | {"id":"5a47e19a-b28d-4fae-9290-f0b693c83335"}
+OK               | B3h | 400 | team name min-1 | Invalid request: name – text_too_short
+OK               | B3i | 400 | team name min-1 real + ZWSP/ZWJ padding | Invalid request: name – text_too_short
+OK               | B4a | 201 | match title exactly max 120 (ASCII) | {"id":"203361a9-11f8-4677-a41a-f95d0e7cec6b"}
+OK               | B4b | 400 | match title max+1 121 | Invalid request: title – text_too_long
+OK               | B4c | 201 | match title max 120 Hindi letters | {"id":"09a41fd2-05d8-4a15-8895-f60a2d69be17"}
+INFO             | B4d | 400 | match title max 120 emoji (code points) | Invalid request: title – text_too_long
+OK               | B4e | 201 | match title max 120 NFD é (=240 code units, NFC 120) | {"id":"377ecc0c-10e6-41bb-9375-0be7707ffc29"}
+OK               | B4f | 201 | match title max 120 + 3 ZWSP (raw 123) | {"id":"d5c013b3-e7c9-4ad4-9ff4-594758956b97"}
+OK               | B5a | 201 | side name exactly max 40 (ASCII) | {"id":"5a5e2fb4-70cb-43f2-8f91-e19c972e134b"}
+OK               | B5b | 400 | side name max+1 41 | Invalid request: teamA.name – text_too_long
+OK               | B5c | 201 | side name max 40 Hindi letters | {"id":"53c44f65-a8b7-4de1-aedf-91b12f860218"}
+INFO             | B5d | 400 | side name max 40 emoji (code points) | Invalid request: teamA.name – text_empty
+OK               | B5e | 201 | side name max 40 NFD é (=80 code units, NFC 40) | {"id":"d73032a4-b300-4469-9000-6c15f2a2faad"}
+OK               | B5f | 201 | side name max 40 + 3 ZWSP (raw 43) | {"id":"a870c0a6-4a35-4c80-9742-d18c02d20420"}
+OK               | B5g | 201 | side name exactly min 1 | {"id":"9244cbeb-3de2-466a-9827-33dc81165adf"}
+OK               | B5h | 400 | side name min-1 | Invalid request: teamA.name – text_empty
+OK               | B5i | 400 | side name min-1 real + ZWSP/ZWJ padding | Invalid request: teamA.name – text_empty
+OK               | B6a | 201 | tournament name exactly max 80 (ASCII) | {"id":"ca8d6b74-5928-4071-bba1-fa9ef7413511"}
+OK               | B6b | 400 | tournament name max+1 81 | Invalid request: name – text_too_long
+OK               | B6c | 201 | tournament name max 80 Hindi letters | {"id":"03eb5581-5a46-4b4c-927a-e7fc99747f67"}
+INFO             | B6d | 400 | tournament name max 80 emoji (code points) | Invalid request: name – text_empty
+OK               | B6e | 201 | tournament name max 80 NFD é (=160 code units, NFC 80) | {"id":"6a65de77-76b0-41b0-923e-ca443e19530a"}
+OK               | B6f | 201 | tournament name max 80 + 3 ZWSP (raw 83) | {"id":"fe85bb9a-629b-4f00-b224-c32f082adcec"}
+OK               | B6g | 201 | tournament name exactly min 3 | {"id":"35da3d88-6ddd-4261-b0f6-2252abfa2baa"}
+OK               | B6h | 400 | tournament name min-1 | Invalid request: name – text_too_short
+OK               | B6i | 400 | tournament name min-1 real + ZWSP/ZWJ padding | Invalid request: name – text_too_short
+OK               | B7a | 201 | court name exactly max 80 (ASCII) | {"id":"3436ddbf-21b6-470b-a221-daa378d0daae"}
+OK               | B7b | 400 | court name max+1 81 | Invalid request: name – text_too_long
+OK               | B7c | 201 | court name max 80 Hindi letters | {"id":"37384a2e-8bdb-444f-8e4c-10c03588bb3f"}
+INFO             | B7d | 400 | court name max 80 emoji (code points) | Invalid request: name – text_empty
+OK               | B7e | 201 | court name max 80 NFD é (=160 code units, NFC 80) | {"id":"9b98bcc9-2cab-482a-9e7b-6ab52d298d3e"}
+OK               | B7f | 201 | court name max 80 + 3 ZWSP (raw 83) | {"id":"e42ded7d-4960-490f-b6b1-175c9c1d4122"}
+OK               | B7g | 201 | court name exactly min 2 | {"id":"4108fdb5-dd58-4944-bb88-6a8c2360c3e1"}
+OK               | B7h | 400 | court name min-1 | Invalid request: name – text_too_short
+OK               | B7i | 400 | court name min-1 real + ZWSP/ZWJ padding | Invalid request: name – text_too_short
+OK               | B8a | 201 | place name exactly max 160 (ASCII) | {"id":"4f80f3c2-d3b3-4e13-b8c2-ef5178acf610"}
+OK               | B8b | 400 | place name max+1 161 | Invalid request: location.name – text_too_long
+OK               | B8c | 201 | place name max 160 Hindi letters | {"id":"db3365b1-cbcf-48fe-8480-a6cce5bb89db"}
+INFO             | B8d | 400 | place name max 160 emoji (code points) | Invalid request: location.name – text_empty
+OK               | B8e | 201 | place name max 160 NFD é (=320 code units, NFC 160) | {"id":"3334f5ca-9e43-4925-8333-5a9d6c6f0c34"}
+OK               | B8f | 201 | place name max 160 + 3 ZWSP (raw 163) | {"id":"f8d9ee49-37c6-4f12-bae8-52d83b459181"}
+OK               | B8g | 201 | place name exactly min 1 | {"id":"7c0a0a42-8189-41b3-891b-3d9f3f4f9117"}
+OK               | B8h | 400 | place name min-1 | Invalid request: location.name – text_empty
+OK               | B8i | 400 | place name min-1 real + ZWSP/ZWJ padding | Invalid request: location.name – text_empty
+OK               | B9a | 201 | challenge message exactly max 500 (ASCII) | {"id":"c90df4b6-0040-4478-a690-6e55a06cad46"}
+OK               | B9b | 400 | challenge message max+1 501 | Invalid request: message – text_too_long
+OK               | B9c | 201 | challenge message max 500 Hindi letters | {"id":"44bdc28a-8529-457f-88bc-06243bbdac7b"}
+INFO             | B9d | 400 | challenge message max 500 emoji (code points) | Invalid request: message – text_too_long
+OK               | B9e | 201 | challenge message max 500 NFD é (=1000 code units, NFC 500) | {"id":"7055160c-f4cc-4945-8b92-8eb33f313c33"}
+OK               | B9f | 201 | challenge message max 500 + 3 ZWSP (raw 503) | {"id":"fb94d0dd-8b0e-49d9-934a-5e3492f22a23"}
+OK               | B10a | 200 | team search q exactly max 40 (ASCII) | [{"id":"5c4049b3-5b78-4aae-8141-e312eb73aa90","name":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","nameLower":"x
+OK               | B10b | 400 | team search q max+1 41 | Invalid request: text_too_long (q)
+OK               | B10c | 200 | team search q max 40 Hindi letters | [{"id":"d65230ea-2895-4c06-8599-fc4272657c2a","name":"आआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआआ","nameLower":"आ
+INFO             | B10d | 400 | team search q max 40 emoji (code points) | Invalid request: text_too_long (q)
+OK               | B10e | 200 | team search q max 40 NFD é (=80 code units, NFC 40) | [{"id":"2683159f-b2e2-43ec-8f86-ce523d739400","name":"éééééééééééééééééééééééééééééééééééééééé","nameLower":"é
+OK               | B10f | 200 | team search q max 40 + 3 ZWSP (raw 43) | [{"id":"5c4049b3-5b78-4aae-8141-e312eb73aa90","name":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","nameLower":"x
+OK               | Z1 | 200 | profile name "A\u200Bru\u200Dn" | {"id":"dev_919000000050","name":"Arun","phone":"+919000000050","photoURL":null,"position":"any","city":"Delhi"
+   stored name = "Arun"
+OK               | Z2 | 200 | profile name "\uFEFFAB\u00AD" | {"id":"dev_919000000050","name":"AB","phone":"+919000000050","photoURL":null,"position":"any","city":"Delhi","
+   stored name = "AB"
+OK               | Z3 | 400 | profile name "A\tB" (tab) | Invalid request: name – text_control
+OK               | Z4 | 400 | profile name "AB\u200E" (LRM) | Invalid request: name – text_bidi
+OK               | Z5 | 400 | profile name "AB\u2066" (isolate) | Invalid request: name – text_bidi
+OK               | Z6 | 400 | profile name "\u3000\u3000" (ideographic spaces only) | Invalid request: name – text_empty
+INFO             | Z7 | 200 | profile name "AB\u3164" (Hangul filler) | {"id":"dev_919000000050","name":"AB","phone":"+919000000050","photoURL":null,"position":"any","city":"Delhi","
+OK               | Z8 | 400 | profile name "--" punctuation only | Invalid request: name – text_empty
+OK               | Z9 | 200 | profile name "आरव शर्मा" with ZWJ in conjunct (क्\u200Dष) | {"id":"dev_919000000050","name":"क्ष आरव","phone":"+919000000050","photoURL":null,"position":"any","city":"Del
+   stored name = "क्ष आरव"
+OK               | Z10 | 201 | challenge message with newline (multiline OK) | {"id":"30423360-397a-4235-85aa-b59c62dfee42"}
+OK               | Z11 | 200 | profile city "   " (B3) | {"id":"dev_919000000050","name":"Solo Captain","phone":"+919000000050","photoURL":null,"position":"any","creat
+   stored city = undefined
+OK               | E1 | 400 | events [ok, side "C", ok] | Invalid request: events.1.side – Invalid option: expected one of "A"|"B"
+OK               | E2 | 400 | events [ok, at -1, ok] | Invalid request: events.1.at – Too small: expected number to be >=0
+OK               | E3 | 400 | events [ok, at 2100, ok] | Invalid request: events.1.at – events_invalid
+OK               | E4 | 400 | events [ok, playerId of other team, ok] | Event 2: seed7 is not a player of team A
+OK               | E5 | 400 | events [ok, kind "smash", ok] | Invalid request: events.1.kind – Invalid option: expected one of "kill"|"block"|"ace"|"tip"
+OK               | E6 | 400 | events [ok, type "foo", ok] | Invalid request: events.1.type – Invalid discriminator value. Expected 'point' | 'timeout'
+OK               | E7 | 200 | events control [ok, ok, ok] | {"id":"65255ddf-da78-4224-a8df-1a46f01e7102","title":"probe","teamA":{"teamId":"team_smashers","name":"Delhi S
+OK               | T1 | 400 | tournament 14 teams, team 0 repeated at index 13 | Invalid request: teams – Too big: expected array to have <=10 items
+OK               | L1 | 200 | legacy +1 user: GET /me | {"uid":"dev_14155552671","phone":"+14155552671","profile":null}
+   /me uid=dev_14155552671 profile=null
+UNEXPECTED-REJECT| L2 | 403 | legacy: edit own profile name, same +1 phone | You can only edit your own profile [users.write]
+OK               | L3 | 403 | legacy: change phone to +447700900123 (still non-Indian) | You can only edit your own profile [users.write]
+INFO             | L4 | 400 | legacy: list own invites ?invitedPhone=+1… | Invalid request: phone – Phone must be an Indian mobile number in E.164 format: +91 followed by 10 digits starting with 6-9
+INFO             | L5 | 403 | legacy: accept pending invite to team_smashers | No pending invite for your number [teams.update.acceptingInvite]
+   team_smashers pendingPhones (captain view) = []
+OK               | L6 | 200 | captain adds a valid invite while a legacy +1 invite is pending (app sends full list) | {"id":"team_smashers","name":"Delhi Smashers","nameLower":"delhi smashers","color":"#D93636","captainId":"seed
+OK               | L7 | 200 | captain removes the legacy invite (list without it) | {"id":"team_smashers","name":"Delhi Smashers","nameLower":"delhi smashers","color":"#D93636","captainId":"seed
+OK               | L8 | 200 | captain edits team name only (pending untouched) | {"id":"team_smashers","name":"Delhi Smashers","nameLower":"delhi smashers","color":"#D93636","captainId":"seed
+UNEXPECTED-REJECT| L9 | 403 | legacy user creates a team | You must be the captain of a team you create [teams.create]
+INFO             | L10 | 400 | lookup legacy number by-phone | Invalid request: phone – Phone must be an Indian mobile number in E.164 format: +91 followed by 10 digits starting with 6-9
+INFO             | F8 | 201 | declared image/jpeg, bytes are PNG | {"id":"20bc50ce-5faf-44c5-8325-d6d2a0b3c3a1","matchId":"match_live","url":"http://localhost:4100/files/matches
+   served as image/png
+INFO             | F9 | 400 | PNG magic + HTML payload (polyglot) | The image is incomplete (too small or cut off)
+INFO             | F10 | 400 | GIF89a header only (6 bytes) | The image is incomplete (too small or cut off)

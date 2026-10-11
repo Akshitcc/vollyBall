@@ -1,0 +1,52 @@
+rules_version = '2';
+
+// VolleyLive Cloud Storage rules: users write only under their own uid; match photos only by
+// players of that match or its scorer. QA G2: the same image types as the API server and the app
+// (src/core/photos.ts IMAGE_TYPES: JPEG, PNG, WebP, HEIC, GIF; no SVG, which can carry script),
+// and a size above 0 and below 10 MB (src/core/limits.ts MAX_IMAGE_BYTES).
+// Storage rules can't read the file's bytes, so the declared type is all they can check; the API
+// server sniffs magic bytes (QA G11). Files are served with the stored content type, never as HTML.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+    // 1.3.0: uploads need the current T&C accepted (firestore.rules termsVersion(), src/core/terms.ts).
+    function termsOk() {
+      return firestore.get(/databases/(default)/documents/terms/$(request.auth.uid)).data.version == '2026-10-draft-1';
+    }
+    // Minimum sizes per type as src/core/photos.ts MIN_IMAGE_BYTES_BY_TYPE (QA NB-P3: a bare GIF
+    // header is rejected here too; the bytes themselves can only be sniffed by the API server).
+    function minBytes(t) {
+      return t == 'image/png' ? 67 : (t == 'image/gif' || t == 'image/webp') ? 26 : 100;
+    }
+    function isImage() {
+      return request.resource.contentType.matches('^image/(jpeg|png|webp|heic|gif)$')
+        && request.resource.size >= minBytes(request.resource.contentType)
+        && request.resource.size < 10 * 1024 * 1024;
+    }
+
+    match /avatars/{userId}/{file} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.auth.uid == userId && isImage() && termsOk();
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    function canAddPhoto(m) {
+      return request.auth.uid == m.scorerId
+        || request.auth.uid in m.participantIds[0:m.teamA.players.size() + m.teamB.players.size()];
+    }
+
+    match /matches/{matchId}/{userId}/{file} {
+      allow read: if signedIn();
+      // Players of team A or B and the scorer only (src/core/photos.ts canAddMatchPhoto; the match's
+      // participantIds start with exactly its players, team A then team B – firestore.rules participantsOk).
+      // INFO (retest 1.1.0): never overwrite an existing file (resource == null: a new object only).
+      allow create: if signedIn() && request.auth.uid == userId && resource == null && isImage() && termsOk()
+        && canAddPhoto(firestore.get(/databases/(default)/documents/matches/$(matchId)).data);
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,93 @@
+OK                | IM1 | 400 | PNG 66 bytes (min 67) | photo_truncated: The image is incomplete (too small or cut off)
+OK                | IM2 | 201 | PNG 67 bytes | {"id":"2b0c2228-1296-492b-8be9-6f26aa0ca9db","matchId":"match_live","url":"http://localhost:4100/fil
+OK                | IM3 | 400 | JPEG 99 bytes (min 100) | photo_truncated: The image is incomplete (too small or cut off)
+OK                | IM4 | 201 | JPEG 100 bytes | {"id":"c3ef9f0d-d096-46ec-818c-cf48e2eed73e","matchId":"match_live","url":"http://localhost:4100/fil
+OK                | IM5 | 400 | GIF 25 bytes with trailer (min 26) | photo_truncated: The image is incomplete (too small or cut off)
+OK                | IM6 | 400 | GIF 200 bytes NO trailer (truncated) | photo_truncated: The image is incomplete (too small or cut off)
+OK                | IM7 | 201 | GIF 26 bytes with trailer | {"id":"fabf7066-8e18-449f-9fc5-03fa9d002bf8","matchId":"match_live","url":"http://localhost:4100/fil
+OK                | IM8 | 400 | 0-byte image/jpeg | photo_empty: Empty upload
+OK                | IM9 | 413 | 10 MB exactly image/jpeg | photo_too_large: Images must be smaller than 10 MB
+OK                | IM10 | 201 | 10 MB - 1 image/jpeg | {"id":"c7d53662-7654-43fe-a72d-0c4edaa9f789","matchId":"match_live","url":"http://localhost:4100/fil
+OK                | IM11 | 403 | SVG as image/svg+xml | permission_denied: Only images (JPEG, PNG, WebP, HEIC, GIF) can be uploaded [storage.matches.create]
+OK                | IM12 | 400 | SVG declared image/png | photo_type: The file is not a JPEG, PNG, WebP, HEIC or GIF image
+OK                | IM13 | 400 | HTML declared image/jpeg | photo_type: The file is not a JPEG, PNG, WebP, HEIC or GIF image
+OK                | IM14 | 400 | WebP header only RIFF....WEBP 20 bytes | photo_truncated: The image is incomplete (too small or cut off)
+INFO              | IM6b | 400 | truncated GIF error code | {"error":"photo_truncated","message":"The image is incomplete (too small or cut off)"}
+OK                | PA1 | 403 | seed13 (player of match_beach, NOT of match_live) uploads to match_live | photo_not_allowed: Only the players and the scorer of this match can add photos [photos.create]
+OK                | PA2 | 403 | seed20 (non-player of match_live) uploads | photo_not_allowed: Only the players and the scorer of this match can add photos [photos.create]
+INFO              | PA3 | 201 | seed2 player uploads to FINISHED match_old1 | {"id":"2f15a1f0-5f2a-4b7c-8dfd-9838c98d276f","matchId":"match_old1","url":"http://localhost:4100/fil
+OK                | PA4a | 200 | scorer abandons match (PATCH status abandoned) | {"id":"ae9c6491-6130-498e-99f0-cf9ff46804fd","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+INFO              | PA4 | 201 | player seed14 uploads to ABANDONED match | {"id":"6cc98c27-bb52-4790-9f77-cbe2e51d1a1b","matchId":"ae9c6491-6130-498e-99f0-cf9ff46804fd","url":
+OK                | PA5 | 403 | seed3 deletes seed2's photo | permission_denied: Only the uploader can delete a photo [photos.delete]
+OK                | PA6 | 403 | scorer seed1 deletes seed2's photo | permission_denied: Only the uploader can delete a photo [photos.delete]
+OK                | PA7 | 204 | seed2 deletes own photo | 
+OK                | PA8 | 404 | delete photo via WRONG match id (own photo id) | not_found: Photo not found
+OK                | PA9 | 404 | upload to non-existent match | not_found: Match not found
+INFO              | PO0 | - | generated match finished=true winner=A
+OK                | PO1 | 200 | saveProgress finishing events | {"id":"9d9eb50f-80bf-4b11-befe-2864c4896a71","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+OK                | PO2 | 403 | non-scorer seed14 sets POTM | permission_denied: Only the scorer can choose the Player of the Match [matches.update.playerOfMatch]
+OK                | PO3 | 400 | scorer sets POTM to non-player seed1 | potm_not_player: The Player of the Match must be a player in this match
+OK                | PO3b | 400 | scorer sets POTM to nonexistent id | potm_not_player: The Player of the Match must be a player in this match
+OK                | PO4 | 200 | scorer sets POTM seed14 | {"id":"9d9eb50f-80bf-4b11-befe-2864c4896a71","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+OK                | PO5 | 409 | scorer changes POTM to seed15 (after lock) | potm_already_set: The Player of the Match has already been confirmed
+GAP-ACCEPTED      | PO6 | 200 | PATCH playerOfMatchId directly to seed15 | {"id":"9d9eb50f-80bf-4b11-befe-2864c4896a71","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+INFO              | PO7a | 200 | undo winning rally (re-open) | {"id":"9d9eb50f-80bf-4b11-befe-2864c4896a71","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+INFO              | PO7b | 200 | re-finish with same events, client finishedAt = now+30d | {"id":"9d9eb50f-80bf-4b11-befe-2864c4896a71","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+INFO              | PO7c | - | after re-finish: potm=null finishedAt=2026-11-09T21:40:52.196Z
+GAP-ACCEPTED      | PO7d | 200 | scorer picks a DIFFERENT POTM (seed15) after re-open/re-finish | {"id":"9d9eb50f-80bf-4b11-befe-2864c4896a71","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+OK                | PO8 | 400 | POTM on abandoned match | potm_not_finished: The Player of the Match is chosen when the match finishes
+GAP-ACCEPTED      | PO9a | 200 | PATCH status finished on a 0-point live match | {"id":"4595e881-46d0-4fe0-b075-dc024dc07069","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+INFO              | PO9b | 200 | saveProgress [] with status finished | {"id":"4595e881-46d0-4fe0-b075-dc024dc07069","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+INFO              | PO9c | - | 0-point match status after attempts = live
+OK                | PO9 | 400 | POTM on 0-point match | potm_not_finished: The Player of the Match is chosen when the match finishes
+GAP-ACCEPTED      | PO10 | 200 | PATCH status finished on live 2-1 match (fake finish) | {"id":"1676d722-af50-45e9-933e-c0b931ebe981","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+GAP-ACCEPTED      | PO10b | 200 | PATCH finishedAt on a finished match (m1) to 2100 | {"id":"9d9eb50f-80bf-4b11-befe-2864c4896a71","title":"probe14","teamA":{"teamId":null,"name":"Sand K
+INFO              | RK0 | - | total ranked=24 minMatches=3 me(seed13)={"playerId":"seed13","name":"Aditya Kapoor","photoURL":null,"matches":3,"wins":1,"points":5,"potm":0,"rankingPoints":15,"winPct":33,"rank":19}
+GAP-ACCEPTED      | RK1 | 200 | seed14 with exactly 2 finished matches is NOT ranked | {"playerId":"seed14","name":"Siddharth Bose","photoURL":null,"matches":3,"wins":1,"points":13,"potm"
+OK                | RK2 | 200 | seed14 with exactly 3 finished matches IS ranked | {"playerId":"seed14","name":"Siddharth Bose","photoURL":null,"matches":3,"wins":1,"points":13,"potm"
+OK                | RK3 | 200 | rankingPoints == points + 10*wins + 25*potm for all rows | 24 rows ok
+OK                | RK4 | 200 | abandoned + live/unfinished matches excluded (seed14 matches==3) | {"playerId":"seed14","name":"Siddharth Bose","photoURL":null,"matches":3,"wins":1,"points":13,"potm"
+OK                | RK5 | 200 | order follows documented tie chain; ranks 1..M distinct | 1:seed8:71/2/1/26/3 2:seed10:68/2/1/23/3 3:seed1:56/1/1/21/3 4:seed15:46/1/1/11/3 5:seed7:44/2/0/24/
+OK                | RK6 | 200 | me row for seed14 has rank N and total M | Rank #15 of 24
+INFO              | RK7 | 200 | me for a user with no matches | null
+OK                | RK8 | 400 | rankings limit=0 | bad_request: limit must be 1-200
+OK                | RK9 | 400 | rankings limit=201 | bad_request: limit must be 1-200
+OK                | RK10 | 400 | rankings limit=abc | bad_request: limit must be 1-200
+OK                | RK11 | 404 | POST /rankings (write own ranking) | not_found: No such route
+INFO              | RK12 | - | 'part' match status=finished (if finished it would count in SQL rankings)
+after 2 finished: ranked tester rows=0 me={"playerId":"dev_919100000102","name":"Rank Tester 02","photoURL":null,"matches":2,"wins":2,"points":0,"potm":0,"rankingPoints":20,"winPct":100,"rank":null}
+RK1 exactly 2 finished -> NOT ranked (OK)
+RK4 abandoned 3rd match (PATCH 200) -> me.rank=null matches=2 (excluded OK)
+RK2 exactly 3 finished -> me.rank=12 of 36 matches=3 rp=30 (expect 3 wins*10=30)
+RK5 tie group (identical totals) order: #11 101 30, #12 102 30, #13 103 30, #14 104 30, #15 105 30, #16 106 30, #31 107 0, #32 108 0, #33 109 0, #34 110 0, #35 111 0, #36 112 0
+RK5 ids ascending: true
+RK13 PATCH status=finished on a 2-0-points live match -> 200; me.matches now 4 (FAKE FINISH COUNTED)
+RK14 PATCH playerOfMatchId on the fake-finished match -> 200; me.potm=0 rp=30
+T1 equal points, a2 more in deciding set -> a2 (expect a2)
+T2 equal points 3-3, no deciding set, id asc -> a2 (expect a2)
+T3 nobody credited -> null (expect null)
+T4 credits to non-player ignored -> a6 (expect a6)
+T5 credit to OTHER team player on A rally (b1) -> b1 [{"playerId":"b1","points":2,"decidingPoints":0,"errors":0},{"playerId":"a1","points":0,"decidingPoints":0,"errors":0}]
+T6 5 extra credited events after the end (a5) -> a4 (expect a4: after-end ignored)
+T7 Firebase totals a1 (1 real finished, 1 abandoned, 1 status-only finished w/ POTM) -> {"playerId":"a1","matches":1,"wins":1,"points":0,"potm":0,"name":"a1"}
+T8 Firebase 2 matches ranked= 0  3 matches ranked= 12  first6 a1:30 a2:30 a3:30 a4:30 a5:30 a6:30 b1:0
+T9 player listed twice in a side -> {"playerId":"a1","matches":2,"wins":2,"points":0,"potm":0}
+Chrome TZ UTC
+typed 10 digits                                  "9876543210"           err null sendDisabled null
+typed 11th digit (expect ignored, no error)      "9876543210"           err null sendDisabled null
+typed 12th,13th                                  "9876543210"           err null sendDisabled null
+typed letter after 10 digits                     "9876543210a"          err "Enter a valid 10-digit mobile number" sendDisabled null
+backspace                                        "9876543210"           err null sendDisabled null
+typed 98765abc                                   "98765abc"             err "Enter a valid 10-digit mobile number" sendDisabled true
+paste 11 digits                                  "98765432101"          err "Enter a valid 10-digit mobile number" sendDisabled true
+paste 12 digits                                  "987654321012"         err "Enter a valid 10-digit mobile number" sendDisabled true
+paste +1 4155552671                              "+1 4155552671"        err "Enter a valid 10-digit mobile number" sendDisabled true
+paste with emoji                                 "98765😀43210"         err "Enter a valid 10-digit mobile number" sendDisabled true
+paste 5 digits (short)                           "12345"                err "Enter a valid 10-digit mobile number" sendDisabled true
+paste +91 (98765) 43210                          "9876543210"           err null sendDisabled null
+paste 0 98765 43210                              "9876543210"           err null sendDisabled null
+paste Devanagari                                 "9876543210"           err null sendDisabled null
+paste full-width                                 "９８７６５４３２１０"           err "Enter a valid 10-digit mobile number" sendDisabled true
+paste 5876543210 (bad first digit)               "5876543210"           err "Enter a valid 10-digit mobile number" sendDisabled true
+full field: select-all paste other number        "9123456789"           err null sendDisabled null
+5 digits then insert "43210999"                  "9876543210999"        err "Enter a valid 10-digit mobile number" sendDisabled true

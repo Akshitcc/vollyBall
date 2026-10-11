@@ -1,0 +1,64 @@
+OK                | RB1 | ALLOWED | profile name 60 ASCII
+OK                | RB2 | DENIED | profile name 61 ASCII
+OK                | RB3 | ALLOWED | profile name 60 Hindi letters (API accepts)
+OK                | RB4 | ALLOWED | profile name 2 Hindi letters
+UNEXPECTED-REJECT | RB5 | DENIED | profile name "A"+59 emoji (60 code points; API: OK)
+OK                | RB6 | DENIED | profile name "A"+60 emoji (61 code points)
+OK                | RB7 | ALLOWED | profile name NFC é x60
+INFO              | RB8 | DENIED | profile name NFD é x31 (62 code points, client would NFC to 31)
+OK                | RB9 | ALLOWED | team name 40
+OK                | RB10 | DENIED | team name 41
+OK                | RB11 | ALLOWED | team name 40 Hindi
+OK                | RB12 | DENIED | team name "x" (1, min 2)
+OK                | RB13 | ALLOWED | match title 120 ASCII
+OK                | RB14 | DENIED | match title 121 ASCII
+UNEXPECTED-REJECT | RB15 | DENIED | match title 120 emoji
+OK                | RB16 | ALLOWED | match title 120 Hindi
+INFO              | RB17 | ALLOWED | side name 40 / 41
+OK                | RB18 | DENIED | side name 41
+OK                | RB19 | ALLOWED | challenge message 500
+OK                | RB20 | DENIED | challenge message 501
+OK                | RB21 | ALLOWED | challenge message 500 Hindi
+OK                | RB22 | ALLOWED | challenge message with newline
+OK                | RB23 | DENIED | challenge message with tab
+OK                | RB24 | ALLOWED | challenge when now-14min (grace)
+OK                | RB25 | DENIED | challenge when now-16min
+INFO              | RZ1 | DENIED | profile name "A\u200Bru\u200Dn"
+OK                | RZ2 | DENIED | profile name "\u3164\u3164" Hangul filler (invisible letters)
+OK                | RZ3 | DENIED | team name "\uFFA0\uFFA0"
+INFO              | RZ4 | ALLOWED | profile name "AB\u034F" (CGJ)
+OK                | RZ5 | DENIED | profile name "  AB" leading space
+OK                | RZ6 | DENIED | profile name "AB\u2028" (line separator)
+OK                | RE1 | DENIED | events [ok, side "C", ok]
+OK                | RE2 | DENIED | events [ok, at -1, ok]
+OK                | RE3 | DENIED | events [ok, {evil:"x".repeat(5000)}, ok]
+OK                | RE4 | DENIED | events [ok, "garbage" string, ok]
+OK                | RE5 | DENIED | events [ok, at year 2100, ok]
+OK                | RE6 | DENIED | events [bad first]
+OK                | RE7 | DENIED | summary setScores [ok, {a:-5,b:999}, ok] (middle)
+GAP-ACCEPTED      | RE8 | ALLOWED | summary 3-0 winner A after ONE event, status finished
+OK                | RE9 | DENIED | summary currentA 199 after one event
+UNEXPECTED-REJECT | RT1 | DENIED | tournament 14 distinct teams (control)
+OK                | RT2 | DENIED | tournament dup at index 11 (k0..k10 + k0)
+OK                | RT3 | DENIED | tournament dup at index 12 (k0..k11 + k0)
+OK                | RT4 | DENIED | tournament dup at index 13 (k0..k12 + k5)
+OK                | RT5 | DENIED | tournament dup pair at 12/13 (k12,k12)
+OK                | RT6 | DENIED | tournament team 11+ unregistered id "ghost"
+OK                | RL1 | ALLOWED | legacy: edit name, same +1 phone
+OK                | RL2 | ALLOWED | legacy: phoneIndex re-write own +1 entry
+OK                | RL3 | DENIED | legacy: create NEW phoneIndex for +1 (no existing)
+OK                | RL4 | ALLOWED | legacy: accept invite on t1
+OK                | RL5 | DENIED | captain invites a +1 registered number
+OK                | RL6 | ALLOWED | captain appends valid invite while legacy +1 pending
+OK                | RL7 | ALLOWED | legacy user creates a team
+INFO              | EM1 | ALLOWED | profile "A"+1 emoji (2 cp, 3 utf16)
+INFO              | EM10 | ALLOWED | profile "A"+10 emoji (11 cp, 21 utf16)
+INFO              | EM29 | ALLOWED | profile "A"+29 emoji (30 cp, 59 utf16)
+INFO              | EM30 | DENIED | profile "A"+30 emoji (31 cp, 61 utf16)
+INFO              | EM31 | DENIED | profile "A"+31 emoji (32 cp, 63 utf16)
+INFO              | EM59 | DENIED | profile "A"+59 emoji (60 cp, 119 utf16)
+INFO              | EMb | ALLOWED | profile "A😀B"
+INFO              | EMc | ALLOWED | profile "AB😀"
+INFO              | EMd | ALLOWED | profile "Ab✓" (BMP symbol end)
+INFO              | EMt | DENIED | title 121 emoji
+INFO              | EMt2 | DENIED | title 61 emoji

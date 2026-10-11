@@ -1,0 +1,96 @@
+OK                | G1-1 | ALLOWED | append 1 valid event + summary +1
+OK                | G1-2 | DENIED | append 2 events in one write
+OK                | G1-3 | DENIED | append 1 event, score +2 (5->7)
+OK                | G1-4 | DENIED | edit OLD event #2 side A->B (+append)
+OK                | G1-5 | DENIED | re-credit 4th-last event (idx 6) playerId
+OK                | G1-6 | ALLOWED | re-credit 3rd-last event (idx 7) playerId
+OK                | G1-7 | DENIED | re-credit last event but change its side
+OK                | G1-8 | DENIED | undo 2 events in one write
+OK                | G1-9a | ALLOWED | undo 1 (write 1)
+OK                | G1-9b | ALLOWED | undo again (write 2)
+OK                | G1-9c | ALLOWED | undo again (write 3)
+INFO              | G1-9d | ALLOWED | undo a 4th time in a row (write 4)
+OK                | G1-10 | DENIED | append event with bad middle: replace idx 5 with side C + append
+OK                | G1-11 | DENIED | append event with extra key
+INFO              | G1-12 | ALLOWED | append event with playerId of non-player (shape only)
+OK                | G1-13 | DENIED | non-scorer (eve) appends event
+GAP-ACCEPTED      | G1-14 | ALLOWED | match created w/o summary: 1 event then summary 3-0 finished
+OK                | B5-1 | ALLOWED | best-of-5 3-2 finish (15-10 deciding)
+OK                | B5-2 | DENIED | best-of-5 "finish" at 2-0 with winner A
+GAP-ACCEPTED      | B5-3 | ALLOWED | best-of-5 status finished at 2-0, winner null
+GAP-ACCEPTED      | B5-4 | ALLOWED | live 6-4 in set 1: status->finished only (no event)
+OK                | P1 | ALLOWED | scorer sets POTM to a player (finished 1h ago)
+OK                | P2 | DENIED | scorer sets POTM to non-player out1
+OK                | P2b | DENIED | scorer sets POTM to r1 (player of another match)
+OK                | P3 | DENIED | non-scorer player eve sets POTM
+OK                | P4 | DENIED | change POTM after it was set (p1->p2)
+OK                | P4b | DENIED | clear POTM on finished match (p1->null)
+OK                | P5 | DENIED | POTM on abandoned match
+GAP-ACCEPTED      | P6 | ALLOWED | POTM on finished match with 0 events/points
+OK                | P7 | DENIED | POTM 25h after finish
+GAP-ACCEPTED      | P8 | ALLOWED | POTM 25h after finish + finishedAt reset to now in same write
+GAP-ACCEPTED      | P8b | ALLOWED | scorer moves finishedAt of a finished match to year 2100
+INFO              | P9a | ALLOWED | re-open locked match: undo last event, status live, POTM null
+INFO              | P9b | ALLOWED | re-finish: append event, status finished
+GAP-ACCEPTED      | P9c | ALLOWED | then set a DIFFERENT POTM (p2) = change after lock
+OK                | PH1 | ALLOWED | player p1 adds photo doc (live match)
+OK                | PH2 | DENIED | non-player non-scorer out1 adds photo doc
+OK                | PH3 | DENIED | eve (player of a DIFFERENT match) adds photo to "other"
+OK                | PH4 | DENIED | creator only (org, not playing/scoring) adds photo
+INFO              | PH5 | ALLOWED | player adds photo to FINISHED match
+INFO              | PH6 | ALLOWED | player adds photo to ABANDONED match
+OK                | PH7 | DENIED | photo doc uploadedBy someone else
+OK                | PH8 | DENIED | cap deletes eve's photo doc
+OK                | PH9 | ALLOWED | cap deletes own photo doc
+OK                | ST1 | ALLOWED | player p1 uploads jpeg to own path
+OK                | ST2 | DENIED | non-player out1 uploads
+OK                | ST3 | DENIED | eve (other match player) uploads to "other"
+OK                | ST4 | DENIED | creator-only org uploads
+OK                | ST5 | DENIED | p1 uploads into p2's folder
+OK                | ST6 | DENIED | SVG image/svg+xml
+OK                | ST7 | DENIED | 0-byte image/jpeg
+OK                | ST8 | DENIED | 10 MB exactly
+INFO              | ST9 | ALLOWED | HTML body declared image/jpeg (storage cannot sniff)
+INFO              | ST10 | ALLOWED | 6-byte "GIF89a" header only as image/gif
+INFO              | ST11 | ALLOWED | player uploads to FINISHED match
+INFO              | ST12 | ALLOWED | player uploads to ABANDONED match
+OK                | ST13 | DENIED | cap deletes eve's storage file
+INFO              | ST14 | ALLOWED | p1 overwrites own existing file (update)
+OK                | ST15 | DENIED | text/html content type
+OK                | G8-1 | ALLOWED | 10 distinct registered teams
+OK                | G8-2 | DENIED | 11 teams
+OK                | G8-3 | DENIED | dup at index 9
+OK                | G8-4 | DENIED | unregistered "ghost" at index 9
+OK                | G8-5 | DENIED | team with 2 members at index 9
+OK                | G8-6 | ALLOWED | 2 teams
+OK                | RK1 | DENIED | user writes rankings/cap doc
+OK                | RK2 | DENIED | user adds rankingPoints to own profile
+OK                | WS1 | DENIED | name trailing NBSP
+OK                | WS2 | DENIED | name leading U+3000
+OK                | WS3 | DENIED | name trailing U+2028
+UNEXPECTED-REJECT | WS4 | DENIED | name inner NBSP (Arun\u00A0K)
+OK                | WS5 | DENIED | name U+2800 braille blank only
+OK                | WS6 | DENIED | name \u115F\u1160
+OK                | WS7 | DENIED | name trailing U+180E
+INFO              | WS8 | DENIED | name "A"+\u3164 (filler after letter)
+UNEXPECTED-REJECT | U1 | DENIED | name 30 emoji (60 UTF-16) 
+OK                | U2 | DENIED | name A+30 emoji (61 UTF-16)
+OK                | WS0 | ALLOWED | control: name "Arun K"
+OK                | RK2 | DENIED | user adds rankingPoints to own profile
+OK                | WS1 | DENIED | name trailing NBSP
+OK                | WS2 | DENIED | name leading U+3000
+OK                | WS3 | DENIED | name trailing U+2028
+OK                | WS4 | ALLOWED | name inner NBSP (Arun\u00A0K)
+OK                | WS5 | DENIED | name U+2800 braille blank only
+OK                | WS6 | DENIED | name \u115F\u1160
+OK                | WS7 | DENIED | name trailing U+180E
+INFO              | WS8 | ALLOWED | name "A\u3164B" (filler between letters)
+OK                | WS9 | DENIED | name "\u3164\u3164"
+OK                | WS10 | DENIED | name "\uFFA0A" leading halfwidth filler
+OK                | WS11 | DENIED | name trailing U+205F
+OK                | WS12 | DENIED | name trailing tab
+OK                | U1 | ALLOWED | name 29 emoji + A (59 UTF-16)
+OK                | U1b | ALLOWED | name A + 29 emoji + B... exactly 60 UTF-16: "AB"+29 emoji
+OK                | U2 | DENIED | name A+30 emoji (61 UTF-16)
+OK                | U3 | ALLOWED | title 60 emoji (120 UTF-16)
+OK                | U4 | DENIED | title 61 emoji (122 UTF-16)

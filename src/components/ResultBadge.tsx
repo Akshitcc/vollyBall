@@ -1,0 +1,135 @@
+/**
+ * 1.3.0 result verification UI: the state badge (awaiting POTM / awaiting the other captain /
+ * confirmed / flagged / approved / voided), the opposing captain's confirm-or-reject panel and the
+ * admin's approve/void buttons. All decisions use src/core/antifraud.ts, like every backend.
+ */
+import { Ionicons } from '@expo/vector-icons';
+import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { ANTI_FRAUD, confirmProblem, expectedConfirmer, matchFlags, resultState, type FraudFlag, type ResultState } from '../core/antifraud';
+import type { Match } from '../core/types';
+import { translateError } from '../i18n/format';
+import { backend } from '../services/backend';
+import { showToast } from '../state/toast';
+import { colors, radius, type } from '../theme';
+import { Button } from './ui';
+
+export function flagText(flags: readonly FraudFlag[], t: TFunction): string {
+  return t('verify.flagReasons', { reasons: flags.map((f) => t(`verify.${f}`, { min: ANTI_FRAUD.MIN_MATCH_MINUTES })).join(', ') });
+}
+
+const LOOK: Record<Exclude<ResultState, 'not_finished' | 'abandoned'>, { icon: keyof typeof Ionicons.glyphMap; bg: string; fg: string }> = {
+  awaiting_potm: { icon: 'star-outline', bg: colors.tint, fg: colors.text },
+  awaiting_confirmation: { icon: 'hourglass-outline', bg: colors.tint, fg: colors.text },
+  confirmed: { icon: 'checkmark-circle', bg: colors.successBg, fg: colors.successStrong },
+  approved: { icon: 'shield-checkmark', bg: colors.successBg, fg: colors.successStrong },
+  flagged: { icon: 'flag', bg: colors.lossBg, fg: colors.lossText },
+  voided: { icon: 'close-circle', bg: colors.lossBg, fg: colors.lossText },
+};
+
+export function ResultBadge({ match }: { match: Match }) {
+  const { t } = useTranslation();
+  const state = resultState(match);
+  if (state === 'not_finished' || state === 'abandoned') return null;
+  const look = LOOK[state];
+  const flags = state === 'flagged' ? matchFlags(match) : [];
+  return (
+    <View style={[s.badge, { backgroundColor: look.bg }]} accessible accessibilityRole="text" testID={`result-${state}`}>
+      <Ionicons name={look.icon} size={18} color={look.fg} />
+      <View style={{ flex: 1 }}>
+        <Text style={[type.body, { color: look.fg, fontWeight: '800' }]}>{t(`verify.${state}`)}</Text>
+        {flags.length ? <Text style={[type.caption, { color: look.fg, marginTop: 2 }]}>{flagText(flags, t)}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+/** Badge + (for the opposing captain) confirm / reject + (for an admin) approve / void. */
+export function ResultPanel({ match, meId, isAdmin, nameOf }: { match: Match; meId: string; isAdmin: boolean; nameOf: (uid: string) => string | undefined }) {
+  const { t } = useTranslation();
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const state = resultState(match);
+  if (state === 'not_finished' || state === 'abandoned') return null;
+  const canConfirm = confirmProblem(match, meId) === null;
+  const confirmer = expectedConfirmer(match);
+  const run = async (f: () => Promise<void>, ok: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await f();
+      showToast(ok);
+      setRejecting(false);
+    } catch (e) {
+      setError(translateError(e, t));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const reviewable = isAdmin && match.playerOfMatchId && state !== 'approved' && state !== 'voided';
+  return (
+    <View style={{ marginBottom: 10 }} testID="result-panel">
+      <ResultBadge match={match} />
+      {match.captains ? (
+        <Text style={[type.caption, { color: colors.muted, marginTop: 6 }]} testID="result-captains">
+          {t('verify.captains')}: {nameOf(match.captains.A) ?? '—'} · {nameOf(match.captains.B) ?? '—'}
+        </Text>
+      ) : null}
+      {state === 'awaiting_confirmation' && !canConfirm && confirmer ? (
+        <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]}>{t('verify.waitingFor', { name: nameOf(confirmer) ?? '—' })}</Text>
+      ) : null}
+      {canConfirm ? (
+        <View style={s.panel} testID="confirm-panel">
+          <Text style={[type.h3, { color: colors.text }]}>{t('verify.askTitle')}</Text>
+          <Text style={[type.body, { color: colors.text, marginTop: 4, marginBottom: 10 }]}>{t('verify.askText')}</Text>
+          {rejecting ? (
+            <>
+              <Text style={[type.caption, { color: colors.text, fontWeight: '700' }]} nativeID="reject-reason-label">{t('verify.reason')}</Text>
+              <TextInput
+                value={reason}
+                onChangeText={setReason}
+                maxLength={ANTI_FRAUD.REJECT_REASON_MAX}
+                multiline
+                style={s.input}
+                accessibilityLabel={t('verify.reason')}
+                accessibilityLabelledBy="reject-reason-label"
+                placeholderTextColor={colors.placeholder}
+                testID="reject-reason"
+              />
+              <Text style={[type.caption, { color: colors.muted, textAlign: 'right' }]}>{reason.length}/{ANTI_FRAUD.REJECT_REASON_MAX}</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                <Button title={t('verify.cancel')} variant="secondary" onPress={() => setRejecting(false)} style={{ flex: 1 }} />
+                <Button title={t('verify.sendReject')} variant="danger" loading={busy} onPress={() => void run(() => backend.rejectResult(match.id, reason), t('verify.rejectedToast'))} style={{ flex: 1 }} testID="reject-send" />
+              </View>
+            </>
+          ) : (
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Button title={t('verify.confirm')} icon="checkmark" loading={busy} onPress={() => void run(() => backend.confirmResult(match.id), t('verify.confirmedToast'))} style={{ flex: 1 }} testID="confirm-result" />
+              <Button title={t('verify.reject')} icon="flag-outline" variant="secondary" onPress={() => setRejecting(true)} style={{ flex: 1 }} testID="reject-result" />
+            </View>
+          )}
+        </View>
+      ) : null}
+      {reviewable ? (
+        <View style={s.panel} testID="admin-panel">
+          <Text style={[type.h3, { color: colors.text, marginBottom: 8 }]}>{t('verify.adminTitle')}</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Button title={t('verify.approve')} loading={busy} onPress={() => void run(() => backend.reviewMatch(match.id, 'approve'), t('verify.reviewedToast'))} style={{ flex: 1 }} testID="admin-approve" />
+            <Button title={t('verify.void')} variant="danger" loading={busy} onPress={() => void run(() => backend.reviewMatch(match.id, 'void'), t('verify.reviewedToast'))} style={{ flex: 1 }} testID="admin-void" />
+          </View>
+        </View>
+      ) : null}
+      {error ? <Text style={[type.body, { color: colors.danger, marginTop: 6 }]} accessibilityRole="alert">{error}</Text> : null}
+    </View>
+  );
+}
+
+const s = StyleSheet.create({
+  badge: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: radius.md, padding: 12 },
+  panel: { backgroundColor: colors.white, borderRadius: radius.md, padding: 14, marginTop: 10, borderWidth: 1, borderColor: colors.border },
+  input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, minHeight: 72, padding: 10, color: colors.text, backgroundColor: colors.white, textAlignVertical: 'top', marginTop: 4 },
+});
