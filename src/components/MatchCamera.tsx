@@ -8,7 +8,11 @@ import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
-import { photoSizeProblem } from '../core/photos';
+import { PHOTO_ERROR_CODES, photoSizeProblem } from '../core/photos';
+import { MAX_PHOTOS_PER_MATCH, photoSlots } from '../core/limits';
+import type { MatchPhoto } from '../core/types';
+import { backend } from '../services/backend';
+import { getOnce } from '../services/matchFactory';
 import { photoErrorMessage } from '../i18n/format';
 import { photoError, readPhoto } from '../services/photoFile';
 import { cameraAccess, hasCameraButton, isPhone, MAX_GALLERY_PICK, openSettings, pickPhotos, requestCamera, takePhoto, type PickedPhoto } from '../services/camera';
@@ -20,14 +24,30 @@ import { usePhotoQueue } from '../state/usePhotoQueue';
 import { colors } from '../theme';
 import { Button } from './ui';
 
-type Panel = null | 'explain' | 'denied' | { error: string };
+type Panel = null | 'explain' | 'denied' | { error: string; title?: string };
+
+export { photoSlots };
 
 /** Camera + gallery actions with the permission flow; the result is queued for upload. */
-export function useAddPhoto(matchId: string, uid: string) {
+export function useAddPhoto(matchId: string, uid: string, photoCount?: number) {
   const [panel, setPanel] = useState<Panel>(null);
+  // 1.3.4 D133-2: per-match cap (MAX_PHOTOS_PER_MATCH, counting photos still in the upload queue).
+  // Screens that already watch the match photos pass their count (shown as "n of 50 · m left");
+  // otherwise it is read once when a photo is added. Every backend enforces the cap again.
+  const q = usePhotoQueue(matchId);
+  const slots = photoCount == null ? null : photoSlots(photoCount, q.pending);
+  const slotsNow = async () => {
+    if (slots) return slots;
+    const n = await getOnce<MatchPhoto[]>((cb) => backend.watchPhotos(matchId, cb))
+      .then((l) => l?.length ?? 0)
+      .catch(() => 0);
+    return photoSlots(n, photoQueue.view(matchId).pending);
+  };
+  const limitMessage = () => photoErrorMessage(photoError('photo_limit'));
 
   const queue = async (p: PickedPhoto | null) => {
     if (!p) return;
+    if ((await slotsNow()).left <= 0) return setPanel({ error: limitMessage() });
     // QA G10: size checked before uploading, never a silent failure.
     const size = photoSizeProblem(p.fileSize);
     if (size) return setPanel({ error: photoErrorMessage(photoError(size === 'empty' ? 'photo_empty' : 'photo_too_large')) });
@@ -42,12 +62,27 @@ export function useAddPhoto(matchId: string, uid: string) {
     setPanel(null);
     setAdded(null);
     try {
-      const r = await queuePickedPhotos(await pickPhotos(MAX_GALLERY_PICK), matchId, uid);
+      const now = await slotsNow();
+      if (now.left <= 0) return setPanel({ error: limitMessage() });
+      const limit = Math.min(MAX_GALLERY_PICK, now.left);
+      const r = await queuePickedPhotos(await pickPhotos(limit), matchId, uid, { limit });
       if (r.queued) setAdded(r.queued);
+      const notes: string[] = [];
       if (r.failed.length) {
         const reason = photoErrorMessage(r.failed[0].error);
-        setPanel({ error: r.queued || r.failed.length > 1 ? i18n.t('photos.someSkipped', { count: r.failed.length, reason }) : reason });
+        notes.push(r.queued || r.failed.length > 1 || r.dropped ? i18n.t('photos.someSkipped', { count: r.failed.length, reason }) : reason);
       }
+      // "4 not added: limit 10 per upload" / "… this match can have 50 photos"
+      if (r.dropped)
+        notes.push(
+          limit < MAX_GALLERY_PICK
+            ? i18n.t('photos.notAddedMatchLimit', { count: r.dropped, max: MAX_PHOTOS_PER_MATCH })
+            : i18n.t('photos.notAddedBatchLimit', { count: r.dropped, max: MAX_GALLERY_PICK }),
+        );
+      // 1.3.5 (QA E134-5): a partial add says so in the title ("10 added, 2 skipped"), not "Photo not added".
+      const skipped = r.failed.length + r.dropped;
+      const title = r.queued > 0 && skipped > 0 ? i18n.t('photos.partialTitle', { added: r.queued, skipped }) : undefined;
+      if (notes.length) setPanel({ error: notes.join('\n'), title });
     } catch (e) {
       setPanel({ error: photoErrorMessage(e) });
     }
@@ -74,14 +109,25 @@ export function useAddPhoto(matchId: string, uid: string) {
   const element = (
     <>
       <CameraPanel panel={panel} onAllow={allow} onGallery={gallery} onClose={() => setPanel(null)} />
-      {added != null && !panel ? (
+      {slots ? (
+        <Text style={[s.slots, slots.left <= 0 && { color: colors.danger }]} testID="photo-slots">
+          {slots.left > 0 ? i18n.t('photos.slotsLeft', { count: slots.left, used: slots.used, max: MAX_PHOTOS_PER_MATCH }) : i18n.t('photos.slotsFull', { max: MAX_PHOTOS_PER_MATCH })}
+        </Text>
+      ) : null}
+      {/* 1.3.5 (QA E134-5): an upload the backend refused (e.g. the same photo again) is said inline,
+          in words, instead of a stale "1 photo added – uploading" next to "Photo not added · tap". */}
+      {q.error ? (
+        <Text style={s.refused} testID="photo-refused" accessibilityRole="alert" accessibilityLiveRegion="assertive">
+          {i18n.t('photos.refusedInline', { reason: photoErrorMessage(q.error.err) })}
+        </Text>
+      ) : added != null && !panel ? (
         <Text style={s.added} testID="photos-added" accessibilityLiveRegion="polite">
           {i18n.t('photos.addedCount', { count: added })}
         </Text>
       ) : null}
     </>
   );
-  return { camera, gallery, element, panel, added };
+  return { camera, gallery, element, panel, added, slots };
 }
 
 /** Soft red ring around the LIVE pill: scales 1 → 1.15 and fades, 1600 ms loop (off with Reduce Motion). */
@@ -126,7 +172,7 @@ export function CameraPanel({ panel, onAllow, onGallery, onClose }: { panel: Pan
           )}
           {typeof panel === 'object' && (
             <>
-              <Text style={s.title} accessibilityRole="header">{t('camera.notAdded')}</Text>
+              <Text style={s.title} accessibilityRole="header" testID="camera-error-title">{panel.title ?? t('camera.notAdded')}</Text>
               <Text style={s.text}>{panel.error.startsWith('photo_') ? t(`errors.codes.${panel.error}`) : panel.error}</Text>
               <Button title={t('common.ok')} onPress={onClose} testID="camera-error-ok" />
             </>
@@ -220,7 +266,8 @@ export function UploadChip({ matchId, tone = 'dark' }: { matchId: string; tone?:
   let fg: string = tone === 'dark' ? colors.white : colors.ink;
   if (v.error) {
     icon = 'alert-circle';
-    text = t('camera.chipFailed');
+    // 1.3.5 (QA E134-5): the same photo again says so on the chip too
+    text = (v.error.err as { code?: string } | null)?.code === PHOTO_ERROR_CODES.duplicate ? t('camera.chipDuplicate') : t('camera.chipFailed');
     tint = colors.warnBg;
     fg = colors.ink;
     onPress = () => setDetails(true);
@@ -269,6 +316,8 @@ export function UploadChip({ matchId, tone = 'dark' }: { matchId: string; tone?:
 
 const s = StyleSheet.create({
   added: { color: colors.successStrong, fontWeight: '700', marginTop: 6 },
+  refused: { color: colors.danger, fontWeight: '700', marginTop: 6 },
+  slots: { color: colors.muted, fontWeight: '600', fontSize: 12, marginTop: 6 },
   livePill: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 36, minWidth: 44, paddingHorizontal: 12, borderRadius: 999, backgroundColor: colors.live, borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)' },
   webPill: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 36, minWidth: 44, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1.5, borderColor: colors.onInkMuted },
   livePillText: { color: colors.white, fontWeight: '900', fontSize: 13 },

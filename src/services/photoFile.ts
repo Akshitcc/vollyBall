@@ -7,6 +7,7 @@
  * A URI that can no longer be read (a web blob: URL after a reload, a deleted cache file) is a
  * permanent `photo_unreadable` error, so the offline queue drops it at once (QA NB-P4).
  */
+import { sha256Hex } from '../core/sha256';
 import { CodedError } from '../core/codedError';
 import { checkPhotoProbe, PHOTO_ERROR_CODES } from '../core/photos';
 
@@ -23,6 +24,8 @@ const MESSAGES: Record<string, string> = {
   photo_too_large: 'Photos must be smaller than 10 MB',
   photo_truncated: 'That photo is incomplete or damaged',
   photo_unreadable: 'That photo is no longer available on this device',
+  photo_duplicate: 'This photo is already in this match',
+  photo_limit: 'This match already has the maximum number of photos',
 };
 export const photoError = (code: string) => new CodedError(code, MESSAGES[code] ?? code);
 
@@ -58,6 +61,11 @@ async function fetchBlob(uri: string): Promise<Blob> {
   } catch {
     throw photoError(PHOTO_ERROR_CODES.unreadable);
   }
+}
+
+/** 1.3.4 (QA D133-3): sha256 (hex) of the whole image, for per-match de-duplication. */
+export async function blobSha256(b: Blob): Promise<string> {
+  return sha256Hex(await readBytes(b));
 }
 
 /** Reads and checks a photo; throws a CodedError (photo_type / photo_empty / …) when it is refused. */

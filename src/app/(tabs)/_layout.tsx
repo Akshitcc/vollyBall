@@ -3,7 +3,7 @@ import { Tabs, useNavigation } from 'expo-router';
 import { useRoute } from 'expo-router/react-navigation';
 import React, { useContext, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { leakedTabParams } from '../../services/nav';
+import { inAppLinkPress, leakedTabParams } from '../../services/nav';
 import { Platform, Text, useWindowDimensions, type ColorValue, type TextStyle } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 import { PressableScale } from '../../components/PressableScale';
@@ -49,6 +49,16 @@ function useStripLeakedParams() {
   }, [navigation, route.params]);
 }
 
+type TabButtonProps = { href?: string; onPress?: (e: unknown) => void; style?: unknown; children?: React.ReactNode; web?: boolean } & Record<string, unknown>;
+/** Tab bar button: press-scale feedback; on the web its link click stays inside the app (QA E134-1). */
+export function TabButton({ href, onPress, style, children, web = Platform.OS === 'web', ...p }: TabButtonProps) {
+  return (
+    <PressableScale {...(p as object)} {...(href !== undefined ? { href } : {})} onPress={inAppLinkPress(onPress, { web, href })} scaleTo={0.92} style={style as never}>
+      {children}
+    </PressableScale>
+  );
+}
+
 export default function TabsLayout() {
   const { t, i18n } = useTranslation();
   const insets = useContext(SafeAreaInsetsContext) ?? { bottom: 0 }; // no provider in unit tests
@@ -66,11 +76,9 @@ export default function TabsLayout() {
         tabBarStyle: { backgroundColor: colors.ink, borderTopWidth: 2, borderTopColor: colors.primary, height: m.height, paddingTop: m.paddingTop, paddingBottom: m.paddingBottom },
         tabBarItemStyle: { paddingHorizontal: 0 },
         // press feedback on every tab (scale, or an opacity dip with Reduce Motion)
-        tabBarButton: ({ ref: _ref, style, children, ...p }) => (
-          <PressableScale {...(p as object)} scaleTo={0.92} style={style as never}>
-            {children}
-          </PressableScale>
-        ),
+        // On the web the button is a link: keep plain clicks in the app (no full page reload, which
+        // lost the demo "Simulate offline" switch and every other in-memory state – QA E134-1).
+        tabBarButton: ({ ref: _ref, ...p }) => <TabButton {...(p as TabButtonProps)} />,
       }}
     >
       <Tabs.Screen name="index" options={{ title: t('tabs.home'), tabBarLabel: label('tabs.home'), tabBarIcon: icon('home') }} />

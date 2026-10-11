@@ -22,6 +22,16 @@ const DAY = 86400000;
 const HOME = { lat: 28.6139, lng: 77.209 }; // New Delhi
 
 // Every player in the demo is a registered user (seed1..seed24), phones +919000000010..+919000000033.
+
+/**
+ * 1.3.5 (QA E134-2): the one demo account that may switch on "Demo admin" (Profile → Testing tools).
+ * A clearly fake number outside the players' range; it plays in no team and no match, so it can review
+ * every flagged demo match without reviewing its own. Demo builds only (see DemoBackend.isAdmin).
+ */
+export const DEMO_QA_ADMIN = { id: 'seed_admin', phone: '+919000000001', name: 'Demo Admin' } as const;
+export function demoQaAdminProfile(now = Date.now()): UserProfile {
+  return { id: DEMO_QA_ADMIN.id, name: DEMO_QA_ADMIN.name, phone: DEMO_QA_ADMIN.phone, position: 'any', city: 'New Delhi', photoURL: null, createdAt: now - 30 * DAY };
+}
 const names = [
   'Aarav Sharma', 'Vihaan Gupta', 'Ishaan Verma', 'Kabir Singh', 'Arjun Mehta', 'Rohan Das',
   'Priya Nair', 'Ananya Iyer', 'Sneha Reddy', 'Meera Joshi', 'Kavya Rao', 'Diya Patel',
@@ -289,6 +299,7 @@ export function makeSeed(now = Date.now()): DemoDB {
     c3: { id: 'c3', name: 'Marine Drive Courts', location: { lat: 18.9432, lng: 72.8236, name: 'Mumbai' }, surface: 'outdoor', addedBy: 'seed4', createdAt: now },
   };
 
+  users[DEMO_QA_ADMIN.id] = demoQaAdminProfile(now); // after `ids`: in no team, no match
   return {
     users,
     teams,

@@ -14,6 +14,8 @@ interface UserRow {
   photo_url: string | null;
   position: UserProfile['position'];
   city: string | null;
+  /** 1.3.4: 0 = sign-up row created by GET /me, profile not saved yet. */
+  profile_complete: number;
   created_at: Date;
 }
 
@@ -33,21 +35,42 @@ export function profileFromRow(s: Services, r: UserRow, viewer: Identity, reveal
   };
 }
 
+/** Placeholder name of a sign-up row (users.name is NOT NULL, 1–60 characters); never shown. */
+export const SIGNUP_ROW_NAME = 'New player';
+
+/**
+ * 1.3.4 hardening (c): the first authenticated GET /api/me creates a minimal users row – id and the
+ * verified E.164 phone – so a sign-up appears in `users` before the profile is saved. Idempotent
+ * (INSERT IGNORE: an existing row, or the number already belonging to another account, is left
+ * alone). The row has profile_complete = 0, so until PUT /api/users/:id saves a profile it isn't a
+ * profile: getProfile/getProfiles/findByPhone ignore it and the app still opens "Set up profile".
+ */
+export async function ensureSignupRow(s: Services, viewer: Identity): Promise<boolean> {
+  if (!viewer.phone || !isValidE164(viewer.phone)) return false;
+  if (await s.db('users').where({ id: viewer.uid }).first('id')) return false;
+  const now = nowDate();
+  const r = await s.db('users')
+    .insert({ id: viewer.uid, name: SIGNUP_ROW_NAME, phone: viewer.phone, position: 'any', profile_complete: 0, created_at: now, updated_at: now })
+    .onConflict()
+    .ignore();
+  return !!(Array.isArray(r) ? r[0] : r);
+}
+
 export async function getProfile(s: Services, viewer: Identity, uid: string): Promise<UserProfile | null> {
-  const r = await s.db<UserRow>('users').where({ id: uid }).first();
+  const r = await s.db<UserRow>('users').where({ id: uid, profile_complete: 1 }).first();
   return r ? profileFromRow(s, r, viewer) : null;
 }
 
 export async function getProfiles(s: Services, viewer: Identity, uids: string[]): Promise<UserProfile[]> {
   const ids = uids.filter(Boolean);
   if (!ids.length) return [];
-  const rows = await s.db<UserRow>('users').whereIn('id', ids);
+  const rows = await s.db<UserRow>('users').whereIn('id', ids).where({ profile_complete: 1 });
   return rows.map((r) => profileFromRow(s, r, viewer));
 }
 
 /** phoneIndex/{phone}: `allow get` (exact lookup) – there is deliberately no list/search by phone. */
 export async function findByPhone(s: Services, viewer: Identity, phone: string): Promise<UserProfile | null> {
-  const r = await s.db<UserRow>('users').where({ phone }).first();
+  const r = await s.db<UserRow>('users').where({ phone, profile_complete: 1 }).first();
   return r ? profileFromRow(s, r, viewer, true) : null;
 }
 
@@ -87,11 +110,12 @@ export async function saveProfile(
       photo_url: photo,
       position: p.position,
       city: p.city ?? null,
+      profile_complete: 1,
       created_at: now,
       updated_at: now,
     })
     .onConflict('id')
-    .merge(['name', 'phone', 'photo_url', 'position', 'city', 'updated_at']);
+    .merge(['name', 'phone', 'photo_url', 'position', 'city', 'profile_complete', 'updated_at']);
   s.bus.publish({ topic: topics.profile(p.id), type: 'invalidate' });
   const r = await s.db<UserRow>('users').where({ id: p.id }).first();
   return profileFromRow(s, r!, viewer);

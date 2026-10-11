@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Linking, Platform } from 'react-native';
 import { PHOTO_ACCEPT } from '../core/photos';
+import { MAX_PHOTOS_PER_BATCH } from '../core/limits';
 
 export type CameraAccess = 'granted' | 'ask' | 'denied';
 export interface PickedPhoto {
@@ -65,7 +66,9 @@ export function pickWebFile(doc: Document = document): Promise<PickedPhoto | nul
 }
 
 /** 1.3.2: up to `limit` photos at once from the gallery / file picker. */
-export const MAX_GALLERY_PICK = 10;
+export const MAX_GALLERY_PICK = MAX_PHOTOS_PER_BATCH;
+/** Picked files looked at (counted) at most; only `limit` of them are queued. */
+const MAX_PICK_REPORTED = 200;
 
 /** Web: the same allow-listed file input, with `multiple`; at most `limit` files are kept. */
 export function pickWebFiles(doc: Document = document, limit = MAX_GALLERY_PICK): Promise<PickedPhoto[]> {
@@ -83,7 +86,9 @@ export function pickWebFiles(doc: Document = document, limit = MAX_GALLERY_PICK)
       resolve(v);
     };
     input.addEventListener('change', () => {
-      const files = Array.from(input.files ?? []).slice(0, limit);
+      // 1.3.4: everything picked is returned (up to a sanity cap) so the caller can say how many were
+      // not added and why ("4 not added: limit 10 per upload"); queuePickedPhotos applies `limit`.
+      const files = Array.from(input.files ?? []).slice(0, MAX_PICK_REPORTED);
       finish(files.map((f) => ({ uri: URL.createObjectURL(f), fileSize: f.size, mimeType: f.type || null })));
     });
     input.addEventListener('cancel', () => finish([]));
@@ -102,12 +107,14 @@ export async function pickPhoto(): Promise<PickedPhoto | null> {
 }
 /**
  * 1.3.2 "Choose from gallery": several photos at once (Android/iOS photo picker with
- * allowsMultipleSelection + selectionLimit; web file input with `multiple`). Never more than `limit`.
+ * allowsMultipleSelection + selectionLimit; web file input with `multiple`). The picker is asked for
+ * `limit`; anything beyond it is returned so queuePickedPhotos can report it, and is never queued.
  */
 export async function pickPhotos(limit = MAX_GALLERY_PICK): Promise<PickedPhoto[]> {
   if (Platform.OS === 'web') return pickWebFiles(document, limit);
   const r = await ImagePicker.launchImageLibraryAsync({ ...OPTS, allowsMultipleSelection: limit > 1, selectionLimit: limit, orderedSelection: true });
   if (r.canceled || !r.assets?.length) return [];
-  return r.assets.slice(0, limit).map((a) => ({ uri: a.uri, fileSize: a.fileSize, mimeType: a.mimeType ?? null }));
+  // (older Android photo pickers ignore selectionLimit: the extra ones are counted, not queued)
+  return r.assets.slice(0, MAX_PICK_REPORTED).map((a) => ({ uri: a.uri, fileSize: a.fileSize, mimeType: a.mimeType ?? null }));
 }
 export const openSettings = () => Linking.openSettings().catch(() => {});

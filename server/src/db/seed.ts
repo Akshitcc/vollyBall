@@ -4,7 +4,7 @@
  * the owning user, so the seed itself passes the ported security rules
  * (e.g. players join teams by invite + accept, the scorer writes the score).
  */
-import { makeSeed } from '../../../src/services/backend/demoSeed';
+import { DEMO_QA_ADMIN, makeSeed } from '../../../src/services/backend/demoSeed';
 import type { Services } from '../context';
 import type { Identity } from '../auth/verifier';
 import * as users from '../domain/users';
@@ -18,6 +18,8 @@ export async function seedDemo(s: Services, now = Date.now()) {
   const as = (uid: string): Identity => ({ uid, phone: db.users[uid]?.phone ?? null });
 
   for (const u of Object.values(db.users)) {
+    // 1.3.5 (QA E134-2): the app-only "Demo admin" seed never reaches the server (real admins: ADMIN_UIDS)
+    if (u.id === DEMO_QA_ADMIN.id) continue;
     await users.saveProfile(s, as(u.id), { id: u.id, name: u.name, phone: u.phone, photoURL: u.photoURL ?? null, position: u.position, city: u.city ?? null });
   }
   for (const t of Object.values(db.teams)) {

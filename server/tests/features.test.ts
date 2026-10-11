@@ -19,7 +19,14 @@ beforeEach(async () => {
 });
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a6d10000000049454e44ae426082', 'hex');
-const up = (who: Parameters<Harness['as']>[0], id: string) => h.as(who).post(`/api/matches/${id}/photos`).set('Content-Type', 'image/png').send(PNG);
+// 1.3.4: the same image can't be added to a match twice (content hash), so each upload gets its own bytes.
+let variant = 0;
+const pngVariant = () => {
+  const b = Buffer.from(PNG);
+  b.writeUInt16BE(++variant, 22); // inside the IHDR width/height area: a different file, still a PNG
+  return b;
+};
+const up = (who: Parameters<Harness['as']>[0], id: string) => h.as(who).post(`/api/matches/${id}/photos`).set('Content-Type', 'image/png').send(pngVariant());
 const progress = (id: string, events: object[], who: Parameters<Harness['as']>[0] = 'cap') => h.as(who).put(`/api/matches/${id}/progress`).send({ events });
 const potm = (id: string, playerId: string, who: Parameters<Harness['as']>[0] = 'cap') => h.as(who).put(`/api/matches/${id}/player-of-match`).send({ playerId });
 /** Team A wins 5-0 (best of 1, to 5, win by 1); credits in order. */
@@ -162,7 +169,7 @@ describe('photo idempotency (retest 1.1.0 NB-P2)', () => {
     assert.equal(c.body.error, 'idempotency_conflict');
     assert.equal((await send(id, 'bad key!')).status, 400);
     // another uploader may use the same key (keys are per uploader)
-    const d = await h.as('cap').post(`/api/matches/${id}/photos`).set('Content-Type', 'image/png').set('Idempotency-Key', 'q_abc123_xyz').send(PNG);
+    const d = await h.as('cap').post(`/api/matches/${id}/photos`).set('Content-Type', 'image/png').set('Idempotency-Key', 'q_abc123_xyz').send(pngVariant()); // 1.3.4: a different image (the same one would be photo_duplicate)
     assert.equal(d.status, 201);
     assert.notEqual(d.body.id, a.body.id);
   });

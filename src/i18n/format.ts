@@ -4,6 +4,7 @@ import type { TournamentDisplayStatus } from '../core/tournament';
  * src/core (pure, unit-tested, also used for stored data). The core functions
  * are unchanged; screens use these so the UI follows the chosen language.
  */
+import { MAX_PHOTOS_PER_MATCH } from '../core/limits';
 import type { TFunction } from 'i18next';
 import { INVALID_PHONE_CODE, INVALID_PHONE_MESSAGE } from '../core/phone';
 import {
@@ -121,6 +122,8 @@ const CODED = new Set([
   'photo_type', 'photo_empty', 'photo_truncated', 'color_invalid', 'photo_too_large', 'photo_url', 'photo_upload_failed', 'rules_invalid', 'team_name_mismatch',
   'need_two_teams', 'duplicate_teams', 'too_many_teams', 'place_invalid', 'events_invalid',
   'photo_not_allowed', 'potm_not_scorer', 'potm_not_finished', 'potm_window', 'potm_already_set', 'potm_not_player', 'potm_no_points', 'match_no_winner', 'potm_use_endpoint', 'photo_unreadable', 'photo_wrong_account',
+  // 1.3.4
+  'photo_duplicate', 'photo_limit', 'not_on_court',
   // 1.3.0 T&C / anti-fraud
   'terms_not_accepted', 'terms_version_mismatch', 'match_bad_status', 'match_terminal', 'match_status_move', 'server_time', 'server_field', 'match_delete_forbidden', 'captains_required', 'captains_same', 'captain_not_team_captain', 'captain_not_on_side', 'not_completed', 'not_captain', 'scoring_side', 'already_reviewed', 'no_captains', 'admin_only', 'potm_required',
   // 1.3.1 (QA C130-2)
@@ -140,7 +143,7 @@ export function translateCode(e: unknown, t: TFunction = tr): string | null {
   if (!code) return null;
   if (code === INVALID_PHONE_CODE) return t('errors.invalidPhone');
   if (code === 'rate_limited') return t('errors.codes.rate_limited', { seconds: Math.max(1, Math.ceil(err.retryAfter ?? 1)) });
-  if (CODED.has(code)) return t(`errors.codes.${code}`, { field: fieldLabel(err.field, t), min: err.min, max: err.max });
+  if (CODED.has(code)) return t(`errors.codes.${code}`, { field: fieldLabel(err.field, t), min: err.min, max: err.max ?? (code === 'photo_limit' ? MAX_PHOTOS_PER_MATCH : undefined) });
   return null;
 }
 

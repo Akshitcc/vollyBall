@@ -20,9 +20,9 @@ import { useInsets } from './SafeFooter';
 import { Button } from './ui';
 
 /** Camera + Gallery buttons for match pages, the finished-match Photos tab and Memories. */
-export function AddPhotoButtons({ matchId, uid, testIDPrefix = 'add-photo', galleryTestID }: { matchId: string; uid: string; testIDPrefix?: string; galleryTestID?: string }) {
+export function AddPhotoButtons({ matchId, uid, testIDPrefix = 'add-photo', galleryTestID, photoCount }: { matchId: string; uid: string; testIDPrefix?: string; galleryTestID?: string; /** 1.3.4: shows "n of 50 photos · m left" */ photoCount?: number }) {
   const { t } = useTranslation();
-  const add = useAddPhoto(matchId, uid);
+  const add = useAddPhoto(matchId, uid, photoCount);
   return (
     <View>
       <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -37,9 +37,11 @@ export function AddPhotoButtons({ matchId, uid, testIDPrefix = 'add-photo', gall
 
 export function PhotoSheet({ matchId, uid, visible, onClose, onOpenPhotos }: { matchId: string; uid: string; visible: boolean; onClose: () => void; onOpenPhotos?: () => void }) {
   const { t } = useTranslation();
-  const add = useAddPhoto(matchId, uid);
   const insets = useInsets();
-  const photos = useWatch<MatchPhoto[]>(visible ? (cb) => backend.watchPhotos(matchId, cb) : null, [matchId, visible]) ?? [];
+  const watched = useWatch<MatchPhoto[]>(visible ? (cb) => backend.watchPhotos(matchId, cb) : null, [matchId, visible]);
+  const photos = watched ?? [];
+  // 1.3.4 D133-2: remaining slots under the tiles once the photo list has loaded
+  const add = useAddPhoto(matchId, uid, watched ? watched.length : undefined);
   const tile = (kind: 'camera' | 'gallery') => (
     <Pressable
       key={kind}

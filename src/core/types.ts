@@ -149,6 +149,8 @@ export interface MatchPhoto {
   storagePath?: string;
   uploadedBy: string;
   createdAt: number;
+  /** 1.3.4: sha256 (hex) of the image bytes, for per-match de-duplication. Absent on older photos. */
+  hash?: string | null;
 }
 
 export type ChallengeStatus = 'pending' | 'accepted' | 'declined' | 'cancelled';

@@ -8,6 +8,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { GlassTag, HeroHeader, SectionHeader, card } from '../../components/Hero';
 import { PressableScale } from '../../components/PressableScale';
 import { LanguageSwitch } from '../../components/LanguageSwitch';
+import { AboutCard, DemoQaTools } from '../../components/AboutCard';
 import { MatchCard } from '../../components/MatchCard';
 import { PhotoGrid, PhotoViewer } from '../../components/PhotoGallery';
 import { RankCard } from '../../components/RankCard';
@@ -191,6 +192,11 @@ export default function Profile() {
       <View style={[card, { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }]}>
         <LanguageSwitch />
       </View>
+      {/* 1.3.4: demo-only testing tools (demo admin, simulate offline) and About (backend mode + API host) */}
+      <View style={{ height: 12 }} />
+      <DemoQaTools />
+      <SectionHeader title={t('about.title')} />
+      <AboutCard />
       <View style={{ height: 12 }} />
       <Button title={t('profile.signOut')} icon="log-out" variant="ghost" onPress={() => void signOut()} />
       {backend instanceof DemoBackend && (

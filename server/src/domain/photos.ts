@@ -8,6 +8,8 @@ import type { Identity } from '../auth/verifier';
 import { topics } from '../live/bus';
 import { IMAGE_TYPES, MAX_IMAGE_BYTES } from '../storage/photoStorage';
 import { newId, nowDate, toMs } from './util';
+import crypto from 'node:crypto';
+import { MAX_PHOTOS_PER_MATCH } from '../../../src/core/limits';
 
 /**
  * storage.rules isImage() plus QA G11: the type comes from the file's magic bytes, not the declared
@@ -30,6 +32,7 @@ interface PhotoRow {
   match_id: string;
   uploaded_by: string;
   storage_key: string;
+  content_hash?: string | null;
   created_at: Date;
 }
 const photoFromRow = (s: Services, r: PhotoRow): MatchPhoto => ({
@@ -39,6 +42,7 @@ const photoFromRow = (s: Services, r: PhotoRow): MatchPhoto => ({
   storagePath: r.storage_key,
   uploadedBy: r.uploaded_by,
   createdAt: toMs(r.created_at)!,
+  hash: r.content_hash ?? null,
 });
 
 export async function listPhotos(s: Services, matchId: string): Promise<MatchPhoto[]> {
@@ -77,16 +81,33 @@ export async function uploadPhoto(s: Services, viewer: Identity, matchId: string
   const prior = await existing();
   if (prior) return prior;
   const type = checkImage(contentType, data, 'storage.matches.create');
+  // 1.3.4 (QA D133-3): the same image can't be added to a match twice (sha256 of the bytes; the
+  // unique key (match_id, content_hash) also catches two concurrent uploads of it).
+  const hash = crypto.createHash('sha256').update(data).digest('hex');
+  const duplicate = () => new HttpError(409, PHOTO_ERROR_CODES.duplicate, 'This photo is already in this match');
+  if (await s.db('match_photos').where({ match_id: matchId, content_hash: hash }).first('id')) throw duplicate();
+  // 1.3.4 (QA D133-2): at most MAX_PHOTOS_PER_MATCH photos per match.
+  const tooMany = async () => Number((await s.db('match_photos').where({ match_id: matchId }).count({ n: '*' }))[0].n) >= MAX_PHOTOS_PER_MATCH;
+  const limit = () => new HttpError(409, PHOTO_ERROR_CODES.limit, `A match can have at most ${MAX_PHOTOS_PER_MATCH} photos`, { max: MAX_PHOTOS_PER_MATCH });
+  if (await tooMany()) throw limit();
   const id = newId();
   const key = `matches/${matchId}/${viewer.uid}/${id}.${IMAGE_TYPES[type]}`;
   await s.storage.put(key, data, type);
   try {
-    await s.db('match_photos').insert({ id, match_id: matchId, uploaded_by: viewer.uid, storage_key: key, content_type: type, size_bytes: data.length, idempotency_key: idempotencyKey ?? null, created_at: nowDate() });
+    // The count is re-checked with the match row locked, so concurrent uploads can't pass the cap.
+    await s.db.transaction(async (trx) => {
+      await trx('matches').where({ id: matchId }).forUpdate().first('id');
+      const n = Number((await trx('match_photos').where({ match_id: matchId }).count({ n: '*' }))[0].n);
+      if (n >= MAX_PHOTOS_PER_MATCH) throw limit();
+      await trx('match_photos').insert({ id, match_id: matchId, uploaded_by: viewer.uid, storage_key: key, content_type: type, size_bytes: data.length, content_hash: hash, idempotency_key: idempotencyKey ?? null, created_at: nowDate() });
+    });
   } catch (e) {
     await s.storage.delete(key);
+    if (e instanceof HttpError) throw e;
     // Two concurrent retries with the same key: the loser returns the winner's photo.
     const raced = (e as { code?: string }).code === 'ER_DUP_ENTRY' ? await existing() : null;
     if (raced) return raced;
+    if ((e as { code?: string }).code === 'ER_DUP_ENTRY' && /uq_match_photos_hash/.test(String((e as Error).message))) throw duplicate();
     throw e;
   }
   s.bus.publish({ topic: topics.photos(matchId), type: 'invalidate' });

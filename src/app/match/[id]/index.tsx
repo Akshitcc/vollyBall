@@ -19,6 +19,8 @@ import { computeState, timeline, type MatchEvent, type Side } from '../../../cor
 import { acceptedEvents, creditLabel, KIND_EMOJI, longestRun, playerStats, teamTotals } from '../../../core/stats';
 import type { Match, MatchPhoto } from '../../../core/types';
 import { backend } from '../../../services/backend';
+import { useOnline } from '../../../services/connectivity';
+import { usePhotoQueue } from '../../../state/usePhotoQueue';
 import { useAuth, useMe } from '../../../state/AuthContext';
 import { useWatch } from '../../../state/hooks';
 import { useProfiles } from '../../../state/profiles';
@@ -38,6 +40,9 @@ export default function MatchPage() {
   const [tab, setTab] = useState<Tab>('stats');
   const [viewer, setViewer] = useState<number | null>(null);
   const interested = useProfiles(m?.interestedIds);
+  // 1.3.4 D133-1: offline / queued-photo indicator (no indicator while online with nothing pending)
+  const online = useOnline();
+  const photoQ = usePhotoQueue(id);
   const uploaders = useProfiles(useMemo(() => [...new Set(photos.map((p) => p.uploadedBy))], [photos]));
 
   const derived = useMemo(() => {
@@ -107,6 +112,18 @@ export default function MatchPage() {
           </Text>
           {m.status === 'live' ? <PulsingLive /> : null}
         </Row>
+        {!online || photoQ.pending > 0 ? (
+          <View style={hs.syncPill} testID="viewer-sync" accessibilityLiveRegion="polite">
+            <Ionicons name={online ? 'cloud-upload-outline' : 'cloud-offline'} size={13} color={online ? colors.onInkMuted : colors.gold} />
+            <Text style={[hs.syncText, !online && { color: colors.gold }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+              {!online
+                ? photoQ.pending > 0
+                  ? tr('score.syncOfflinePending', { count: photoQ.pending })
+                  : tr('match.viewerOffline')
+                : tr('score.syncSyncingPending', { count: photoQ.pending })}
+            </Text>
+          </View>
+        ) : null}
         <LiveScoreboard teamA={m.teamA} teamB={m.teamB} st={st} setsNeeded={setsNeeded} live={live} />
         {(['A', 'B'] as Side[]).map((side) =>
           st.winner === side ? (
@@ -194,7 +211,7 @@ export default function MatchPage() {
       {/* live camera for the players and the scorer: photo straight into this match's Photos */}
       {m.status === 'live' && canAdd && (
         <View style={{ marginBottom: 8 }} testID="live-camera-row">
-          <AddPhotoButtons matchId={m.id} uid={me.id} testIDPrefix="live-photo" />
+          <AddPhotoButtons matchId={m.id} uid={me.id} testIDPrefix="live-photo" photoCount={photos.length} />
         </View>
       )}
       {m.status === 'finished' && (m.playerOfMatchId ? <PotmBadge match={m} /> : isScorer && <PotmPicker match={m} uid={me.id} />)}
@@ -254,7 +271,7 @@ export default function MatchPage() {
       {/* finished matches: add photos straight from the summary too */}
       {m.status === 'finished' && canAdd && tab !== 'photos' && (
         <View style={{ marginBottom: 8 }} testID="finished-photo-row">
-          <AddPhotoButtons matchId={m.id} uid={me.id} testIDPrefix="finished-photo" />
+          <AddPhotoButtons matchId={m.id} uid={me.id} testIDPrefix="finished-photo" photoCount={photos.length} />
         </View>
       )}
       {m.status === 'finished' && photos.length > 0 && tab !== 'photos' && (
@@ -334,7 +351,7 @@ export default function MatchPage() {
       {tab === 'photos' && (
         <View testID="photos-tab">
           {/* 1.3.2: Choose from gallery (multi-select, up to 10) next to Camera (phones only); live and finished matches */}
-          {canAdd && <AddPhotoButtons matchId={m.id} uid={me.id} />}
+          {canAdd && <AddPhotoButtons matchId={m.id} uid={me.id} photoCount={photos.length} />}
           {photos.length === 0 ? (
             <Empty icon="images-outline" title={tr('match.noPhotos')} text={tr('match.noPhotosText')} />
           ) : (
@@ -363,12 +380,13 @@ function Timeline({ m, nameOf }: { m: Match; nameOf: (s: Side) => string }) {
             {e.a}-{e.b}
           </Text>
           <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: e.event.side === 'A' ? m.teamA.color : m.teamB.color, marginRight: 8 }} />
-          <Text style={{ flex: 1, fontWeight: '600' }} numberOfLines={1}>
+          {/* 1.3.5 (QA E134-3): wraps to 2 lines at 360 px instead of "Yamuna Blockers · Tea…" */}
+          <Text style={{ flex: 1, fontWeight: '600' }} numberOfLines={2} testID={`timeline-text-${i}`}>
             {e.event.type === 'timeout'
               ? t('match.timeoutFor', { team: nameOf(e.event.side) })
               : e.event.playerId
                 ? creditLabel(names.get(e.event.playerId) ?? t('common.player'), e.event.kind) // no 💥 without a shot type
-                : nameOf(e.event.side)}
+                : `${nameOf(e.event.side)} · ${t('liveV2.teamPoint')}`}
           </Text>
         </Row>
       ))}
@@ -381,6 +399,8 @@ function statusLabel(m: Match, t: TFunction) {
 }
 
 const hs = StyleSheet.create({
+  syncPill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', gap: 5, backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, marginBottom: 8, maxWidth: '100%' },
+  syncText: { color: colors.onInkMuted, fontWeight: '700', fontSize: 12 },
   hero: { borderRadius: 22, paddingHorizontal: 14, paddingVertical: 16, marginBottom: 12 },
   setHead: { color: colors.white, fontWeight: '800', fontSize: 15, flexShrink: 1 },
   center: { alignItems: 'center', paddingHorizontal: 4, minWidth: 76, paddingTop: 6 },

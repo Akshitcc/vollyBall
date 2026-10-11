@@ -91,6 +91,8 @@ export interface RotationPoint {
   servingSide: Side;
   /** Player in position 1 of the serving team when the rally was served. */
   server: string | null;
+  /** 1.3.4: both teams' court positions while the rally was played (before any rotation it causes). */
+  onCourt: { A: Slot[]; B: Slot[] };
 }
 
 export interface RotationTimeline {
@@ -141,7 +143,7 @@ export function rotationTimeline(
     const ev = events[i];
     if (finished) break;
     if (ev.type !== 'point') continue;
-    points.push({ eventIndex: i, setIndex, servingSide: serving, server: positions[serving][0] ?? null });
+    points.push({ eventIndex: i, setIndex, servingSide: serving, server: positions[serving][0] ?? null, onCourt: positions });
     if (ev.side !== serving) {
       positions = { ...positions, [ev.side]: rotateClockwise(positions[ev.side]) };
       rotations = { ...rotations, [ev.side]: rotations[ev.side] + 1 };
@@ -183,6 +185,30 @@ export function rotationTimeline(
       atSetStart: !finished && pointsInSet === 0,
     },
   };
+}
+
+/**
+ * 1.3.4 (QA D133-5): a point may only be credited to a player who was ON COURT for that rally – the
+ * set's starting lineup (substitutions are made through the per-set lineups, at the start of a set)
+ * rotated by the rallies before it. Returns the first credited point at index >= `from` whose player
+ * was not on court (bench / other team), or null. Used by the API server and the demo backend; the
+ * app's chips only offer on-court players anyway (core/scoring playerPoint).
+ */
+export function offCourtCredit(
+  rules: RuleSet,
+  events: readonly MatchEvent[],
+  firstServe: Side,
+  rosters: { A: readonly string[]; B: readonly string[] },
+  lineups?: Lineups | null,
+  from = 0,
+): { index: number; side: Side; playerId: string } | null {
+  for (const p of rotationTimeline(rules, events, firstServe, rosters, lineups).points) {
+    if (p.eventIndex < from) continue;
+    const ev = events[p.eventIndex];
+    if (ev.type !== 'point' || !ev.playerId) continue;
+    if (!p.onCourt[ev.side].includes(ev.playerId)) return { index: p.eventIndex, side: ev.side, playerId: ev.playerId };
+  }
+  return null;
 }
 
 /**

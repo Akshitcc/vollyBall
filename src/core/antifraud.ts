@@ -401,3 +401,18 @@ export function statusMoveOk(before: Pick<Match, 'status' | 'playerOfMatchId'> &
       return false;
   }
 }
+
+/**
+ * 1.3.5 (QA E134-2): an admin may never approve or void a match they are part of: its creator, its
+ * scorer, a captain, or a player on either side (by roster or by the participant list). Enforced by
+ * every backend (demo, API server, Firebase client) and by firestore.rules.
+ */
+export const OWN_MATCH_REVIEW = 'own_match';
+export const OWN_MATCH_REVIEW_MESSAGE = "You can't review a match you played in, scored or created";
+export function ownMatchReview(m: Pick<Match, 'teamA' | 'teamB' | 'createdBy' | 'scorerId'> & { participantIds?: string[]; captains?: MatchCaptains | null }, uid: string): boolean {
+  if (!uid) return false;
+  if (uid === m.createdBy || uid === m.scorerId) return true;
+  if (m.captains && (m.captains.A === uid || m.captains.B === uid)) return true;
+  if (sideOfPlayer(m, uid)) return true;
+  return !!m.participantIds?.includes(uid);
+}

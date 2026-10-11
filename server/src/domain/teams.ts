@@ -156,7 +156,7 @@ export async function createTeam(s: Services, viewer: Identity, t: TeamDoc, fixe
   const id = fixedId ?? newId(); // fixedId: seeds only, never from a request
   const now = nowDate();
   await s.db.transaction(async (trx) => {
-    if (!(await trx('users').where({ id: viewer.uid }).first('id'))) throw badRequest('Create your profile first');
+    if (!(await trx('users').where({ id: viewer.uid, profile_complete: 1 }).first('id'))) throw badRequest('Create your profile first');
     await trx('teams').insert({ id, name: t.name.trim(), color: t.color, captain_id: viewer.uid, city: t.city ?? null, created_at: now, updated_at: now });
     await trx('team_members').insert({ team_id: id, user_id: viewer.uid, role: t.subIds.includes(viewer.uid) ? 'sub' : 'starter', sort_order: 0, joined_at: now });
   });
@@ -184,7 +184,7 @@ export async function changeTeam(
     const [before] = await loadTeams(trx, [teamId]);
     const after = compute(before);
     const added = minus(after.pendingPhones, before.pendingPhones);
-    const regRows: { id: string; phone: string }[] = added.length ? await trx('users').whereIn('phone', added).select('id', 'phone') : [];
+    const regRows: { id: string; phone: string }[] = added.length ? await trx('users').whereIn('phone', added).where({ profile_complete: 1 }).select('id', 'phone') : [];
     const registered = new Set(regRows.map((r) => r.phone));
     const branch = decideTeamUpdate(toDoc(before), after, viewer, registered);
     if (added.some((p) => after.memberIds.some((m) => regRows.find((r) => r.phone === p)?.id === m))) throw badRequest('That player is already in the team');

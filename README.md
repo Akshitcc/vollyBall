@@ -118,10 +118,13 @@ With no `.env` file the app starts in **Demo mode**.
 - **Teams:** only the captain can edit, and the captain can only invite numbers that are already registered (they must exist in `phoneIndex`, one new number per write). An invited player can accept or decline *only their own* invite, checked against the verified phone number in their auth token. Members can leave.
 - **Users:** you can only write your own profile and claim your own verified number. Phone lookup allows a direct get only, never a list. Push tokens are private.
 - **Storage:** images only, under 10 MB, written only under your own uid. Match photos are limited to match participants.
+- **Match photos (1.3.5):** a photo's document id is its sha256 `hash`, so the rules refuse the same image twice in a match; a per-match counter (`matches/{id}/photoMeta/count`) moves by exactly one with every photo created or deleted (in the same transaction), and the rules refuse photo 51. Limits: rules can't read the file's bytes, so the hash is the one the app computed (a modified client could claim a different one; the API server hashes the bytes itself), and photos added before 1.3.5 (random ids) aren't in the counter.
+- **Admin review (1.3.5):** an admin can't approve or void a match they created, scored, captained or played in (rules, API server and app).
+- **Not enforced by the rules:** "the credited player was on court for that rally" needs the whole rotation replayed, which rules can't do (no loops). The app and the API server check it; with Firebase direct a modified client could still credit a bench player.
 
 Run the rules tests (Java 11+ required for the emulator):
 ```bash
-cd rules-tests && npm ci && npm test   # 43 tests (package-lock.json is committed)
+cd rules-tests && npm ci && npm test   # 107 tests (package-lock.json is committed)
 ```
 
 ---
@@ -218,3 +221,4 @@ Tapping a notification opens the right screen. Requirements: `EAS_PROJECT_ID` is
 - Firestore's memory cache queues offline writes. The scorer also keeps a copy of every point on the phone and re-sends it on reconnect. Followers need a connection to see updates.
 - Every player is a registered user. Teams are registered teams, or for a one-off match a side built by adding registered players by mobile number (not saved as a team). Each team needs at least 6 players (`MIN_PLAYERS` in `src/core/roster.ts`) before scoring can start, and at most 12. Tournaments take registered teams with at least 6 members.
 - Demo data lives only on the device. Use **Profile → Reset demo data** to start over.
+- Demo builds only: **Profile → Testing tools** has *Simulate offline* (kept across reloads until switched off or Reset demo data) and *Demo admin*. Demo admin is available to the demo admin account only: sign in as **+91 90000 00001** (OTP 123456). It's a sample profile with a fake number, not a credential, and it isn't in any team or match. API and Firebase builds never create the demo backend, so neither tool exists there; real admins come from `ADMIN_UIDS` (server) or the `admin` custom claim (Firebase). The server's demo seed skips this account. On the web the demo checks that the app's own server answers before saving a point, so failing requests show "Offline", not "Synced". On a phone, demo saves are local, so only Simulate offline makes the demo go offline.

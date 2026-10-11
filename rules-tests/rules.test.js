@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { initializeTestEnvironment, assertSucceeds, assertFails } = require('@firebase/rules-unit-testing');
-const { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, addDoc, arrayUnion, arrayRemove, serverTimestamp, deleteField } = require('firebase/firestore');
+const { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, addDoc, arrayUnion, arrayRemove, serverTimestamp, deleteField, writeBatch } = require('firebase/firestore');
 const { ref, uploadBytes } = require('firebase/storage');
 
 let env;
@@ -39,6 +39,26 @@ const TERMS_UIDS = ['cap', 'bob', 'eve', 'zz', 'good', 'old', 'p1', 'p2', 'p3', 
 const RUN = Date.now().toString(36);
 const PLACE = { name: 'Siri Fort', lat: 28.55, lng: 77.22 };
 const DAY = 86400000;
+/**
+ * 1.3.5: a match photo is written as the app does it: id = its sha256 (`hash`), in one batch with the
+ * per-match counter photoMeta/count (n + 1, last = this id). `hash` defaults to a fresh fake digest.
+ */
+let PHOTO_N = 0;
+const fakeHash = () => (Date.now().toString(16) + (++PHOTO_N).toString(16).padStart(8, '0')).padStart(64, 'f');
+async function addPhoto(db, matchId, data, { n, id } = {}) {
+  const hash = data.hash === undefined ? fakeHash() : data.hash;
+  const docId = id ?? (typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) ? hash : `x${++PHOTO_N}`);
+  const cRef = doc(db, `matches/${matchId}/photoMeta/count`);
+  let next = n;
+  if (next === undefined) {
+    const c = await getDoc(cRef).catch(() => null);
+    next = (c && c.exists() ? c.data().n : 0) + 1;
+  }
+  const b = writeBatch(db);
+  b.set(doc(db, `matches/${matchId}/photos/${docId}`), { ...data, hash });
+  b.set(cRef, { n: next, last: docId });
+  return b.commit();
+}
 const photoUrl = (p, bucket = 'demo-volleylive.appspot.com') => `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodeURIComponent(p)}?alt=media&token=0b1c2d3e`;
 // A challenge as firebaseBackend writes it (names copied from the team docs, QA G19).
 const challengeDoc = (over = {}) => ({
@@ -196,8 +216,8 @@ describe('matches: only the assigned scorer changes the score', () => {
     await assertFails(updateDoc(doc(ctx('eve').firestore(), 'matches/m1'), { scorerId: 'eve' }));
   });
   test('photos only by players of the match (or its scorer)', async () => {
-    await assertSucceeds(addDoc(collection(ctx('p1').firestore(), 'matches/m1/photos'), { uploadedBy: 'p1', url: photoUrl('matches/m1/p1/1.jpg') }));
-    await assertFails(addDoc(collection(ctx('bob').firestore(), 'matches/m1/photos'), { uploadedBy: 'bob', url: photoUrl('matches/m1/bob/1.jpg') }));
+    await assertSucceeds(addPhoto(ctx('p1').firestore(), 'm1', { uploadedBy: 'p1', url: photoUrl('matches/m1/p1/1.jpg') }));
+    await assertFails(addPhoto(ctx('bob').firestore(), 'm1', { uploadedBy: 'bob', url: photoUrl('matches/m1/bob/1.jpg') }));
   });
 });
 
@@ -416,8 +436,8 @@ describe('input validation (QA input-validation audit G1–G19, retest N4)', () 
     await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, photoURL: 'javascript:alert(1)' }));
     await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, photoURL: photoUrl('avatars/eve/a.jpg') }));
     await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, photoURL: photoUrl('avatars/bob/a.jpg', 'other-project.appspot.com') }));
-    await assertFails(addDoc(collection(ctx('p1').firestore(), 'matches/m1/photos'), { uploadedBy: 'p1', url: 'https://evil.example/x.jpg' }));
-    await assertFails(addDoc(collection(ctx('p1').firestore(), 'matches/m1/photos'), { uploadedBy: 'p1', url: photoUrl('matches/m1/cap/1.jpg') }));
+    await assertFails(addPhoto(ctx('p1').firestore(), 'm1', { uploadedBy: 'p1', url: 'https://evil.example/x.jpg' }));
+    await assertFails(addPhoto(ctx('p1').firestore(), 'm1', { uploadedBy: 'p1', url: photoUrl('matches/m1/cap/1.jpg') }));
   });
 
   test('G7 profiles: allowed keys, trimmed names 2–60 (Hindi ok), city ≤ 80, no role field', async () => {
@@ -515,12 +535,69 @@ describe('build 27: match photos by players + scorer; Player of the Match', () =
 
   test('photos: players and the scorer can add; the creator who does not play or score cannot', async () => {
     await seedM2();
-    const add = (uid) => addDoc(collection(ctx(uid).firestore(), 'matches/m2/photos'), { matchId: 'm2', uploadedBy: uid, url: photoUrl(`matches/m2/${uid}/1.jpg`), storagePath: `matches/m2/${uid}/1.jpg`, createdAt: Date.now() });
+    const add = (uid) => addPhoto(ctx(uid).firestore(), 'm2', { matchId: 'm2', uploadedBy: uid, url: photoUrl(`matches/m2/${uid}/1.jpg`), storagePath: `matches/m2/${uid}/1.jpg`, createdAt: Date.now() });
     await assertSucceeds(add('zz')); // scorer
     await assertSucceeds(add('q1')); // team B
     await assertSucceeds(add('p5')); // team A
     await assertFails(add('bob')); // creator only
     await assertFails(add('u1')); // stranger
+  });
+
+  test('1.3.4/1.3.5: the sha256 hash is required (64 lowercase hex) and is the document id', async () => {
+    await seedM2();
+    const base = (uid, extra) => ({ matchId: 'm2', uploadedBy: uid, url: photoUrl(`matches/m2/${uid}/1.jpg`), storagePath: `matches/m2/${uid}/1.jpg`, createdAt: Date.now(), ...extra });
+    const add = (uid, extra, o) => addPhoto(ctx(uid).firestore(), 'm2', base(uid, extra), o);
+    await assertSucceeds(add('zz', { hash: 'a'.repeat(64) }));
+    await assertSucceeds(add('zz', { hash: '0123456789abcdef'.repeat(4), key: 'p_abc12345' }));
+    await assertFails(add('zz', { hash: 'A'.repeat(64) }));
+    await assertFails(add('zz', { hash: 'a'.repeat(63) }));
+    await assertFails(add('zz', { hash: 42 }));
+    await assertFails(add('zz', { hash: null })); // 1.3.5: required
+    await assertFails(add('zz', { sha: 'a'.repeat(64) }));
+    await assertFails(add('zz', { hash: 'c'.repeat(64) }, { id: 'd'.repeat(64) })); // id must be the hash
+    await assertFails(add('bob', { hash: 'b'.repeat(64) })); // still players + scorer only
+  });
+
+  test('1.3.5: the same file twice in a match is refused by the rules (same id), also from another player', async () => {
+    await seedM2();
+    const h = 'e'.repeat(64);
+    const base = (uid) => ({ matchId: 'm2', uploadedBy: uid, url: photoUrl(`matches/m2/${uid}/1.jpg`), storagePath: `matches/m2/${uid}/1.jpg`, createdAt: Date.now(), hash: h });
+    await assertSucceeds(addPhoto(ctx('zz').firestore(), 'm2', base('zz')));
+    await assertFails(addPhoto(ctx('zz').firestore(), 'm2', base('zz')));
+    await assertFails(addPhoto(ctx('q1').firestore(), 'm2', base('q1')));
+  });
+
+  test('1.3.5: at most 50 photos per match, counted by rules; the counter moves only with a photo', async () => {
+    await seedM2();
+    const db = ctx('zz').firestore();
+    const base = (extra = {}) => ({ matchId: 'm2', uploadedBy: 'zz', url: photoUrl('matches/m2/zz/1.jpg'), storagePath: 'matches/m2/zz/1.jpg', createdAt: Date.now(), ...extra });
+    // a photo without the counter step, or a wrong step, is refused
+    const h1 = fakeHash();
+    await assertFails(setDoc(doc(db, `matches/m2/photos/${h1}`), base({ hash: h1 })));
+    await assertFails(addPhoto(db, 'm2', base(), { n: 2 }));
+    // the counter alone can't move (no photo), nor jump
+    await assertFails(setDoc(doc(db, 'matches/m2/photoMeta/count'), { n: 1, last: fakeHash() }));
+    // fill to 49 directly, then 50 is the last one allowed
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'matches/m2/photoMeta/count'), { n: 49, last: 'f'.repeat(64) }));
+    await assertSucceeds(addPhoto(db, 'm2', base()));
+    await assertFails(addPhoto(db, 'm2', base()));
+    await assertFails(addPhoto(db, 'm2', base(), { n: 50 })); // same n again (a racing writer)
+    // deleting a counted photo gives the slot back (in the same batch), then one more fits
+    const last = (await getDoc(doc(db, 'matches/m2/photoMeta/count'))).data().last;
+    await assertFails(deleteDoc(doc(db, `matches/m2/photos/${last}`))); // without the counter
+    await assertFails(updateDoc(doc(db, 'matches/m2/photoMeta/count'), { n: 49 })); // counter without the photo
+    const b = writeBatch(db);
+    b.delete(doc(db, `matches/m2/photos/${last}`));
+    b.set(doc(db, 'matches/m2/photoMeta/count'), { n: 49, last });
+    await assertSucceeds(b.commit());
+    await assertSucceeds(addPhoto(db, 'm2', base()));
+    // someone else's photo can't be deleted to free a slot
+    const mine = (await getDoc(doc(db, 'matches/m2/photoMeta/count'))).data().last;
+    const other = ctx('q1').firestore();
+    const b2 = writeBatch(other);
+    b2.delete(doc(other, `matches/m2/photos/${mine}`));
+    b2.set(doc(other, 'matches/m2/photoMeta/count'), { n: 49, last: mine });
+    await assertFails(b2.commit());
   });
 
   test('storage: same rule for the file itself', async () => {
@@ -928,6 +1005,17 @@ describe('1.3.0: T&C gate, anti-fraud, baseline holes', () => {
     await assertFails(review(admin(), { status: 'approved', reviewedAt: new Date(now - DAY) }));
     await assertSucceeds(review(admin(), { status: 'approved' }));
     await assertFails(review(admin(), { status: 'voided' }));
+  });
+  test('1.3.5 E134-2: an admin can never review their own match (creator/scorer, captain, any player)', async () => {
+    await seedDone();
+    const asAdmin = (uid) => env.authenticatedContext(uid, { admin: true });
+    const terms = (uid) => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), `terms/${uid}`), { version: TERMS_VERSION, acceptedAt: new Date() }));
+    const review = (uid) => updateDoc(m('done', asAdmin(uid)), { verification: { status: 'approved', reviewedBy: uid, reviewedAt: serverTimestamp() } });
+    for (const uid of ['cap', 'eve', T1[2], T2[3]]) {
+      await terms(uid);
+      await assertFails(review(uid)); // creator+scorer, other captain, a player of each side
+    }
+    await assertSucceeds(review('adm')); // an admin who isn't in the match
   });
   test('QA retest 1.2.1 N121-1: no finished <-> abandoned toggle, no re-stamp, no POTM on an abandoned match (H-AB1..3)', async () => {
     await seedDone('await', { playerOfMatchId: null });

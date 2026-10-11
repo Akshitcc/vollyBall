@@ -12,8 +12,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { forwardRef, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
-import Animated, { Easing, FadeIn, runOnJS, SlideInDown, SlideInUp, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
+import { Platform, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
+import Animated, { Easing, FadeIn, runOnJS, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import type { MatchState, Side } from '../core/scoring';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 import { letterSpacing } from '../i18n/format';
@@ -25,22 +25,47 @@ export const bumpKind = (reduceMotion: boolean): 'bump' | 'fade' => (reduceMotio
 /** The trailing team's score colour on the navy scoreboard (§11.1). */
 export const TRAILING_SCORE = '#DCE6F2';
 
+/**
+ * 1.3.4 (QA D133-1… D133-4): the score is never hidden while it rolls. Before, each new value was a
+ * re-mounted view entering with SlideInDown/SlideInUp – which starts a full *window height* away
+ * inside an overflow-hidden box. When the browser didn't run that animation (background tab, busy
+ * main thread – QA saw it on the ~1024 px viewer) both big scores stayed blank. Now the same Text
+ * stays mounted and only nudges ±ROLL_PX back to 0 (clamped), so a stalled or broken animation clock
+ * still shows the number.
+ */
+export const ROLL_PX = 14;
 export function RollScore({ value, style, testID }: { value: number; style?: StyleProp<TextStyle>; testID?: string }) {
   const reduce = useReduceMotion();
   const prev = useRef(value);
   const glow = useSharedValue(0);
-  const up = value >= prev.current;
+  const y = useSharedValue(0);
+  const fade = useSharedValue(1);
   useEffect(() => {
-    if (value > prev.current && !reduce) glow.value = withSequence(withTiming(0.45, { duration: 100 }), withTiming(0, { duration: 140 }));
+    if (value !== prev.current) {
+      if (reduce) {
+        fade.value = 0.5;
+        fade.value = withTiming(1, { duration: 150 });
+      } else {
+        y.value = value > prev.current ? ROLL_PX : -ROLL_PX;
+        y.value = withTiming(0, { duration: 220, easing: Easing.out(Easing.cubic) });
+        // (no glow on the web: a stalled page clock could leave the light-blue square over the number)
+        if (value > prev.current && Platform.OS !== 'web') glow.value = withSequence(withTiming(0.45, { duration: 100 }), withTiming(0, { duration: 140 }));
+      }
+    }
     prev.current = value;
-  }, [value, reduce, glow]);
-  const glowStyle = useAnimatedStyle(() => ({ opacity: glow.value }));
-  const entering = reduce ? FadeIn.duration(150) : (up ? SlideInDown : SlideInUp).duration(220);
+  }, [value, reduce, glow, y, fade]);
+  const glowStyle = useAnimatedStyle(() => ({ opacity: Math.max(0, Math.min(0.45, Number.isFinite(glow.value) ? glow.value : 0)) }));
+  // Clamped: whatever the animation clock does (a paused or throttled page can hand it odd frame
+  // times), the number is never more than ROLL_PX away and never fainter than half.
+  const rollStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: Math.max(-ROLL_PX, Math.min(ROLL_PX, Number.isFinite(y.value) ? y.value : 0)) }],
+    opacity: Math.max(0.5, Math.min(1, Number.isFinite(fade.value) ? fade.value : 1)),
+  }));
   return (
-    <View style={{ alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+    <View style={{ alignItems: 'center', justifyContent: 'center', overflow: 'hidden', minWidth: 64 }}>
       <Animated.View pointerEvents="none" style={[st.glow, glowStyle]} />
-      <Animated.View key={value} entering={entering}>
-        <Text style={[st.score, style]} testID={testID} accessibilityLiveRegion="polite">
+      <Animated.View style={rollStyle}>
+        <Text style={[st.score, style]} testID={testID} accessibilityLiveRegion="polite" numberOfLines={1}>
           {value}
         </Text>
       </Animated.View>
@@ -140,7 +165,8 @@ export const LiveScoreboard = forwardRef<View, {
                 <View style={{ alignItems: 'center', width: '100%' }} testID={`viewer-team-${side}`}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', maxWidth: '100%' }}>
                     <View style={[st2.dot, { backgroundColor: team.color }]} />
-                    <Text style={st2.name} numberOfLines={1}>
+                    {/* 1.3.4: long names ("Yamuna Blockers") wrap to 2 lines / shrink instead of "Yamuna Block…" */}
+                    <Text style={st2.name} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.75} testID={`team-name-${side}`}>
                       {team.name}
                     </Text>
                   </View>
@@ -175,6 +201,7 @@ export const LiveScoreboard = forwardRef<View, {
                   accessibilityRole="button"
                   accessibilityState={{ disabled: !!disabled }}
                   accessibilityLabel={t('liveV2.teamPanelA11y', { team: team.name, score: score(side) })}
+                  accessibilityHint={t('liveV2.teamPanelHint', { team: team.name })}
                   style={({ pressed }: { pressed: boolean }) => [st2.panel, pressed && !disabled && st2.panelPressed, disabled && { opacity: 0.55 }]}
                   testID={`team-panel-${side}`}
                 >
@@ -215,7 +242,7 @@ const st2 = StyleSheet.create({
   setChip: { backgroundColor: 'rgba(255,255,255,0.14)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2, marginTop: 4 },
   setChipText: { color: colors.white, fontWeight: '800', fontSize: 12, fontVariant: ['tabular-nums'] },
   dot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5, borderColor: colors.white, marginRight: 6 },
-  name: { color: colors.white, fontWeight: '800', fontSize: 14, flexShrink: 1 },
+  name: { color: colors.white, fontWeight: '800', fontSize: 14, lineHeight: 18, flexShrink: 1, textAlign: 'center' },
   pip: { width: 18, height: 5, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.25)' },
   panel: { flex: 1, minHeight: 48, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', backgroundColor: 'rgba(255,255,255,0.07)', paddingVertical: 10, paddingHorizontal: 6, alignItems: 'center' },
   panelPressed: { backgroundColor: 'rgba(255,255,255,0.14)', borderWidth: 3, borderColor: colors.primary, paddingVertical: 8, paddingHorizontal: 4 },

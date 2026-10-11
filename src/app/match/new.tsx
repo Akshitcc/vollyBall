@@ -132,6 +132,10 @@ function SidePicker({
           <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>{myTeams.filter((t) => t.id !== otherTeamId).map(teamChip)}</View>
           <Field label={tr('newMatch.findTeam')} value={q} onChangeText={setQ} placeholder={tr('newMatch.searchTeam')} maxLength={LIMITS.teamSearch.max} testID={`${testID}-search`} />
           <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>{results.filter((t) => t.id !== otherTeamId && !myTeams.some((m) => m.id === t.id)).map(teamChip)}</View>
+          {/* 1.3.4: the only match is the team already on the other side – say so instead of showing nothing */}
+          {otherTeamId && results.some((t) => t.id === otherTeamId) && !results.some((t) => t.id !== otherTeamId) ? (
+            <P muted testID={`${testID}-already-other`}>{tr('newMatch.alreadyOtherSide', { side: badge === 'A' ? 'B' : 'A' })}</P>
+          ) : null}
           {value?.kind === 'team' &&
             (teamCanPlay(value.team) ? (
               <P muted>{tr('newMatch.fromTeam', { count: value.team.memberIds.length, team: value.team.name })}</P>
@@ -464,7 +468,7 @@ export default function NewMatch() {
             0,
             <>
               {teamCard('A')}
-              <Text style={st.vs}>vs</Text>
+              <Text style={st.vs}>{t('common.vs')}</Text>
               {teamCard('B')}
             </>,
             'summary-teams',

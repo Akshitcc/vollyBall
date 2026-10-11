@@ -17,6 +17,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, Platform } from 'react-native';
 import { backend } from './backend';
+import { connectivity, isNetworkError } from './connectivity';
 import { dropExpired, dueItems, enqueue, isPermanentUploadError, markFailed, nextWake, parseQueue, removeItem, type QueuedPhoto } from '../core/uploadQueue';
 
 export const QUEUE_KEY = 'volleylive-photo-queue-v1';
@@ -71,6 +72,8 @@ class PhotoQueue {
     this.hooked = true;
     AppState.addEventListener?.('change', (s) => s === 'active' && this.retryNow());
     if (Platform.OS === 'web' && typeof window !== 'undefined' && window.addEventListener) window.addEventListener('online', () => this.retryNow());
+    // 1.3.4: also when a score write gets through again or the demo "Simulate offline" switch is turned off
+    connectivity.subscribe(() => connectivity.isOnline() && this.q.length > 0 && this.retryNow());
   }
 
   subscribe(l: Listener): () => void {
@@ -176,7 +179,9 @@ class PhotoQueue {
           );
           this.q = removeItem(this.q, item.id);
           this.done.set(item.matchId, this.now());
+          connectivity.reportNetworkSuccess();
         } catch (e) {
+          if (isNetworkError(e)) connectivity.reportNetworkFailure();
           if (isPermanentUploadError(e)) {
             this.q = removeItem(this.q, item.id);
             this.errors.set(item.matchId, { at: this.now(), err: e });

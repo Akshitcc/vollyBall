@@ -26,6 +26,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -35,16 +36,17 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { deleteObject, getDownloadURL, ref, uploadBytes, uploadBytesResumable } from 'firebase/storage';
-import { readPhoto } from '../photoFile';
+import { blobSha256, readPhoto } from '../photoFile';
 import { planEventSteps } from '../../core/eventSteps';
 import { computeState, summarize, type Side } from '../../core/scoring';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
-import { CONFIRM_MESSAGES, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, playerWallet, verificationStatus } from '../../core/antifraud';
+import { CONFIRM_MESSAGES, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
 import { guardCreate, guardProgress, guardUpdate } from '../../core/matchGuards';
 import { TERMS_VERSION, TERMS_VERSION_MISMATCH, type TermsAcceptance } from '../../core/terms';
 import { checkText } from '../../core/validate';
-import { canAddMatchPhoto } from '../../core/photos';
+import { canAddMatchPhoto, PHOTO_ERROR_CODES } from '../../core/photos';
+import { MAX_PHOTOS_PER_MATCH } from '../../core/limits';
 import { CodedError, PHOTO_NOT_ALLOWED, PHOTO_NOT_ALLOWED_MESSAGE } from '../../core/codedError';
 import type { Challenge, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
 import { assertRoster, canonicalParticipants, challengeProblem, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, tournamentTeamsProblem } from '../../core/roster';
@@ -402,12 +404,22 @@ export class FirebaseBackend implements Backend {
     if (!canAddMatchPhoto(snap.data() as Match, uid)) throw new CodedError(PHOTO_NOT_ALLOWED, PHOTO_NOT_ALLOWED_MESSAGE);
     const key =
       opts?.idempotencyKey && IDEMPOTENCY_KEY_RE.test(opts.idempotencyKey) ? opts.idempotencyKey : `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    const photoRef = doc(this.fb.db, 'matches', matchId, 'photos', key);
-    if ((await getDoc(photoRef)).exists()) {
-      onProgress?.(1);
-      return;
-    }
     const { blob, type, ext } = await photoBlob(localUri);
+    // 1.3.5 (QA Firebase residuals): the photo's document id is its sha256, and every create moves
+    // the match's photo counter (photoMeta/count) by one in the same transaction, so firestore.rules
+    // refuse a second copy and a 51st photo themselves (not only this client check).
+    const hash = await blobSha256(blob);
+    const photoRef = doc(this.fb.db, 'matches', matchId, 'photos', hash);
+    const counterRef = doc(this.fb.db, 'matches', matchId, 'photoMeta', 'count');
+    const existing = await getDoc(photoRef);
+    if (existing.exists()) {
+      const d = existing.data() as { uploadedBy?: string; key?: string };
+      if (d.uploadedBy === uid && d.key === key) return void onProgress?.(1); // a retry that already landed
+      throw new CodedError(PHOTO_ERROR_CODES.duplicate, 'This photo is already in this match');
+    }
+    const c0 = await getDoc(counterRef);
+    if (((c0.exists() ? (c0.data() as { n?: number }).n : 0) ?? 0) >= MAX_PHOTOS_PER_MATCH)
+      throw new CodedError(PHOTO_ERROR_CODES.limit, `This match already has ${MAX_PHOTOS_PER_MATCH} photos`);
     const path = `matches/${matchId}/${uid}/${key}.${ext}`;
     const r = ref(this.fb.storage, path);
     let url = await getDownloadURL(r).catch(() => null); // uploaded by an earlier attempt?
@@ -417,11 +429,39 @@ export class FirebaseBackend implements Backend {
       await task;
       url = await getDownloadURL(r);
     } else onProgress?.(1);
-    await setDoc(photoRef, { matchId, url, storagePath: path, uploadedBy: uid, createdAt: Date.now() });
+    const fileUrl = url;
+    try {
+      await runTransaction(this.fb.db, async (tx) => {
+        const [p, c] = [await tx.get(photoRef), await tx.get(counterRef)];
+        if (p.exists()) {
+          const d = p.data() as { uploadedBy?: string; key?: string };
+          if (d.uploadedBy === uid && d.key === key) return;
+          throw new CodedError(PHOTO_ERROR_CODES.duplicate, 'This photo is already in this match');
+        }
+        const n = ((c.exists() ? (c.data() as { n?: number }).n : 0) ?? 0) + 1;
+        if (n > MAX_PHOTOS_PER_MATCH) throw new CodedError(PHOTO_ERROR_CODES.limit, `This match already has ${MAX_PHOTOS_PER_MATCH} photos`);
+        tx.set(photoRef, { matchId, url: fileUrl, storagePath: path, uploadedBy: uid, createdAt: Date.now(), hash, key });
+        tx.set(counterRef, { n, last: hash });
+      });
+    } catch (e) {
+      // refused (duplicate / full): the uploaded file is not used by any photo, remove it (best effort)
+      if ((e as { code?: string }).code === PHOTO_ERROR_CODES.duplicate || (e as { code?: string }).code === PHOTO_ERROR_CODES.limit) await deleteObject(r).catch(() => {});
+      throw e;
+    }
   }
   async deleteMatchPhoto(photo: MatchPhoto) {
-    // The document first (rules: uploader only); the file is best effort afterwards.
-    await deleteDoc(doc(this.fb.db, 'matches', photo.matchId, 'photos', photo.id));
+    // The document first (rules: uploader only); the file is best effort afterwards. A 1.3.5 photo
+    // (id = its hash) gives its slot back in the same transaction (firestore.rules photoMeta).
+    const photoRef = doc(this.fb.db, 'matches', photo.matchId, 'photos', photo.id);
+    if (photo.hash && photo.id === photo.hash) {
+      const counterRef = doc(this.fb.db, 'matches', photo.matchId, 'photoMeta', 'count');
+      await runTransaction(this.fb.db, async (tx) => {
+        const c = await tx.get(counterRef);
+        const n = Math.max(0, ((c.exists() ? (c.data() as { n?: number }).n : 1) ?? 1) - 1);
+        tx.delete(photoRef);
+        tx.set(counterRef, { n, last: photo.id });
+      });
+    } else await deleteDoc(photoRef);
     if (photo.storagePath) await deleteObject(ref(this.fb.storage, photo.storagePath)).catch(() => {});
   }
 
@@ -535,6 +575,7 @@ export class FirebaseBackend implements Backend {
     if (!isCompleted(m)) throw new CodedError('not_completed', CONFIRM_MESSAGES.not_completed);
     const v = verificationStatus(m);
     if (v === 'approved' || v === 'voided') throw new CodedError('already_reviewed', CONFIRM_MESSAGES.already_reviewed);
+    if (ownMatchReview(m, me)) throw new CodedError(OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE);
     const old = (s.data().verification ?? {}) as Record<string, unknown>;
     await updateDoc(doc(this.fb.db, 'matches', matchId), {
       verification: clean({ by: old.by, at: old.at, reason: old.reason, status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: serverTimestamp() }),

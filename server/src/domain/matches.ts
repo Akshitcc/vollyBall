@@ -6,7 +6,7 @@
  */
 import type { RuleSet } from '../../../src/core/rules';
 import { PARTICIPANTS_MESSAGE, ROSTER_LOCKED_MESSAGE, ROSTER_MESSAGES, canonicalParticipants, isAbandonOnly, missingPlayers, participantsMatchRoster, rosterErrors } from '../../../src/core/roster';
-import { rotationTimeline, type Lineups, type RotationState } from '../../../src/core/rotation';
+import { offCourtCredit, rotationTimeline, type Lineups, type RotationState } from '../../../src/core/rotation';
 import { computeState, summarize, type MatchEvent, type Side } from '../../../src/core/scoring';
 import type { Match, MatchPlayer, MatchTeam, StreamInfo } from '../../../src/core/types';
 import { notify, publicFileUrl, storedFileUrl, type Services } from '../context';
@@ -24,6 +24,9 @@ import {
   isCompleted,
   isTerminal,
   needsReview,
+  OWN_MATCH_REVIEW,
+  OWN_MATCH_REVIEW_MESSAGE,
+  ownMatchReview,
   statusMoveOk,
 } from '../../../src/core/antifraud';
 import type { MatchCaptains, MatchVerification, VerificationStatus } from '../../../src/core/types';
@@ -84,13 +87,28 @@ const rosterOf = (t: MatchTeam) => t.players.map((p) => p.id);
  * timeouts over the limit, and point credits for a player who is not on the team
  * that won the rally (QA bug A: a credit must belong to the scoring team).
  */
-export function validateEvents(rules: RuleSet, events: MatchEvent[], firstServe: Side, rosters: { A: Set<string>; B: Set<string> }, from = 0) {
+export function validateEvents(
+  rules: RuleSet,
+  events: MatchEvent[],
+  firstServe: Side,
+  rosters: { A: Set<string>; B: Set<string> },
+  from = 0,
+  court?: { order: { A: string[]; B: string[] }; lineups: Lineups | null | undefined; from: number },
+) {
   for (let i = from; i < events.length; i++) {
     const ev = events[i];
     const st = computeState(rules, events.slice(0, i), firstServe);
     if (st.finished) throw badRequest(`Event ${i + 1} comes after the end of the match`);
     if (ev.type === 'timeout' && st.timeoutsLeft[ev.side] <= 0) throw badRequest(`Event ${i + 1}: no timeouts left for team ${ev.side}`);
     if (ev.type === 'point' && ev.playerId && !rosters[ev.side].has(ev.playerId)) throw badRequest(`Event ${i + 1}: ${ev.playerId} is not a player of team ${ev.side}`);
+  }
+  // 1.3.4 (QA D133-5): a NEW credited point must name a player who was on court for that rally (the
+  // set's lineup – substitutions go through the per-set lineups – rotated by the rallies before it).
+  // Only events from court.from (the first changed event) are checked, so a match recorded before
+  // 1.3.4 whose old events credited a bench player can still be saved.
+  if (court) {
+    const bench = offCourtCredit(rules, events, firstServe, court.order, court.lineups, court.from);
+    if (bench) throw new HttpError(400, 'not_on_court', `Event ${bench.index + 1}: ${bench.playerId} was not on court for team ${bench.side}`);
   }
 }
 
@@ -300,7 +318,7 @@ const docOf = (m: Match): Doc => {
 
 async function existingUsers(trx: Trx, ids: string[]): Promise<Set<string>> {
   if (!ids.length) return new Set();
-  return new Set((await trx('users').whereIn('id', [...new Set(ids)]).select('id')).map((r: { id: string }) => r.id));
+  return new Set((await trx('users').whereIn('id', [...new Set(ids)]).where({ profile_complete: 1 }).select('id')).map((r: { id: string }) => r.id));
 }
 
 /**
@@ -386,7 +404,11 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Doc | null,
   while (firstDiff < oldEvents.length && firstDiff < after.events.length && canonical(oldEvents[firstDiff]) === canonical(after.events[firstDiff])) firstDiff++;
   const replayAll = changed.has('rules') || changed.has('firstServe') || changed.has('teamA') || changed.has('teamB') || changed.has('lineups');
   const playerKeys = new Set([...rosterOf(after.teamA), ...rosterOf(after.teamB)]);
-  validateEvents(after.rules, after.events, after.firstServe, { A: new Set(rosterOf(after.teamA)), B: new Set(rosterOf(after.teamB)) }, replayAll ? 0 : firstDiff);
+  validateEvents(after.rules, after.events, after.firstServe, { A: new Set(rosterOf(after.teamA)), B: new Set(rosterOf(after.teamB)) }, replayAll ? 0 : firstDiff, {
+    order: { A: rosterOf(after.teamA), B: rosterOf(after.teamB) },
+    lineups: after.lineups,
+    from: firstDiff,
+  });
   const state = computeState(after.rules, after.events, after.firstServe);
   const summary = summarize(state);
   // QA NB-R2 (SCORE-04): 'finished' only when the event log has a winner (the required sets won).
@@ -695,6 +717,8 @@ export async function reviewMatch(s: Services, viewer: Identity, id: string, dec
     if (!isCompleted(m)) throw new HttpError(409, 'not_completed', CONFIRM_MESSAGES.not_completed);
     const st = m.verification?.status ?? 'pending';
     if (st === 'approved' || st === 'voided') throw new HttpError(409, 'already_reviewed', 'This match was already reviewed');
+    // 1.3.5 (QA E134-2): never your own match (creator, scorer, captain or player).
+    if (ownMatchReview(m, viewer.uid)) throw new HttpError(403, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE);
     await trx('matches').where({ id }).update({ verification_status: decision === 'approve' ? 'approved' : 'voided', reviewed_by: viewer.uid, reviewed_at: nowDate(), updated_at: nowDate() });
   });
   const m = await getMatch(s, id, viewer);

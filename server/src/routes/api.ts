@@ -70,6 +70,7 @@ export function apiRouter(s: Services): Router {
   // ---------- me / users ----------
   r.get('/me', h(async (req, res) => {
     const id = me(req);
+    await users.ensureSignupRow(s, id); // 1.3.4: a sign-up shows in `users` from the first /me
     const t = await terms.getTerms(s.db, id.uid);
     res.json({
       uid: id.uid,

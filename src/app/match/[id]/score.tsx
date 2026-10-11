@@ -55,6 +55,8 @@ import { getOnce, matchTeamFromTeam } from '../../../services/matchFactory';
 import { backend } from '../../../services/backend';
 import { confirmAsk, notify } from '../../../services/dialogs';
 import { goBackOr } from '../../../services/nav';
+import { connectivity, isNetworkError, syncView, useOnline, type SyncView } from '../../../services/connectivity';
+import { usePhotoQueue } from '../../../state/usePhotoQueue';
 import { useMe } from '../../../state/AuthContext';
 import { letterSpacing, shareTextT as shareText, translateError } from '../../../i18n/format';
 import { colors, elevation, palette } from '../../../theme';
@@ -62,6 +64,8 @@ import { colors, elevation, palette } from '../../../theme';
 const cacheKey = (id: string) => `score-cache-${id}`;
 
 type SyncState = 'synced' | 'saving' | 'offline' | 'error';
+/** Shortest time "Syncing N…" is shown while writes saved offline are sent (1.3.5, QA E134-1). */
+export const SYNCING_MIN_MS = 800;
 
 export default function ScoreScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -73,6 +77,15 @@ export default function ScoreScreen() {
   // The rally being credited: its team and its index in the event log (captured at tap time).
   const [attrib, setAttrib] = useState<{ side: Side; index: number } | null>(null);
   const [sync, setSync] = useState<SyncState>('synced');
+  // 1.3.4 D133-1: rallies/undos not yet confirmed by the backend (+ queued photos) and the connection.
+  const [pendingWrites, setPendingWrites] = useState(0);
+  const online = useOnline();
+  const photoQ = usePhotoQueue(id);
+  const lastPush = useRef<{ m: Match; ev: MatchEvent[] } | null>(null);
+  // 1.3.5 (QA E134-1): the pending count is stored with the local copy, so after a reload/restart the
+  // header still says "Offline · N pending" and the restored points are re-sent (not only on the next tap).
+  const pendingRef = useRef(0);
+  const pushRef = useRef<((m: Match, ev: MatchEvent[], fresh?: boolean) => Promise<void>) | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -97,26 +110,42 @@ export default function ScoreScreen() {
       if (!first || !m) return;
       first = false;
       let ev = m.events;
+      let restored = 0;
       try {
         const raw = await AsyncStorage.getItem(cacheKey(id));
         if (raw) {
-          const cached = JSON.parse(raw) as { events: MatchEvent[]; savedAt: number; pending: boolean };
-          if (cached.pending && cached.savedAt > m.updatedAt) ev = cached.events;
+          const cached = JSON.parse(raw) as { events: MatchEvent[]; savedAt: number; pending: boolean; count?: number };
+          if (cached.pending && cached.savedAt > m.updatedAt) {
+            ev = cached.events;
+            restored = cached.count && cached.count > 0 ? cached.count : Math.max(1, Math.abs(cached.events.length - m.events.length));
+          }
         }
       } catch {
         // ignore cache errors
       }
       setEvents(ev);
+      if (restored > 0) {
+        pendingRef.current = restored;
+        setPendingWrites(restored);
+        const restoredEv = ev;
+        setTimeout(() => void pushRef.current?.(m, restoredEv, false), 0);
+      }
     });
   }, [id]);
 
   const push = useCallback(
-    async (m: Match, ev: MatchEvent[]) => {
+    async (m: Match, ev: MatchEvent[], fresh = true) => {
       const seq = ++pushSeq.current;
+      if (fresh) {
+        pendingRef.current += 1;
+        setPendingWrites(pendingRef.current);
+      }
+      lastPush.current = { m, ev };
       const st = computeState(m.rules, ev, m.firstServe);
       const status: Match['status'] = st.finished ? 'finished' : 'live';
-      await AsyncStorage.setItem(cacheKey(m.id), JSON.stringify({ events: ev, savedAt: Date.now(), pending: true })).catch(() => {});
+      await AsyncStorage.setItem(cacheKey(m.id), JSON.stringify({ events: ev, savedAt: Date.now(), pending: true, count: pendingRef.current })).catch(() => {});
       setSync('saving');
+      const startedAt = Date.now();
       if (retryTimer.current) clearTimeout(retryTimer.current);
       // If the write hangs (offline), show "offline" – Firestore keeps it queued.
       const slow = setTimeout(() => seq === pushSeq.current && setSync('offline'), 4000);
@@ -129,20 +158,32 @@ export default function ScoreScreen() {
           // Once the Player of the Match is picked the match is closed (no undo), so a POTM is never
           // left on a re-opened match (QA retest 1.2.1 INFO).
         });
+        connectivity.reportNetworkSuccess();
+        // 1.3.5 (QA E134-1): when a backlog from offline is flushed, "Syncing N…" stays up long enough
+        // to be read (a local/fast save would otherwise jump straight from "Offline" to "Synced").
+        if (!fresh) await new Promise((r) => setTimeout(r, Math.max(0, SYNCING_MIN_MS - (Date.now() - startedAt))));
         if (seq === pushSeq.current) {
+          pendingRef.current = 0;
+          setPendingWrites(0);
+          lastPush.current = null;
           setSync('synced');
           setError(null);
           await AsyncStorage.setItem(cacheKey(m.id), JSON.stringify({ events: ev, savedAt: Date.now(), pending: false })).catch(() => {});
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        if (isNetworkError(e)) connectivity.reportNetworkFailure();
         if (seq !== pushSeq.current) return;
-        if (/permission|scorer/i.test(msg)) {
+        if ((e as { code?: string } | null)?.code === 'not_on_court') {
+          // 1.3.4 D133-5: the backend refused a credit for a player who isn't on court – not retried.
+          setSync('error');
+          setError(translateError(e));
+        } else if (/permission|scorer/i.test(msg)) {
           setSync('error');
           setError(i18n.t('score.onlyScorerError'));
         } else {
           setSync('offline');
-          retryTimer.current = setTimeout(() => push(m, ev), 5000); // retry with the latest log
+          retryTimer.current = setTimeout(() => push(m, ev, false), 5000); // retry with the latest log
         }
       } finally {
         clearTimeout(slow);
@@ -150,6 +191,21 @@ export default function ScoreScreen() {
     },
     [],
   );
+  pushRef.current = push;
+
+  // Back online (browser event, demo switch, or another write got through): retry the waiting log now.
+  useEffect(
+    () =>
+      connectivity.subscribe(() => {
+        const lp = lastPush.current;
+        if (!connectivity.isOnline() || !lp || !retryTimer.current) return;
+        clearTimeout(retryTimer.current);
+        retryTimer.current = null;
+        push(lp.m, lp.ev, false);
+      }),
+    [push],
+  );
+  useEffect(() => () => void (retryTimer.current && clearTimeout(retryTimer.current)), []);
 
   if (match === undefined || (match && events === null)) return <Loading />;
   if (match === null)
@@ -172,6 +228,7 @@ export default function ScoreScreen() {
 
   const ev = events ?? [];
   const st = computeState(match.rules, ev, match.firstServe);
+  const sv = syncView({ online, saving: sync === 'saving', failed: sync === 'offline', error: sync === 'error', pending: pendingWrites + photoQ.pending });
   const rosterIds = { A: match.teamA.players.map((p) => p.id), B: match.teamB.players.map((p) => p.id) };
   const rot = rotationState(match.rules, ev, match.firstServe, rosterIds, match.lineups);
   const hasPlayers = rosterIds.A.length > 0 || rosterIds.B.length > 0;
@@ -397,9 +454,9 @@ export default function ScoreScreen() {
                 : `${tr('score.setHeader', { n: st.setIndex + 1 })}${st.isDecidingSet ? tr('score.decider') : ''}${tr('score.toPoints', { n: st.targetPoints })}`}
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
-              <Ionicons name={sync === 'synced' ? 'cloud-done' : sync === 'saving' ? 'cloud-upload-outline' : 'cloud-offline'} size={14} color={sync === 'synced' ? palette.syncIcon : colors.onInkMuted} />
-              <Text style={s.topSub} numberOfLines={1} testID="sync-label">
-                {syncLabel(sync, tr)}
+              <Ionicons name={sv.kind === 'synced' ? 'cloud-done' : sv.kind === 'syncing' ? 'cloud-upload-outline' : 'cloud-offline'} size={14} color={sv.kind === 'synced' ? palette.syncIcon : sv.kind === 'offline' ? colors.gold : colors.onInkMuted} />
+              <Text style={[s.topSub, sv.kind === 'offline' && { color: colors.gold }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} testID="sync-label" accessibilityLiveRegion="polite">
+                {syncLabel(sv, tr)}
               </Text>
             </View>
             {/* live photo upload progress: inside the header, never over the score or "Who scored" */}
@@ -514,7 +571,7 @@ export default function ScoreScreen() {
               <Text style={[s.undoText, ls1, { color: canUndo ? colors.onPrimary : colors.disabledText }]} numberOfLines={1}>
                 {tr('score.undo')}
               </Text>
-              <Text style={[s.undoSub, { color: canUndo ? colors.onPrimary : colors.disabledText }]} numberOfLines={closed ? 2 : 1} testID="undo-sub">
+              <Text style={[s.undoSub, { color: canUndo ? colors.onPrimary : colors.disabledText }]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8} testID="undo-sub">
                 {undoSub}
               </Text>
             </View>
@@ -670,8 +727,11 @@ function AttributionRow({ players, color, onPick, onDone }: { players: Match['te
   );
 }
 
-function syncLabel(s: SyncState, t: TFunction) {
-  return { synced: t('score.syncSynced'), saving: t('score.syncSaving'), offline: t('score.syncOffline'), error: t('score.syncError') }[s];
+export function syncLabel(v: SyncView, t: TFunction) {
+  if (v.kind === 'error') return t('score.syncError');
+  if (v.kind === 'offline') return v.pending > 0 ? t('score.syncOfflinePending', { count: v.pending }) : t('score.syncOffline');
+  if (v.kind === 'syncing') return v.pending > 0 ? t('score.syncSyncingPending', { count: v.pending }) : t('score.syncSyncing');
+  return t('score.syncSynced');
 }
 
 const s = StyleSheet.create({
@@ -693,7 +753,8 @@ const s = StyleSheet.create({
   lineupBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', alignSelf: 'center', backgroundColor: colors.primary, borderRadius: 999, paddingHorizontal: 14, minHeight: 36, marginTop: 10, maxWidth: '92%' },
   lineupBarText: { color: colors.onPrimary, fontWeight: '800', marginLeft: 6, flexShrink: 1 },
   bottom: { flexDirection: 'row', paddingHorizontal: 12, paddingTop: 12, paddingBottom: 12, gap: 10, backgroundColor: colors.white, ...elevation.barTop },
-  undo: { flex: 1, minHeight: 56, borderRadius: 14, backgroundColor: colors.primary, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 12 },
+  // 1.3.4: 2-line subtitle (Hindi "Aarav −1 · वापस 1–0" was cut off), a little less padding
+  undo: { flex: 1, minHeight: 56, borderRadius: 14, backgroundColor: colors.primary, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, gap: 10 },
   // Tester 1.2.0: the disabled Undo must look disabled (solid grey, grey text, no glow).
   undoDisabled: { backgroundColor: colors.disabledBg },
   undoText: { fontWeight: '900', fontSize: 16 },

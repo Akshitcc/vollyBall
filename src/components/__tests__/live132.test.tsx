@@ -223,7 +223,9 @@ describe('score screen v2: tap a player to score', () => {
     await open([{ type: 'point', side: 'A', at: 1 }]);
     const panel = screen.getByTestId('team-panel-A');
     expect(panel.props.accessibilityRole).toBe('button');
-    expect(panel.props.accessibilityLabel).toBe('Delhi Spikers, 1 points. Double-tap to give Delhi Spikers a point with no player credit.');
+    expect(panel.props.accessibilityLabel).toBe('Delhi Spikers, 1 points');
+    // 1.3.4: the action is in the hint and says a single tap scores
+    expect(panel.props.accessibilityHint).toBe('One tap gives Delhi Spikers a point with no player credit.');
     expect(StyleSheet.flatten(panel.props.style).minHeight).toBeGreaterThanOrEqual(48);
     await screen.unmount();
     const win = (side: 'A' | 'B', n: number, at0: number) => Array.from({ length: n }, (_, i) => ({ type: 'point' as const, side, at: at0 + i }));
@@ -318,7 +320,9 @@ describe('gallery multi-select goes through the same checks and queue', () => {
       mockLaunch.mockResolvedValueOnce({ canceled: false, assets: Array.from({ length: 12 }, (_, i) => ({ uri: `u${i}`, fileSize: 10, mimeType: 'image/jpeg' })) });
       const got = await pickPhotos();
       expect(mockLaunch).toHaveBeenCalledWith(expect.objectContaining({ allowsMultipleSelection: true, selectionLimit: 10 }));
-      expect(got).toHaveLength(10);
+      // 1.3.4: extras (an old picker ignoring selectionLimit) are returned so they can be reported;
+      // queuePickedPhotos queues 10 and counts 2 as dropped
+      expect(got).toHaveLength(12);
     } finally {
       Platform.OS = os;
     }

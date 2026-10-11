@@ -355,6 +355,11 @@ service cloud.firestore {
         && creditOk(e, d);
     }
     // QA NB-R5 (retest 1.1.0): a credited player must be on the side that won the rally.
+    // 1.3.4 (QA D133-5) LIMIT: "on court right now" is NOT checked here. It needs the rotation replayed
+    // from every event plus the set lineups (core/rotation.ts offCourtCredit), which rules can't do
+    // (no loops). The API server and the demo backend refuse a bench credit (not_on_court); with
+    // Firebase the scorer app only offers on-court chips, and the credit is still limited to a
+    // player of the team that won the rally.
     // participantIds start with exactly team A's players, then team B's (participantsOk).
     // (Arguments are re-evaluated at every reference, so the values are passed down once each.)
     function creditOk(e, d) {
@@ -604,9 +609,13 @@ service cloud.firestore {
     }
     // Admin review: approve (counts) or void (never counts) a completed match not yet reviewed; the
     // captain's confirmation fields are kept as they were.
+    // 1.3.5 (QA E134-2): never the admin's own match: not its creator, scorer or a captain, and not in
+    // participantIds (every player of both sides; src/core/antifraud.ts ownMatchReview).
     function reviewOk(r, v) {
       let old = r.get('verification', {});
       return completed(r) && !(vStatus(r) in ['approved', 'voided'])
+        && uid() != r.createdBy && uid() != r.scorerId && !(uid() in r.participantIds)
+        && !(uid() in [r.get('captains', {}).get('A', null), r.get('captains', {}).get('B', null)])
         && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'reviewedBy', 'reviewedAt'])
         && v.status in ['approved', 'voided'] && v.reviewedBy == uid() && v.reviewedAt == request.time
         && v.get('by', null) == old.get('by', null) && v.get('at', null) == old.get('at', null)
@@ -727,9 +736,28 @@ service cloud.firestore {
         }
         allow read: if signedIn();
         // QA G3: the URL must be this project's Storage download URL for this match + uploader.
+        // 1.3.5 (QA Firebase residuals D133-2/D133-3), enforced here, not only in the app:
+        //  - one photo per file per match: the document id IS the file's sha256 (`hash`), so a second
+        //    copy is a create on an existing id, which this rule never allows (no update rule);
+        //  - at most MAX_PHOTOS_PER_MATCH (50, src/core/limits.ts) per match: every create must, in the
+        //    same batch/transaction, move the match's counter photoMeta/count from n to n + 1 (<= 50)
+        //    and name this photo in it (`last`); a delete moves it back (n - 1). The counter's own rule
+        //    accepts a change only together with that photo's create/delete, so it always equals the
+        //    number of these photos. Concurrent creates race on the counter: only one gets n + 1.
+        // Limits: rules can't hash the uploaded bytes, so the hash is what the app computed (a forged
+        // client can claim another hash for the same bytes: the API server, which hashes the file
+        // itself, has no such gap). Photos stored before 1.3.5 (random ids) are not in the counter.
+        function photoCounter() { return /databases/$(database)/documents/matches/$(matchId)/photoMeta/count; }
+        function counterN() { return exists(photoCounter()) ? get(photoCounter()).data.n : 0; }
         allow create: if signedIn()
-          && request.resource.data.keys().hasOnly(['matchId', 'url', 'storagePath', 'uploadedBy', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['matchId', 'url', 'storagePath', 'uploadedBy', 'createdAt', 'hash', 'key'])
           && request.resource.data.uploadedBy == uid()
+          && request.resource.data.hash is string && request.resource.data.hash.matches('^[0-9a-f]{64}$')
+          && photoId == request.resource.data.hash
+          && (request.resource.data.get('key', null) == null || (request.resource.data.key is string && request.resource.data.key.matches('^[A-Za-z0-9_-]{8,64}$')))
+          && getAfter(photoCounter()).data.last == photoId
+          && getAfter(photoCounter()).data.n == counterN() + 1
+          && getAfter(photoCounter()).data.n <= 50
           && request.resource.data.get('matchId', matchId) == matchId
           && photoUrlOk(request.resource.data.url, 'matches%2F' + matchId + '%2F' + uid() + '%2F')
           && (request.resource.data.get('storagePath', null) == null
@@ -737,7 +765,35 @@ service cloud.firestore {
           && optMsOk(request.resource.data.get('createdAt', null))
           && canAddPhoto(get(/databases/$(database)/documents/matches/$(matchId)).data)
           && termsOk();
-        allow delete: if signedIn() && resource.data.uploadedBy == uid();
+        // Uploader only. A counted photo (id = hash) gives its slot back in the same batch; a photo
+        // from before 1.3.5 (random id) is simply deleted.
+        allow delete: if signedIn() && resource.data.uploadedBy == uid()
+          && (photoId != resource.data.get('hash', null)
+              || (getAfter(photoCounter()).data.n == counterN() - 1 && getAfter(photoCounter()).data.last == photoId));
+      }
+
+      // 1.3.5: the per-match photo counter (see photos above). Readable by any signed-in user; it
+      // changes only by exactly one, together with the create/delete of the photo it names.
+      match /photoMeta/{metaId} {
+        function photoAt(id) { return /databases/$(database)/documents/matches/$(matchId)/photos/$(id); }
+        function counterKeysOk() {
+          return metaId == 'count' && request.resource.data.keys().hasOnly(['n', 'last'])
+            && request.resource.data.n is int && request.resource.data.last is string
+            && request.resource.data.last.matches('^[0-9a-f]{64}$');
+        }
+        function addsPhoto() {
+          let id = request.resource.data.last;
+          return !exists(photoAt(id)) && existsAfter(photoAt(id)) && getAfter(photoAt(id)).data.uploadedBy == uid();
+        }
+        function removesPhoto() {
+          let id = request.resource.data.last;
+          return exists(photoAt(id)) && !existsAfter(photoAt(id)) && get(photoAt(id)).data.uploadedBy == uid();
+        }
+        allow read: if signedIn();
+        allow create: if signedIn() && counterKeysOk() && request.resource.data.n == 1 && addsPhoto();
+        allow update: if signedIn() && counterKeysOk()
+          && ((request.resource.data.n == resource.data.n + 1 && request.resource.data.n <= 50 && addsPhoto())
+              || (request.resource.data.n == resource.data.n - 1 && request.resource.data.n >= 0 && removesPhoto()));
       }
     }
 

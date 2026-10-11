@@ -36,7 +36,33 @@ jest.mock('firebase/firestore', () => ({
   },
   deleteDoc: async (r: { path: string }) => void mockFb.docs.delete(r.path),
   serverTimestamp: () => 'SERVER_TS',
+  // 1.3.4: the photo list of a match – same-image lookup (where hash ==) and the per-match count
+  collection: (_db: unknown, ...parts: string[]) => ({ path: parts.join('/') }),
+  where: (field: string, _op: string, value: unknown) => ({ field, value }),
+  limit: (n: number) => ({ n }),
+  query: (c: { path: string }, ...cons: { field?: string; value?: unknown }[]) => ({ path: c.path, cons }),
+  getDocs: async (q: { path: string; cons: { field?: string; value?: unknown }[] }) => {
+    const rows = [...mockFb.docs.entries()].filter(([k, d]) => k.startsWith(`${q.path}/`) && q.cons.every((c) => !c.field || d[c.field] === c.value));
+    return { empty: rows.length === 0, size: rows.length, docs: rows.map(([k, d]) => ({ id: k.split('/').pop(), data: () => d })) };
+  },
+  // 1.3.5: photo + counter (photoMeta/count) written together in one transaction; a failed commit writes nothing
+  runTransaction: async (_db: unknown, fn: (tx: unknown) => Promise<unknown>) => {
+    const writes: [string, Record<string, unknown> | null][] = [];
+    const tx = {
+      get: async (r: { path: string }) => ({ exists: () => mockFb.docs.has(r.path), data: () => mockFb.docs.get(r.path), id: r.path.split('/').pop() }),
+      set: (r: { path: string }, d: Record<string, unknown>) => void writes.push([r.path, d]),
+      delete: (r: { path: string }) => void writes.push([r.path, null]),
+    };
+    const out = await fn(tx);
+    if (mockFb.setDocFails > 0) {
+      mockFb.setDocFails--;
+      throw Object.assign(new Error('Could not reach Cloud Firestore backend'), { code: 'unavailable' });
+    }
+    for (const [k, d] of writes) (d ? mockFb.docs.set(k, d) : mockFb.docs.delete(k));
+    return out;
+  },
 }));
+const photoDocs = (m: string) => [...mockFb.docs.entries()].filter(([k]) => k.startsWith(`matches/${m}/photos/`));
 jest.mock('firebase/storage', () => ({
   ref: (_s: unknown, path: string) => ({ path }),
   getDownloadURL: async (r: { path: string }) => {
@@ -96,6 +122,7 @@ afterAll(() => {
 beforeEach(() => {
   files['file:///a.jpg'] = new FakeBlob(JPEG, 'image/jpeg');
   files['file:///b.png'] = new FakeBlob(PNG, '');
+  files['file:///c.png'] = new FakeBlob(pad([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 140), ''); // 1.3.4: another image
   files['blob:svg'] = new FakeBlob(SVG, 'image/svg+xml');
   files['file:///notes.jpg'] = new FakeBlob(TXT, 'image/jpeg');
   files['file:///big.jpg'] = new FakeBlob(JPEG, 'image/jpeg', 11 * 1024 * 1024);
@@ -255,13 +282,52 @@ describe('upload chip: same queued / uploading / added states in demo, API and F
     expect(chip()).toBe('Photo added');
     expect(mockFb.uploads).toBe(1); // reused
     expect(mockFb.files.size).toBe(1);
-    expect(mockFb.docs.get(`matches/m1/photos/${key}`)).toMatchObject({ storagePath: `matches/m1/a1/${key}.jpg`, uploadedBy: 'a1' });
+    const rows = photoDocs('m1');
+    expect(rows).toHaveLength(1);
+    const [id, rec] = rows[0];
+    expect(id).toBe(`matches/m1/photos/${rec.hash}`); // 1.3.5: the document id is the image hash
+    expect(rec).toMatchObject({ storagePath: `matches/m1/a1/${key}.jpg`, uploadedBy: 'a1', key });
+    expect(mockFb.docs.get('matches/m1/photoMeta/count')).toEqual({ n: 1, last: rec.hash });
     // a third attempt (lost response) finds the record and does nothing
     await (mockCurrent as { uploadMatchPhoto: (...a: unknown[]) => Promise<void> }).uploadMatchPhoto('m1', 'a1', 'file:///a.jpg', undefined, { idempotencyKey: key });
     expect(mockFb.uploads).toBe(1);
     // unknown types are refused before anything is uploaded
     await expect((mockCurrent as { uploadMatchPhoto: (...a: unknown[]) => Promise<void> }).uploadMatchPhoto('m1', 'a1', 'blob:svg')).rejects.toMatchObject({ code: 'photo_type' });
     expect(mockFb.uploads).toBe(1);
+  });
+
+  it('1.3.4 Firebase: the same image twice in a match is refused (hash stored); the 51st photo is refused', async () => {
+    const { FirebaseBackend } = require('../backend/firebaseBackend');
+    const { MAX_PHOTOS_PER_MATCH } = require('../../core/limits');
+    const fb = new FirebaseBackend();
+    mockFb.docs.clear();
+    mockFb.files.clear();
+    mockFb.uploads = 0;
+    mockFb.setDocFails = 0;
+    const players = (p: string) => Array.from({ length: 6 }, (_, i) => ({ id: `${p}${i + 1}` }));
+    mockFb.docs.set('matches/m1', { teamA: { players: players('a') }, teamB: { players: players('b') }, scorerId: 'a1' });
+    await fb.uploadMatchPhoto('m1', 'a1', 'file:///a.jpg', undefined, { idempotencyKey: 'q_one_0001' });
+    const [[id1, doc1]] = photoDocs('m1') as [string, { hash: string; key: string }][];
+    expect(doc1.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(id1).toBe(`matches/m1/photos/${doc1.hash}`);
+    expect(doc1.key).toBe('q_one_0001');
+    await expect(fb.uploadMatchPhoto('m1', 'a1', 'file:///a.jpg', undefined, { idempotencyKey: 'q_two_0002' })).rejects.toMatchObject({ code: 'photo_duplicate' });
+    expect(mockFb.uploads).toBe(1);
+    expect(mockFb.docs.get('matches/m1/photoMeta/count')).toMatchObject({ n: 1 });
+    expect(isPermanentUploadError({ code: 'photo_duplicate' })).toBe(true);
+    // a different image is fine; at the cap the next one is refused before anything is uploaded
+    await fb.uploadMatchPhoto('m1', 'a1', 'file:///b.png', undefined, { idempotencyKey: 'q_three_0003' });
+    expect(mockFb.docs.get('matches/m1/photoMeta/count')).toMatchObject({ n: 2 });
+    mockFb.docs.set('matches/m1/photoMeta/count', { n: MAX_PHOTOS_PER_MATCH, last: 'x' }); // the counter is the cap source
+    const before = mockFb.uploads;
+    await expect(fb.uploadMatchPhoto('m1', 'a1', 'file:///c.png', undefined, { idempotencyKey: 'q_four_0004' })).rejects.toMatchObject({ code: 'photo_limit' });
+    expect(mockFb.uploads).toBe(before);
+    expect(isPermanentUploadError({ code: 'photo_limit' })).toBe(true);
+    // deleting a counted photo gives its slot back (same transaction)
+    const [, d2] = photoDocs('m1').find(([, d]) => d.key === 'q_three_0003') as [string, { hash: string; storagePath: string }];
+    await fb.deleteMatchPhoto({ id: d2.hash, matchId: 'm1', hash: d2.hash, storagePath: d2.storagePath });
+    expect(mockFb.docs.get('matches/m1/photoMeta/count')).toEqual({ n: MAX_PHOTOS_PER_MATCH - 1, last: d2.hash });
+    expect(photoDocs('m1')).toHaveLength(1);
   });
 
   it('demo (web): offline → queued chip, not "Photo added"; online → added once', async () => {

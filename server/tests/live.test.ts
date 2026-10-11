@@ -71,6 +71,7 @@ describe('demo seed', () => {
     await seedDemo(h.s);
     const count = async (t: string) => Number((await h.db(t).count({ n: '*' }))[0].n);
     assert.equal(await count('users'), 24);
+    assert.equal(Number((await h.db('users').where({ id: 'seed_admin' }).count({ n: '*' }))[0].n), 0); // app-only demo admin
     assert.equal(await count('teams'), 4);
     // registered players only: every match player is a user, every tournament team a real team
     assert.equal(Number((await h.db('match_players').whereRaw('user_id <> player_key').count({ n: '*' }))[0].n), 0);

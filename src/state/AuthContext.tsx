@@ -18,10 +18,11 @@ interface AuthState {
 interface AuthApi extends AuthState {
   /** Accept the given T&C version and re-check (the backend validates the version). */
   acceptTerms: (version: string) => Promise<void>;
+  refreshAdmin: () => Promise<void>;
 }
 
 const initial: AuthState = { user: null, profile: null, loading: true, termsOk: false, isAdmin: false };
-const Ctx = createContext<AuthApi>({ ...initial, acceptTerms: async () => {} });
+const Ctx = createContext<AuthApi>({ ...initial, acceptTerms: async () => {}, refreshAdmin: async () => {} });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>(initial);
@@ -81,7 +82,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [state.user?.uid],
   );
 
-  return <Ctx.Provider value={{ ...state, acceptTerms }}>{children}</Ctx.Provider>;
+  /** Re-read the admin flag (1.3.4: after the demo-only "Demo admin" switch in Profile). */
+  const refreshAdmin = useCallback(async () => {
+    const uid = state.user?.uid;
+    if (!uid) return;
+    const isAdmin = await backend.isAdmin(uid).catch(() => false);
+    setState((s) => (s.user?.uid === uid ? { ...s, isAdmin } : s));
+  }, [state.user?.uid]);
+
+  return <Ctx.Provider value={{ ...state, acceptTerms, refreshAdmin }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => useContext(Ctx);

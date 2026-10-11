@@ -12,6 +12,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Skeleton } from '../components/Hero';
 import { ANTI_FRAUD, type WalletHistoryItem } from '../core/antifraud';
+import { RANKING_POINTS_PER_POTM, RANKING_POINTS_PER_WIN } from '../core/ranking';
 import { formatWhenT } from '../i18n/format';
 import { backend, type WalletResult } from '../services/backend';
 import { useMe } from '../state/AuthContext';
@@ -81,8 +82,19 @@ function HistoryRow({ h, first }: { h: WalletHistoryItem; first: boolean }) {
   const title = h.kind === 'bonus' ? t('wallet.historyBonus', { n: h.wins }) : t('wallet.historyVs', { team: h.opponent });
   const tags = h.kind === 'match' ? [h.won ? t('wallet.historyWin') : t('wallet.historyLoss'), h.potm ? t('potm.title') : null, t('wallet.historyCredited', { n: h.credited })].filter(Boolean).join(' · ') : t('wallet.bonus');
   const pts = `+${t('wallet.pts', { n: h.points })}`;
+  // 1.3.5 (QA INFO): how the row's points add up, e.g. "6 pts + 10 win + 25 POTM".
+  const breakdown =
+    h.kind === 'match'
+      ? [
+          t('wallet.breakdownPts', { n: h.credited }),
+          h.won ? t('wallet.breakdownWin', { n: RANKING_POINTS_PER_WIN }) : null,
+          h.potm ? t('wallet.breakdownPotm', { n: RANKING_POINTS_PER_POTM }) : null,
+        ]
+          .filter(Boolean)
+          .join(' + ')
+      : null;
   return (
-    <View style={[s.hRow, !first && s.hDivider]} accessible accessibilityLabel={`${title}. ${tags}. ${formatWhenT(h.at)}. ${pts}`} testID={`wallet-history-${h.kind}-${h.matchId}`}>
+    <View style={[s.hRow, !first && s.hDivider]} accessible accessibilityLabel={`${title}. ${tags}. ${formatWhenT(h.at)}. ${pts}${breakdown ? ` (${breakdown})` : ''}`} testID={`wallet-history-${h.kind}-${h.matchId}`}>
       <View style={[s.hIcon, h.kind === 'bonus' && { backgroundColor: colors.warnBg }]}>
         <Ionicons name={h.kind === 'bonus' ? 'gift-outline' : h.won ? 'trophy-outline' : 'tennisball-outline'} size={16} color={colors.ink} />
       </View>
@@ -93,6 +105,11 @@ function HistoryRow({ h, first }: { h: WalletHistoryItem; first: boolean }) {
         <Text style={[type.caption, { color: colors.muted }]} numberOfLines={2}>
           {tags} · {formatWhenT(h.at)}
         </Text>
+        {breakdown ? (
+          <Text style={[type.caption, { color: colors.text, fontWeight: '700' }]} numberOfLines={2} testID={`wallet-breakdown-${h.matchId}`}>
+            {breakdown}
+          </Text>
+        ) : null}
       </View>
       <Text style={[type.body, { color: colors.success, fontWeight: '800' }]}>{pts}</Text>
     </View>

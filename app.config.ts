@@ -1,4 +1,5 @@
 import type { ExpoConfig, ConfigContext } from 'expo/config';
+import { resolveBackendMode } from './src/core/backendMode.js';
 
 /**
  * App config. Secrets / project-specific values come from environment variables
@@ -8,12 +9,23 @@ import type { ExpoConfig, ConfigContext } from 'expo/config';
  * src/services/config.ts. Firebase web config values are identifiers, not
  * secrets – your data is protected by firestore.rules / storage.rules.
  */
+// 1.3.4 sign-up hardening (a): fail the build loudly when API mode is requested without
+// EXPO_PUBLIC_API_URL (same check as src/services/config.ts at start-up). Throws BackendConfigError.
+const backendMode = () =>
+  resolveBackendMode({
+    EXPO_PUBLIC_BACKEND: process.env.EXPO_PUBLIC_BACKEND,
+    EXPO_PUBLIC_DEMO_MODE: process.env.EXPO_PUBLIC_DEMO_MODE,
+    EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL,
+    EXPO_PUBLIC_API_DEV_AUTH: process.env.EXPO_PUBLIC_API_DEV_AUTH,
+    hasFirebase: !!process.env.EXPO_PUBLIC_FIREBASE_API_KEY && !!process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID && !!process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
+  });
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'VolleyLive',
   slug: 'volleylive',
   scheme: 'volleylive',
-  version: '1.3.3',
+  version: '1.3.5',
   orientation: 'portrait',
   icon: './assets/icon.png',
   userInterfaceStyle: 'light',
@@ -28,7 +40,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
   },
   android: {
-    versionCode: 9,
+    versionCode: 11,
     package: process.env.ANDROID_PACKAGE ?? 'com.volleylive.app',
     adaptiveIcon: {
       backgroundColor: '#002E6E', // theme palette.navy (checked in src/theme/__tests__/contrast.test.ts)
@@ -76,6 +88,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   extra: {
     // Only whether a key is set (never the key itself): AppMap falls back to PreviewMap without one.
     hasGoogleMapsKey: !!process.env.GOOGLE_MAPS_ANDROID_API_KEY,
+    // Backend kind only (demo / api / firebase), for build logs and checks; never a URL or key.
+    backendKind: backendMode().kind,
     eas: process.env.EAS_PROJECT_ID ? { projectId: process.env.EAS_PROJECT_ID } : undefined,
   },
 });

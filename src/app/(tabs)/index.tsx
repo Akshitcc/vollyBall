@@ -260,6 +260,7 @@ function HomeRankCard({ rankings, meId }: { rankings: RankingsResult | null | un
 }
 
 function UpcomingRow({ m }: { m: Match }) {
+  const { t } = useTranslation();
   const d = m.scheduledAt ? new Date(m.scheduledAt) : null;
   const lang = currentLanguage();
   const locale = lang === 'hi' ? 'hi-IN' : 'en-IN';
@@ -271,7 +272,7 @@ function UpcomingRow({ m }: { m: Match }) {
       </View>
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Text style={[type.h3, { color: colors.text }]} numberOfLines={1}>
-          {m.teamA.name} vs {m.teamB.name}
+          {m.teamA.name} {t('common.vs')} {m.teamB.name}
         </Text>
         <Text style={[type.caption, { color: colors.muted }]} numberOfLines={1}>
           {formatWhen(m.scheduledAt)}

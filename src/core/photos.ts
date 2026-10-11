@@ -57,7 +57,7 @@ export function isAllowedPhotoUrl(url: unknown, opts: { bucket?: string | null; 
   return false;
 }
 
-export const PHOTO_ERROR_CODES = { badType: 'photo_type', empty: 'photo_empty', tooLarge: 'photo_too_large', badUrl: 'photo_url', truncated: 'photo_truncated', unreadable: 'photo_unreadable' } as const;
+export const PHOTO_ERROR_CODES = { badType: 'photo_type', empty: 'photo_empty', tooLarge: 'photo_too_large', badUrl: 'photo_url', truncated: 'photo_truncated', unreadable: 'photo_unreadable', duplicate: 'photo_duplicate', limit: 'photo_limit' } as const;
 
 /**
  * Smallest file that can still be a whole image of each type (QA retest 217 #9): a bare GIF header

@@ -50,3 +50,34 @@ export function leakedTabParams(params: object | undefined): Record<string, unde
   const keys = Object.keys(p).filter((k) => p[k] !== undefined && k !== 'screen' && k !== 'params' && k !== 'initial' && k !== 'state');
   return keys.length ? Object.fromEntries(keys.map((k) => [k, undefined])) : null;
 }
+
+/**
+ * 1.3.5 (QA E134-1): tab buttons on the web are real links (<a href="/score">). React Navigation's
+ * own button calls preventDefault() before navigating; our custom tab button (press-scale feedback)
+ * did not, so every tab press ALSO let the browser follow the link: a full page reload that threw
+ * away all in-memory state (the demo "Simulate offline" switch, the offline/pending header, the
+ * upload queue). This wraps onPress the same way: plain left clicks stay inside the app; clicks with
+ * a modifier key / middle click / target=_blank are left to the browser (open in a new tab).
+ */
+type WebPressEvent = {
+  preventDefault?: () => void;
+  metaKey?: boolean;
+  altKey?: boolean;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  button?: number | null;
+  currentTarget?: unknown;
+};
+export function inAppLinkPress<E>(onPress: ((e: E) => void) | undefined, opts: { web: boolean; href?: string | null }) {
+  return (e: E) => {
+    if (!opts.web || opts.href == null) return onPress?.(e);
+    const w = e as unknown as WebPressEvent;
+    const modifier = !!(w.metaKey || w.altKey || w.ctrlKey || w.shiftKey);
+    const left = w.button == null || w.button === 0;
+    const target = (w.currentTarget as { target?: string } | null | undefined)?.target;
+    const self = target === undefined || target === null || target === '' || target === 'self' || target === '_self';
+    if (modifier || !left || !self) return; // the browser opens it (new tab etc.)
+    w.preventDefault?.();
+    onPress?.(e);
+  };
+}

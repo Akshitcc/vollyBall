@@ -170,7 +170,7 @@ export function RallyTicker({ text, dots, onPress }: { text: string; dots: strin
   return (
     <Pressable style={s.ticker} onPress={onPress} accessibilityRole={onPress ? 'button' : 'text'} testID="rally-ticker">
       <Ionicons name="flash" size={16} color={colors.danger} />
-      <Text style={s.tickerText} numberOfLines={1}>
+      <Text style={s.tickerText} numberOfLines={2} testID="rally-ticker-text">
         {text}
       </Text>
       <View style={{ flexDirection: 'row', gap: 4 }}>
@@ -445,7 +445,8 @@ const s = StyleSheet.create({
   tile: { minHeight: 84, borderRadius: 16, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', paddingTop: 12, paddingBottom: 8, paddingHorizontal: 3 },
   tileViewer: {},
   /** 1.3.3: the Opp. error row is gone, so scorer chips grow to 70×90 in 98 dp rows (§11.1); viewer stays 84. */
-  tileScorer: { minHeight: 90 },
+  // 1.3.4 (QA C133 chip width): never narrower than 48 dp (measured 67.5×90 at a 360 px viewport: 2 chips per row per half)
+  tileScorer: { minHeight: 90, minWidth: 48 },
   tileEmpty: { backgroundColor: colors.white, borderColor: colors.border, borderStyle: 'dashed' },
   tilePos: { position: 'absolute', top: 5, left: 5, width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   tilePosText: { fontSize: 10, fontWeight: '800' },

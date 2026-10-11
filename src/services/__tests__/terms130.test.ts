@@ -9,7 +9,7 @@ import { ANTI_FRAUD } from '../../core/antifraud';
 
 jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 // the demo admin list comes from EXPO_PUBLIC_DEMO_ADMIN_UIDS (env only); seed2 here
-jest.mock('../config', () => ({ ...jest.requireActual('../config'), DEMO_ADMIN_UIDS: ['seed2'] }));
+jest.mock('../config', () => ({ ...jest.requireActual('../config'), DEMO_ADMIN_UIDS: ['seed2', 'seed13'] }));
 
 const phoneOf = (n: number) => `+9190000000${String(n + 9).padStart(2, '0')}`;
 async function signedIn(n: number, accept = true) {
@@ -104,9 +104,15 @@ describe('flagged until an admin reviews it (item 5)', () => {
     const b = await signedIn(1);
     expect(await b.isAdmin('seed1')).toBe(false);
     expect(await b.listFlagged()).toEqual([]);
-    const admin = await signedIn(2);
+    // 1.3.5 (E134-2): seed2 is an admin but played in it → own_match; seed13 (another league team) reviews it
+    const insider = await signedIn(2);
+    (insider as unknown as { db: unknown }).db = db(b);
+    expect(await insider.isAdmin('seed2')).toBe(true);
+    expect(await codeOf(insider.reviewMatch('match_flagged', 'approve'))).toBe('own_match');
+    expect(await codeOf(insider.reviewMatch('match_flagged', 'void'))).toBe('own_match');
+    const admin = await signedIn(13);
     (admin as unknown as { db: unknown }).db = db(b);
-    expect(await admin.isAdmin('seed2')).toBe(true);
+    expect(await admin.isAdmin('seed13')).toBe(true);
     expect((await admin.listFlagged()).map((m) => m.id)).toContain('match_flagged');
     const before = await b.getWallet('seed1');
     expect(before.flagged).toBeGreaterThan(0);

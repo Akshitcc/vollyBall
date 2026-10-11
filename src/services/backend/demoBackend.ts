@@ -4,16 +4,16 @@
  * OTP code is always 123456.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { DEMO_ADMIN_UIDS, DEMO_OTP } from '../config';
+import { DEMO_ADMIN_UIDS, DEMO_MODE, DEMO_OTP } from '../config';
 import { addPoint, computeState, summarize, type Side } from '../../core/scoring';
 import { assertRoster, canonicalParticipants, challengeProblem, isAbandonOnly, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, teamCanPlay, TEAM_TOO_SMALL_MESSAGE, TOURNAMENT_ORGANIZER_MESSAGE, tournamentTeamsProblem } from '../../core/roster';
 import type { Challenge, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
-import { DemoDB, demoPhotoUrl, makeSeed, refreshSeedColours, SEED_PHOTO_SCENES } from './demoSeed';
+import { DEMO_QA_ADMIN, DemoDB, demoPhotoUrl, demoQaAdminProfile, makeSeed, refreshSeedColours, SEED_PHOTO_SCENES } from './demoSeed';
 import i18next from 'i18next';
 import type { AuthUser, Backend, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
-import { CONFIRM_MESSAGES, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, playerWallet, verificationStatus } from '../../core/antifraud';
+import { CONFIRM_MESSAGES, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
 import { guardCreate, guardProgress, guardUpdate, stampTimes } from '../../core/matchGuards';
 import { TERMS_NOT_ACCEPTED, TERMS_NOT_ACCEPTED_MESSAGE, TERMS_VERSION, TERMS_VERSION_MISMATCH, termsAccepted, type TermsAcceptance } from '../../core/terms';
 import { checkText } from '../../core/validate';
@@ -30,7 +30,11 @@ function assertPhone(phone: string) {
 import { checkChallengeFields, checkCourtFields, checkMatchFields, checkOrder, checkProfileFields, checkTeamFields, checkTournamentFields } from '../../core/validate';
 import { IDEMPOTENCY_KEY_RE, inviteState, PHOTO_WRONG_ACCOUNT, type InviteState } from './types';
 import { Platform } from 'react-native';
-import { readPhoto } from '../photoFile';
+import { blobSha256, readPhoto } from '../photoFile';
+import { connectivity } from '../connectivity';
+import { offCourtCredit } from '../../core/rotation';
+import { MAX_PHOTOS_PER_MATCH } from '../../core/limits';
+import { PHOTO_ERROR_CODES } from '../../core/photos';
 
 const KEY = 'volleylive-demo-db-v2';
 const AUTH_KEY = 'volleylive-demo-auth-v1';
@@ -45,12 +49,22 @@ function localizedPhoto(p: MatchPhoto): MatchPhoto {
   return scene == null ? p : { ...p, url: demoPhotoUrl(scene, i18next.language ?? 'en') };
 }
 
-/** Web demo: the browser says it is offline (native demo has no network check and is always "online"). */
-function demoOffline(): boolean {
+const QA_ADMIN_KEY = 'volleylive-demo-qa-admin-v1';
+
+/**
+ * Browser offline, or the demo-only "Simulate offline" switch (services/connectivity.ts).
+ * 1.3.5 (QA E134-1): on the web a demo save is local, so it never failed on its own and a save made
+ * while the network was down was reported as "✓ Synced". It now also checks that the app's own web
+ * server answers (connectivity.reachable) before accepting a write, like a real backend would.
+ */
+async function demoOffline(): Promise<boolean> {
+  if (connectivity.isSimulatedOffline()) return true;
   if (Platform.OS !== 'web') return false;
   const nav = (globalThis as { navigator?: { onLine?: boolean } }).navigator;
-  return nav?.onLine === false;
+  if (nav?.onLine === false) return true;
+  return !(await connectivity.reachable());
 }
+const SIM_OFFLINE_KEY = 'volleylive-demo-sim-offline-v1';
 function toDataUrl(b: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -69,8 +83,15 @@ export class DemoBackend implements Backend {
   private authListeners = new Set<(u: AuthUser | null) => void>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private simTimer: ReturnType<typeof setInterval> | null = null;
+  /** 1.3.4 QA access: accounts switched to "Demo admin" in Profile (demo builds only, this phone only). */
+  private qaAdmins = new Set<string>();
 
   constructor() {
+    if (DEMO_MODE) {
+      connectivity.onSimulatedChange((on) => {
+        (on ? AsyncStorage.setItem(SIM_OFFLINE_KEY, '1') : AsyncStorage.removeItem(SIM_OFFLINE_KEY)).catch(() => {});
+      });
+    }
     this.ready = this.load();
     // seed photo captions follow the language (re-emit so open screens redraw them)
     i18next.on?.('languageChanged', () => this.emit());
@@ -92,8 +113,17 @@ export class DemoBackend implements Backend {
     try {
       const raw = await AsyncStorage.getItem(KEY);
       if (raw) this.db = refreshSeedColours(JSON.parse(raw));
+      // 1.3.5: demo data saved by an older build gets the demo admin account too (unless its number
+      // was already registered by someone, who then simply isn't an admin).
+      if (!this.db.users[DEMO_QA_ADMIN.id] && !Object.values(this.db.users).some((u) => u.phone === DEMO_QA_ADMIN.phone)) {
+        this.db.users[DEMO_QA_ADMIN.id] = demoQaAdminProfile();
+      }
       const a = await AsyncStorage.getItem(AUTH_KEY);
       if (a) this.authUser = JSON.parse(a);
+      const q = await AsyncStorage.getItem(QA_ADMIN_KEY);
+      if (q) this.qaAdmins = new Set((JSON.parse(q) as unknown[]).filter((x): x is string => typeof x === 'string'));
+      // 1.3.5: "Simulate offline" survives a reload (demo builds only).
+      if (DEMO_MODE && (await AsyncStorage.getItem(SIM_OFFLINE_KEY)) === '1') connectivity.setSimulatedOffline(true);
     } catch {
       // ignore – fresh seed
     }
@@ -212,7 +242,32 @@ export class DemoBackend implements Backend {
     this.changed();
   }
   async isAdmin(id: string) {
-    return DEMO_ADMIN_UIDS.includes(id);
+    return DEMO_ADMIN_UIDS.includes(id) || this.isDemoAdmin(id);
+  }
+  /**
+   * 1.3.4/1.3.5 QA access, demo builds only: the fixed demo admin account (DEMO_QA_ADMIN,
+   * +919000000001, in no team or match) may switch itself to admin to review flagged matches in the
+   * browser. Nobody else can (QA E134-2), and outside DEMO_MODE it doesn't exist (the demo backend is
+   * never created in an API/Firebase build, and every entry point checks DEMO_MODE again). No account,
+   * password or key is created: it is a flag on this phone's local demo data. Real admins: API
+   * ADMIN_UIDS on the server; Firebase: the operator-set custom claim.
+   */
+  canBeDemoAdmin(id: string | null | undefined) {
+    return DEMO_MODE && !!id && id === DEMO_QA_ADMIN.id && this.db.users[id]?.phone === DEMO_QA_ADMIN.phone;
+  }
+  isDemoAdmin(id: string) {
+    return this.canBeDemoAdmin(id) && this.qaAdmins.has(id);
+  }
+  async setDemoAdmin(on: boolean) {
+    await this.ready;
+    if (!DEMO_MODE) throw new Error('Demo admin is only available in demo mode');
+    const uid = this.authUser?.uid;
+    if (!uid) throw new Error('Not signed in yet');
+    if (!this.canBeDemoAdmin(uid)) throw new Error(`Only the demo admin account (${DEMO_QA_ADMIN.phone}) can do this`);
+    if (on) this.qaAdmins.add(uid);
+    else this.qaAdmins.delete(uid);
+    await AsyncStorage.setItem(QA_ADMIN_KEY, JSON.stringify([...this.qaAdmins])).catch(() => {});
+    this.emit();
   }
 
   // ---------- profiles ----------
@@ -339,6 +394,8 @@ export class DemoBackend implements Backend {
     return this.watch(() => this.db.matches[id] ?? null, cb);
   }
   async saveMatchProgress(id: string, p: MatchProgress) {
+    await this.ready; // the stored "Simulate offline" switch is restored first
+    if (await demoOffline()) throw new TypeError('Network request failed (offline)');
     const m = this.db.matches[id];
     if (!m) throw new Error('Match not found');
     if (this.authUser && m.scorerId !== this.authUser.uid) throw new Error('Only the assigned scorer can change the score');
@@ -352,8 +409,17 @@ export class DemoBackend implements Backend {
     p.events.forEach((ev, i) => {
       if (ev.type === 'point' && ev.playerId && !rosterOf[ev.side].has(ev.playerId)) throw new CodedError('bad_request', `Event ${i + 1}: ${ev.playerId} is not a player of team ${ev.side}`);
     });
-    const { startedAt: _s, finishedAt: _f, playerOfMatchId: _p, ...rest } = p;
-    this.db.matches[id] = { ...m, ...rest, ...stampTimes(m, p.status, Date.now()), updatedAt: Date.now() };
+    // 1.3.4 (QA D133-5): a NEW credited point must name a player who was on court for that rally
+    // (set lineup + rotation; same check as the API server). Earlier events are left as they are.
+    let firstDiff = 0;
+    while (firstDiff < m.events.length && firstDiff < p.events.length && JSON.stringify(m.events[firstDiff]) === JSON.stringify(p.events[firstDiff])) firstDiff++;
+    const bench = offCourtCredit(m.rules, p.events, m.firstServe, { A: m.teamA.players.map((x) => x.id), B: m.teamB.players.map((x) => x.id) }, m.lineups, firstDiff);
+    if (bench) throw new CodedError('not_on_court', `Event ${bench.index + 1}: ${bench.playerId} was not on court for team ${bench.side}`);
+    // 1.3.4 (QA D133-6): like the API server, the summary is always recomputed from the events; any
+    // totals the client sent are ignored.
+    const summary = summarize(computeState(m.rules, p.events, m.firstServe));
+    const { startedAt: _s, finishedAt: _f, playerOfMatchId: _p, summary: _clientSummary, ...rest } = p;
+    this.db.matches[id] = { ...m, ...rest, summary, ...stampTimes(m, p.status, Date.now()), updatedAt: Date.now() };
     this.changed();
   }
   async setPlayerOfMatch(matchId: string, playerId: string) {
@@ -422,18 +488,24 @@ export class DemoBackend implements Backend {
     await this.ready;
     if (!this.authUser) throw new Error('Not signed in yet');
     if (this.authUser.uid !== by) throw new CodedError(PHOTO_WRONG_ACCOUNT, 'This photo was added by another account');
-    if (demoOffline()) throw new TypeError('Network request failed (offline)');
+    if (await demoOffline()) throw new TypeError('Network request failed (offline)');
     const m = this.db.matches[matchId];
     if (!m) throw new Error('Match not found');
     if (!canAddMatchPhoto(m, by)) throw new CodedError(PHOTO_NOT_ALLOWED, PHOTO_NOT_ALLOWED_MESSAGE);
     const key = opts?.idempotencyKey && IDEMPOTENCY_KEY_RE.test(opts.idempotencyKey) ? opts.idempotencyKey : null;
     const id = key ? 'ph_' + key : 'ph_' + uid();
     if (this.db.photos[id]) return onProgress?.(1);
+    // 1.3.4 (QA D133-2): at most MAX_PHOTOS_PER_MATCH photos per match.
+    const inMatch = Object.values(this.db.photos).filter((x) => x.matchId === matchId);
+    if (inMatch.length >= MAX_PHOTOS_PER_MATCH) throw new CodedError(PHOTO_ERROR_CODES.limit, 'This match already has the maximum number of photos');
     const photo = await readPhoto(localUri);
+    // 1.3.4 (QA D133-3): the same image (sha256 of its bytes) can't be added to a match twice.
+    const hash = await blobSha256(photo.blob);
+    if (inMatch.some((x) => x.hash === hash)) throw new CodedError(PHOTO_ERROR_CODES.duplicate, 'This photo is already in this match');
     onProgress?.(0.5);
     // A web blob: URL dies with the page: keep small photos as data: URLs so they survive a reload.
     const url = Platform.OS === 'web' && localUri.startsWith('blob:') && photo.size <= 600_000 ? await toDataUrl(photo.blob).catch(() => localUri) : localUri;
-    this.db.photos[id] = { id, matchId, url, uploadedBy: by, createdAt: Date.now() };
+    this.db.photos[id] = { id, matchId, url, uploadedBy: by, createdAt: Date.now(), hash };
     onProgress?.(1);
     this.changed();
   }
@@ -503,6 +575,7 @@ export class DemoBackend implements Backend {
     const v = verificationStatus(m);
     if (!isCompleted(m)) throw new CodedError('not_completed', CONFIRM_MESSAGES.not_completed);
     if (v === 'approved' || v === 'voided') throw new CodedError('already_reviewed', CONFIRM_MESSAGES.already_reviewed);
+    if (ownMatchReview(m, me)) throw new CodedError(OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE);
     this.db.matches[matchId] = { ...m, verification: { ...(m.verification ?? { status: 'pending' }), status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: Date.now() }, updatedAt: Date.now() };
     this.changed();
   }
@@ -595,7 +668,11 @@ export class DemoBackend implements Backend {
    */
   async reset() {
     this.db = makeSeed();
+    this.qaAdmins.clear();
     await AsyncStorage.removeItem(KEY);
+    await AsyncStorage.removeItem(QA_ADMIN_KEY).catch(() => {});
+    connectivity.setSimulatedOffline(false);
+    await AsyncStorage.removeItem(SIM_OFFLINE_KEY).catch(() => {});
     this.changed();
     await this.signOut();
   }
