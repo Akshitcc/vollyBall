@@ -5,7 +5,8 @@
  *
  * 1.3.8 (QA V137-4): only right after the match finishes (seen finishing on this screen, or opened within
  * a few minutes of the finish) or right after the user confirms the result – opening an old won match
- * never asks. The 60-day check uses the server clock when the backend knows it (API), else the phone's.
+ * never asks. The 60-day check uses the server clock when the backend knows it (API: Date header;
+ * Firebase 1.3.9: serverTimestamp()s in users/{uid}/private/review), else the phone's (demo only).
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { reviewMomentFor, reviewTriggered } from '../core/reviewPrompt';
@@ -17,6 +18,13 @@ import { maybeAskForReview } from '../services/review';
 export function reviewNow(): number {
   const s = typeof backend.serverNow === 'function' ? backend.serverNow() : null;
   return typeof s === 'number' && Number.isFinite(s) ? s : Date.now();
+}
+
+/** 1.3.9 (V137-4): Firebase keeps the review clock on the server (serverTimestamp); API/demo: undefined. */
+export function serverClockFor(uid: string) {
+  const b = backend;
+  if (typeof b.reviewClock !== 'function' || typeof b.markReviewAsked !== 'function') return undefined;
+  return { read: () => b.reviewClock!(uid), mark: () => b.markReviewAsked!(uid) };
 }
 
 export function useReviewPrompt(m: Match | null | undefined, uid: string): { onConfirmed: () => void } {
@@ -40,7 +48,7 @@ export function useReviewPrompt(m: Match | null | undefined, uid: string): { onC
           if (asked.current) return;
           asked.current = true;
           const completed = mine.filter((x) => x.status === 'finished').length;
-          void maybeAskForReview({ uid, moment: mo, completedMatches: completed, liveScoring: false, now: reviewNow() });
+          void maybeAskForReview({ uid, moment: mo, completedMatches: completed, liveScoring: false, now: reviewNow(), serverClock: serverClockFor(uid) });
         });
         if (asked.current) u(); // answered synchronously (demo)
         else off = u;

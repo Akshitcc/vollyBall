@@ -620,7 +620,7 @@ export class ApiBackend implements Backend {
   // 1.3.7 feedback + fact of the day
   async sendFeedback(f: { stars: number; text: string; appVersion?: string }) {
     const c = checkFeedback(f);
-    await this.request('POST', '/feedback', { ...c, appVersion: f.appVersion ?? null });
+    await this.request('POST', '/feedback', c);
   }
   listFeedback() {
     return this.get<FeedbackItem[]>('/admin/feedback');

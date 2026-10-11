@@ -2,7 +2,8 @@
  * Minimal SQL migration runner: applies server/migrations/*.sql in name order
  * and records each one in `schema_migrations`. Statements inside a file are
  * separated by a line containing only `-- ;;`.
- * Note: MySQL DDL auto-commits, so a failed file must be fixed and re-run by hand.
+ * Note: MySQL DDL auto-commits, so a file that fails half-way leaves its earlier statements applied.
+ * Files are therefore written to be re-runnable (IF NOT EXISTS, guarded steps): fix the cause, run again.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,6 +13,17 @@ import type { Db } from './knex';
 export const MIGRATIONS_DIR =
   [path.resolve(__dirname, '../../migrations'), path.resolve(__dirname, '../../../../migrations')].find((d) => fs.existsSync(d)) ??
   path.resolve(__dirname, '../../migrations');
+
+type RawOn = (sql: string) => Promise<unknown>;
+async function onOneConnection(db: Db, fn: (q: RawOn) => Promise<void>): Promise<void> {
+  const client = db.client as { acquireConnection(): Promise<unknown>; releaseConnection(c: unknown): Promise<void> };
+  const conn = await client.acquireConnection();
+  try {
+    await fn((sql) => db.raw(sql).connection(conn as never));
+  } finally {
+    await client.releaseConnection(conn);
+  }
+}
 
 export async function migrate(db: Db, dir = MIGRATIONS_DIR): Promise<string[]> {
   await db.raw(
@@ -27,7 +39,11 @@ export async function migrate(db: Db, dir = MIGRATIONS_DIR): Promise<string[]> {
       .split(/^-- ;;\s*$/m)
       .map((s) => s.trim())
       .filter((s) => s.replace(/^--.*$/gm, '').trim().length > 0);
-    for (const st of statements) await db.raw(st);
+    // 1.3.9 (V138-1): every statement of a file runs on ONE connection, so a file can use session
+    // variables (e.g. a guarded `SET @x = IF(…); PREPARE …; EXECUTE …` for steps MySQL has no IF NOT EXISTS for).
+    await onOneConnection(db, async (q) => {
+      for (const st of statements) await q(st);
+    });
     await db('schema_migrations').insert({ version: file, applied_at: new Date() });
     applied.push(file);
   }

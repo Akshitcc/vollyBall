@@ -5,13 +5,13 @@ import { ScrollView, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { EmptyCard } from '../components/Hero';
 import { Button, Card } from '../components/ui';
-import { ADMIN_APPROVAL, captainVerdict, matchFlags, ownMatchReview } from '../core/antifraud';
+import { ADMIN_APPROVAL, captainVerdict, matchDate, matchFlags, ownMatchReview } from '../core/antifraud';
 import type { Match } from '../core/types';
 import { formatWhenT, translateError } from '../i18n/format';
 import { backend } from '../services/backend';
 import { useAuth } from '../state/AuthContext';
 import { colors, type } from '../theme';
-import { flagText } from '../components/ResultBadge';
+import { AdminReviewButtons, flagText } from '../components/ResultBadge';
 
 export default function AdminReviewScreen() {
   const { t } = useTranslation();
@@ -55,7 +55,7 @@ export default function AdminReviewScreen() {
               </Text>
             ) : null}
             <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]} testID={`flagged-when-${m.id}`}>
-              {[formatWhenT(m.finishedAt ?? m.updatedAt), mins != null ? t('verify.reviewMinutes', { count: mins }) : null].filter(Boolean).join(' · ')}
+              {[formatWhenT(matchDate(m)) /* 1.3.9 (V138-11): never updatedAt */, mins != null ? t('verify.reviewMinutes', { count: mins }) : null].filter(Boolean).join(' · ')}
             </Text>
             <Text style={[type.caption, { color: colors.danger, marginTop: 2, fontWeight: '700' }]} testID={`flagged-why-${m.id}`}>{flagText(matchFlags(m), t)}</Text>
             {/* 1.3.7 (F135-1): approval clears the flag; the opposing captain's confirmation still decides */}
@@ -67,10 +67,7 @@ export default function AdminReviewScreen() {
             {own ? (
               <Text style={[type.caption, { color: colors.muted, marginTop: 10 }]} testID={`own-${m.id}`}>{t('errors.codes.own_match')}</Text>
             ) : (
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                <Button title={t(ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN ? 'verify.approve' : 'verify.approveClears')} onPress={() => void review(m.id, 'approve')} style={{ flex: 1 }} testID={`approve-${m.id}`} />
-                <Button title={t('verify.void')} variant="danger" onPress={() => void review(m.id, 'void')} style={{ flex: 1 }} testID={`void-${m.id}`} />
-              </View>
+              <AdminReviewButtons onApprove={() => void review(m.id, 'approve')} onVoid={() => void review(m.id, 'void')} approveID={`approve-${m.id}`} voidID={`void-${m.id}`} style={{ marginTop: 10 }} />
             )}
           </Card>
         );

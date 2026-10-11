@@ -24,6 +24,8 @@ export const INVALID_PHONE_MESSAGE = 'Phone must be an Indian mobile number in E
 const SEPARATORS = /[\s\u00A0\u2010-\u2015\u2212\-().[\]{}]/g;
 /** Devanagari digits ०-९ (U+0966–U+096F) → ASCII 0-9. */
 export const devanagariToAscii = (s: string) => s.replace(/[\u0966-\u096F]/g, (d) => String(d.charCodeAt(0) - 0x0966));
+/** 1.3.9 (QA V138-8): fullwidth digits ０-９ and ＋ (CJK keyboards) → ASCII. Used by the as-you-type filter only. */
+export const fullwidthToAscii = (s: string) => s.replace(/[\uFF10-\uFF19]/g, (d) => String(d.charCodeAt(0) - 0xff10)).replace(/\uFF0B/g, '+');
 
 /**
  * Cleans typed or pasted text down to the national digits (at most 10), or returns null when the
@@ -149,7 +151,8 @@ export function nextPhoneField(cur: { value: string; display: string | null }, r
 export function filterPhoneTyping(cur: { value: string; display: string | null }, raw: string): PhoneFieldState & { dropped: boolean } {
   const direct = nextPhoneField(cur, raw);
   if (!direct.rejected) return { ...direct, dropped: false };
-  const ascii = devanagariToAscii(raw);
+  // 1.3.9 (V138-8): fullwidth digits are converted here too (the strict parsers still refuse them)
+  const ascii = fullwidthToAscii(devanagariToAscii(raw));
   const stripped = (ascii.trimStart().startsWith('+') ? '+' : '') + ascii.replace(/[^0-9]/g, '');
   const next = nextPhoneField(cur, stripped);
   return { ...next, dropped: stripped !== raw };

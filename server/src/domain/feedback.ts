@@ -20,14 +20,13 @@ const requireAdmin = (s: Services, id: Identity) => {
 };
 
 export async function sendFeedback(s: Services, id: Identity, body: { stars?: unknown; text?: unknown; appVersion?: unknown }) {
-  let f: { stars: number; text: string };
+  let f: ReturnType<typeof checkFeedback>;
   try {
     f = checkFeedback(body);
   } catch (e) {
     asHttp(e);
   }
-  const v = typeof body.appVersion === 'string' ? body.appVersion.replace(/[^0-9A-Za-z.+\- ()]/g, '').slice(0, 40) : null;
-  const row = { id: newId(), user_id: id.uid, stars: f.stars, text: f.text, app_version: v || null, created_at: nowDate() };
+  const row = { id: newId(), user_id: id.uid, stars: f.stars, text: f.text, app_version: f.appVersion, created_at: nowDate() };
   await s.db('feedback').insert(row);
   return { id: row.id };
 }
@@ -41,6 +40,7 @@ export async function listFeedback(s: Services, id: Identity) {
 
 const itemFrom = (r: Row): DailyItem => ({
   id: r.id, type: r.type, textEn: r.text_en, textHi: r.text_hi, attribution: r.attribution ?? null, sourceUrl: r.source_url ?? null, active: !!r.active,
+  createdAt: toMs(r.created_at) ?? null, // 1.3.9 (V138-7): new items join the daily rotation the next IST day
 });
 
 /** Public: active items only (admins also get inactive ones, for the manage screen). */

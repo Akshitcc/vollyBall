@@ -17,7 +17,7 @@ import i18next from 'i18next';
 import type { AuthUser, Backend, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
-import { CONFIRM_MESSAGES, captainVerdict, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
+import { byMatchDateDesc, CONFIRM_MESSAGES, captainVerdict, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
 import { guardCreate, guardProgress, guardUpdate, stampTimes } from '../../core/matchGuards';
 import { TERMS_NOT_ACCEPTED, TERMS_NOT_ACCEPTED_MESSAGE, TERMS_VERSION, TERMS_VERSION_MISMATCH, termsAccepted, type TermsAcceptance } from '../../core/terms';
 import { checkText } from '../../core/validate';
@@ -498,7 +498,8 @@ export class DemoBackend implements Backend {
   }
   watchMyMatches(id: string, cb: (m: Match[]) => void) {
     return this.watch(
-      () => Object.values(this.db.matches).filter((m) => m.participantIds.includes(id)).sort((a, b) => b.updatedAt - a.updatedAt),
+      // 1.3.9 (V138-11): by the match's own date (a confirmation bumps updatedAt, not the date)
+      () => Object.values(this.db.matches).filter((m) => m.participantIds.includes(id)).sort(byMatchDateDesc),
       cb,
     );
   }
@@ -601,7 +602,8 @@ export class DemoBackend implements Backend {
       prev?.status === 'approved'
         ? { ...prev, captain, by: me, at: Date.now(), ...(reason ? { reason } : {}) }
         : { status, captain, by: me, at: Date.now(), ...(reason ? { reason } : {}) };
-    this.db.matches[matchId] = { ...m, verification, updatedAt: Date.now() };
+    // 1.3.9 (V138-11): the confirmation time goes to confirmedAt; the match's own times are never touched
+    this.db.matches[matchId] = { ...m, verification, ...(status === 'confirmed' ? { confirmedAt: verification.at } : {}), updatedAt: Date.now() };
     this.changed();
   }
   async confirmResult(matchId: string) {
@@ -637,7 +639,7 @@ export class DemoBackend implements Backend {
     const list = (this.db.feedback ??= []);
     // same limit as the API: 5 per hour per user
     if (list.filter((x) => x.userId === me && Date.now() - x.createdAt < 3_600_000).length >= 5) throw new CodedError('rate_limited', 'Too many requests. Wait a moment and try again.');
-    list.unshift({ id: 'fb_' + uid(), userId: me, userName: this.db.users[me]?.name ?? null, ...c, appVersion: f.appVersion ?? null, createdAt: Date.now() });
+    list.unshift({ id: 'fb_' + uid(), userId: me, userName: this.db.users[me]?.name ?? null, ...c, createdAt: Date.now() });
     this.changed();
   }
   async listFeedback() {
@@ -659,8 +661,9 @@ export class DemoBackend implements Backend {
     const id = item.id ?? 'd_' + uid();
     const i = this.dailyItems.findIndex((x) => x.id === id);
     if (item.id && i < 0) throw new Error('Item not found');
-    if (i >= 0) this.dailyItems[i] = { ...c, id };
-    else this.dailyItems.push({ ...c, id });
+    // 1.3.9 (V138-7): createdAt (phone clock in the demo) – a new item joins the daily rotation tomorrow
+    if (i >= 0) this.dailyItems[i] = { ...c, id, createdAt: this.dailyItems[i].createdAt ?? null };
+    else this.dailyItems.push({ ...c, id, createdAt: Date.now() });
     this.changed();
     return id;
   }

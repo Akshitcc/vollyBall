@@ -4,6 +4,7 @@
  * Errors are CodedErrors (field + code), translated by i18n/format.
  */
 import { CodedError } from './codedError';
+import { HIDDEN_CHARS, HIDDEN_RE } from './text';
 
 export const NAME_MIN = 2;
 export const NAME_MAX = 40;
@@ -14,7 +15,7 @@ export const EMAIL_MAX = 254;
 export const EMAIL_LOCAL_MAX = 64;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 /** 1.3.7 (R136-9): control, zero-width, soft-hyphen, bidi and BOM characters are never part of an address. */
-const EMAIL_BAD_CHARS = /[\u0000-\u001F\u007F-\u009F\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
+const EMAIL_BAD_CHARS = HIDDEN_RE; // 1.3.9 (V138-4): the shared set (core/text.ts)
 /**
  * Latin (incl. accented, no × ÷) and Devanagari letters/marks (no digits or dandas), space, apostrophe,
  * hyphen; 1.3.7 (R136-10): ZWNJ/ZWJ (U+200C/U+200D) only between two Devanagari characters.
@@ -120,7 +121,7 @@ export function parsePincodeResponse(body: unknown): PincodeInfo {
   if (r.Status === 'Success' && Array.isArray(r.PostOffice) && r.PostOffice.length) {
     const po = r.PostOffice[0];
     // 1.3.7 (R136-13): upstream text is stripped of control/zero-width characters like client text
-    const clip = (x: unknown) => String(x ?? '').replace(/[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, '').trim().slice(0, 60);
+    const clip = (x: unknown) => String(x ?? '').replace(new RegExp(`[${HIDDEN_CHARS}]`, 'g'), '').trim().slice(0, 60);
     if (!po.District || !po.State) return { status: 'unknown' };
     return { status: 'ok', district: clip(po.District), state: clip(po.State), city: clip(po.Block && po.Block !== 'NA' ? po.Block : po.Name) || undefined };
   }
@@ -225,8 +226,9 @@ export function checkRegistration(p: { firstName?: unknown; lastName?: unknown; 
 export function profileComplete(p: { firstName?: string | null; lastName?: string | null; dob?: string | null; pincode?: string | null } | null | undefined, minAge = DEFAULT_MIN_AGE, now = Date.now()): boolean {
   if (!p) return false;
   try {
-    checkRegistration({ ...p, email: null }, minAge, now, false);
-    return true;
+    const f = checkRegistration({ ...p, email: null }, minAge, now, false);
+    // 1.3.9 (QA V138-6): an allocated prefix (or Army Postal Service 9xxxxx), as a save requires
+    return pincodePrefixOk(f.pincode) || isApsPincode(f.pincode);
   } catch {
     return false;
   }
@@ -241,7 +243,13 @@ export const REG_KEYS = ['firstName', 'lastName', 'dob', 'email', 'pincode', 'di
 /** The save carries at least one registration field. */
 export const sentRegistration = (p: RegInput) => REG_KEYS.some((k) => p[k] !== undefined);
 /** The stored profile already has every required registration field. */
-export const hasStoredRegistration = (s: RegStored) => !!(s && s.firstName && s.lastName && s.dob && s.pincode);
+/**
+ * The stored profile has every required registration field, each valid by the registration validators.
+ * 1.3.9 (QA V138-6): not just present – a legacy row with a blank / whitespace-only name or a pincode
+ * like 000000 or an unallocated prefix doesn't pass (same check as profileComplete, which the app uses
+ * to send the user to the completion screen).
+ */
+export const hasStoredRegistration = (s: RegStored) => profileComplete(s ?? null);
 
 /**
  * 1.3.7 (R136-2/R136-3): a save is checked as a whole. The fields sent replace the stored ones, then

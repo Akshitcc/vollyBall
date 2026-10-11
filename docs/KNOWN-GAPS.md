@@ -1,4 +1,4 @@
-# VolleyLive 1.3.8 – known gaps and limits
+# VolleyLive 1.3.9 – known gaps and limits
 
 These are documented, not bugs to retest. "API" = the MySQL server in `server/` (the planned launch
 backend). "Firebase" = the Firestore-only backend (`firestore.rules`). "Demo" = the offline demo build.
@@ -29,11 +29,48 @@ backend). "Firebase" = the Firestore-only backend (`firestore.rules`). "Demo" = 
   (`NULLIF(LOWER(TRIM(email)),'')`). Existing duplicates are not deleted: the oldest account keeps the
   address, the others get `email = NULL` and are listed in `email_duplicates_0013` (user id, old email,
   kept user id) for support to follow up. A save that loses the race gets `409 email_taken`.
+  **1.3.9 (V138-1, V138-2): fixed in place** – 0013 had never been deployed to a real server. It now pins
+  `utf8mb4 / utf8mb4_0900_ai_ci` on its table, compares emails with `utf8mb4_bin` on
+  `LOWER(TRIM(email))` (case-insensitive only: `josé@` ≠ `jose@`, `straße@` ≠ `strasse@`), and every step
+  is guarded, so it completes from the half-applied state the 1.3.8 file left on a DB whose default
+  collation was different, and re-running it changes nothing. A QA database that recorded the 1.3.8 0013 as
+  applied keeps the old (accent-insensitive) index: recreate it, or delete its `schema_migrations` row and
+  restart (the fixed file replaces the index). The migration runner now runs each file on one connection.
+
+## Legacy captain answers (V138-3)
+
+A 1.3.6 client stored a captain's answer without the `captain` verdict. That shape ("approved/voided +
+`by`, no `captain`": no reason = confirmed, a reason = rejected) is trusted **only for answers stamped
+before 1.3.7** – `LEGACY_VERDICT_BEFORE` in `src/core/antifraud.ts` (2026-10-11 10:00 UTC, the 1.3.7
+build). A newer answer without a verdict reads as unanswered. The rules require the verdict on every new
+captain answer (reject with or without a reason) and on an admin approval of an answered match
+(`captain == verdictFromOld(old)`), so an outdated (≤ 1.3.7) admin app can't turn a reason-less rejection
+into a counted match. If a server stayed on 1.3.6 after that date, set the constant to the day it moved to
+1.3.7+ (the API's 0012 backfill already wrote those verdicts).
+
+## Fact of the day (V138-7)
+
+Today's item is `active items ordered by id`, index = IST day number mod n. An item an admin **adds today**
+(`createdAt` ≥ today's IST midnight; server time on the API and Firebase, phone time in the demo) joins the
+rotation **tomorrow**, so adding a fact never changes today's fact, and every item (old or new) appears
+once in any n consecutive days. **Deactivating or deleting** an item applies at once and can change today's
+fact – an admin hiding a fact expects it gone. Items without `createdAt` (bundled, or Firebase docs from
+1.3.8 admin apps) are always in the rotation.
+
+## Review prompt clock (V137-4)
+
+The 60-day "ask for a review" cooldown uses server time on the API (response `Date` header) and, since
+1.3.9, on Firebase (`users/{uid}/private/review`: `checkedAt` / `lastAskedAt` are `serverTimestamp()`s;
+rules allow only `request.time` or the unchanged value, owner only). **The demo uses the phone clock**: it
+has no server, so changing the phone's date can show the mock review sheet again (nothing is sent).
 
 ## Licences (V137-7)
 
 About > Open-source licenses lists the whole **JavaScript production dependency tree** (transitive,
 generated offline from `node_modules` at build time, with the licence/notice text each package ships).
+Since 1.3.9 (V138-5) every installed package that **ships native code** (an Expo module config, an
+`android/build.gradle` or a podspec – e.g. `react-native-gesture-handler`, which is a peer dependency and
+was missed before) is included with its own dependencies, even when it is only a peer.
 Native libraries added by Gradle (AndroidX, Play services, etc.) are **not** in the list; their notices
 would need the Gradle `oss-licenses` plugin or a manual list before store release. Some packages ship no
 licence file – the viewer then shows the declared licence id only.

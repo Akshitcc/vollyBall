@@ -93,9 +93,36 @@ export function captainVerdict(m: { verification?: MatchVerification | null }): 
   // admin approved): the captain's answer is still in the older fields. `by` set = the opposing captain
   // answered; a reject reason means they rejected, no reason = they confirmed. (A 1.3.6 rejection sent
   // with no reason can't be told apart from a confirmation; it counted under 1.3.6 as well.)
-  if ((st === 'approved' || st === 'voided') && v?.by) return v.reason ? 'rejected' : 'confirmed';
+  // 1.3.9 (V138-3): only for answers recorded BEFORE 1.3.7 (v.at, the server-stamped answer time, is
+  // the marker). Since 1.3.7 every client writes `captain`, and the rules/API now require it, so a newer
+  // answer without it is not a trusted shape: it reads as unanswered (doesn't count).
+  if ((st === 'approved' || st === 'voided') && v?.by && isLegacyAnswer(v)) return v.reason ? 'rejected' : 'confirmed';
   return null;
 }
+
+/**
+ * 1.3.9 (V138-3): captain answers stamped before this time (server clock, ms) may lack the `captain`
+ * verdict (1.3.6 clients); from 1.3.7 on every answer carries it. 2026-10-11 10:00 UTC = the 1.3.7
+ * build. Data from a server that stayed on 1.3.6 longer: set this to the date that server moved to
+ * 1.3.7+ (docs/DEPLOY.md) – on the API the 0012 backfill has already written those verdicts anyway.
+ */
+export const LEGACY_VERDICT_BEFORE = Date.UTC(2026, 9, 11, 10, 0, 0);
+export const isLegacyAnswer = (v: { at?: number | null }) => typeof v.at === 'number' && v.at < LEGACY_VERDICT_BEFORE;
+
+/** 1.3.9 (V138-11): when the opposing captain confirmed (null = not confirmed). Never one of the match's own times. */
+export function confirmedAtOf(m: { confirmedAt?: number | null; verification?: MatchVerification | null }): number | null {
+  if (m.confirmedAt != null) return m.confirmedAt;
+  return captainVerdict(m) === 'confirmed' ? m.verification?.at ?? null : null;
+}
+
+/**
+ * 1.3.9 (V138-11): the match's own date – finished, else started, else scheduled, else created. Lists of
+ * a player's matches are ordered by it (not by updatedAt, which a confirmation or review also bumps).
+ */
+export const matchDate = (m: { finishedAt?: number | null; startedAt?: number | null; scheduledAt?: number | null; createdAt: number }): number =>
+  m.finishedAt ?? m.startedAt ?? m.scheduledAt ?? m.createdAt;
+export const byMatchDateDesc = <T extends Parameters<typeof matchDate>[0] & { id: string }>(a: T, b: T): number =>
+  matchDate(b) - matchDate(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /** 1.3.7: an admin cleared the flag, but the opposing captain hasn't confirmed yet (so it doesn't count yet). */
 export function awaitingOpponentAfterApproval(m: CountableMatch, policy = ADMIN_APPROVAL): boolean {

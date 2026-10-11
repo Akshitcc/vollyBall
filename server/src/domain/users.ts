@@ -8,6 +8,9 @@ import type { Identity } from '../auth/verifier';
 import { topics } from '../live/bus';
 import { nowDate, toMs, type Trx } from './util';
 
+/** 1.3.9 (V138-1/V138-2): the normalised email exactly as in the 0013 unique index (binary comparison). */
+export const EMAIL_NORM_SQL = "CAST(NULLIF(LOWER(TRIM(email)), '') AS CHAR(254)) COLLATE utf8mb4_bin";
+
 interface UserRow {
   id: string;
   name: string;
@@ -150,9 +153,10 @@ export async function saveProfile(
     const err = e as { code: string; field: string; message: string; min?: number; max?: number };
     throw new HttpError(400, err.code, `Invalid request: ${err.field} – ${err.message}`, { field: err.field, min: err.min, max: err.max });
   }
-  // 1.3.7 (R136-9): one email address per account (case-insensitive: emails are stored lower-case)
-  // (same expression as the 0013 unique index, so MySQL can use it)
-  if (f.email && (await s.db('users').whereRaw("NULLIF(LOWER(TRIM(email)), '') = ?", [f.email]).whereNot({ id: p.id }).first('id')))
+  // 1.3.7 (R136-9): one email address per account. Case-insensitive only (emails are stored lower-case);
+  // 1.3.9 (V138-2): accents and widths count (josé@ ≠ jose@, straße@ ≠ strasse@), compared byte for byte.
+  // Same expression as the 0013 unique index (EMAIL_NORM_SQL), so MySQL can use it.
+  if (f.email && (await s.db('users').whereRaw(`${EMAIL_NORM_SQL} = ?`, [f.email]).whereNot({ id: p.id }).first('id')))
     throw new HttpError(409, 'email_taken', 'Invalid request: email – this email belongs to another account', { field: 'email' });
   // Unchanged pincode: keep the stored district/state (no new lookup); otherwise look it up. Only a
   // lookup result is stored (1.3.7, R136-13: a client-sent district is never trusted).

@@ -164,6 +164,13 @@ export interface Backend {
   /** Profile > Send feedback (1–5 stars + text; signed in, rate limited). Never rewarded. */
   /** 1.3.8 (V137-4): the server's clock (ms) when known (API: from response Date headers), else null. */
   serverNow?(): number | null;
+  /**
+   * 1.3.9 (V137-4): the review prompt's clock kept on the server (Firebase: users/{uid}/private/review with
+   * serverTimestamp()s). Returns the server's "now" and when we last asked, both server time. Absent: the
+   * app uses serverNow() (API) or the phone clock (demo – documented), with the time stored on the phone.
+   */
+  reviewClock?(uid: string): Promise<{ now: number; lastAskedAt: number | null }>;
+  markReviewAsked?(uid: string): Promise<void>;
   sendFeedback(f: { stars: number; text: string; appVersion?: string }): Promise<void>;
   /** Admin only: newest feedback first. */
   listFeedback(): Promise<FeedbackItem[]>;

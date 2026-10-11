@@ -1,7 +1,7 @@
 /** 1.3.8 core fixes: V137-1 (legacy captain confirmation), V137-13 (badge state), V137-4 (review trigger), V137-3 (daily merge / IST midnight), V137-7 (licences). */
 import { INDOOR_RULES, type RuleSet } from '../rules';
 import { addPoint, type MatchEvent, type Side } from '../scoring';
-import { captainVerdict, confirmProblem, countMatches, resultState, type CountableMatch } from '../antifraud';
+import { captainVerdict, confirmProblem, countMatches, LEGACY_VERDICT_BEFORE, resultState, type CountableMatch } from '../antifraud';
 import { REVIEW_RULES, reviewTriggered } from '../reviewPrompt';
 import { BUNDLED_DAILY_ITEMS, mergeDailyItems, msUntilNextIstDay, pickDaily, type DailyItem } from '../dailyItems';
 import { filterLicenses, licenseText, type LicenseData } from '../licenses';
@@ -38,10 +38,12 @@ function mk(over: Partial<CountableMatch> = {}): CountableMatch {
 
 describe('V137-1: a 1.3.6 captain confirmation (no `captain` field) survives admin approval', () => {
   // 1.3.6: captain confirmed (by/at set), then the admin approved: status 'approved', no `captain`.
-  const legacy = () => mk({ verification: { status: 'approved', by: 'b1', at: AT, reviewedBy: 'adm', reviewedAt: AT + 1000 } as CountableMatch['verification'] });
+  // 1.3.9 (V138-3): legacy = the captain answered before 1.3.7 (LEGACY_VERDICT_BEFORE)
+  const OLD = LEGACY_VERDICT_BEFORE - 86_400_000;
+  const legacy = () => mk({ verification: { status: 'approved', by: 'b1', at: OLD, reviewedBy: 'adm', reviewedAt: AT + 1000 } as CountableMatch['verification'] });
   it('captainVerdict reads the older fields', () => {
     expect(captainVerdict(legacy())).toBe('confirmed');
-    expect(captainVerdict(mk({ verification: { status: 'approved', by: 'b1', reason: 'wrong score', reviewedBy: 'adm' } as CountableMatch['verification'] }))).toBe('rejected');
+    expect(captainVerdict(mk({ verification: { status: 'approved', by: 'b1', at: OLD, reason: 'wrong score', reviewedBy: 'adm' } as CountableMatch['verification'] }))).toBe('rejected');
     expect(captainVerdict(mk({ verification: { status: 'approved', reviewedBy: 'adm' } as CountableMatch['verification'] }))).toBeNull();
     expect(captainVerdict(mk({ verification: { status: 'approved', by: 'b1', captain: 'rejected' } as CountableMatch['verification'] }))).toBe('rejected');
     expect(captainVerdict(mk({ verification: { status: 'confirmed', by: 'b1' } }))).toBe('confirmed');

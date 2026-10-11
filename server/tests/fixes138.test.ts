@@ -7,6 +7,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
+import { migrate } from '../src/db/migrate';
+import { EMAIL_NORM_SQL } from '../src/domain/users';
+import { LEGACY_VERDICT_BEFORE } from '../../src/core/antifraud';
 import { ADMIN, EVERYONE, acceptTermsFor, createMatch, newMatchBody, pt, register, startHarness, type Harness } from './helpers';
 
 let h: Harness;
@@ -39,7 +42,8 @@ const statements = (file: string, keep: RegExp) =>
     .filter((q) => q && keep.test(q));
 /** A 1.3.6-era row: the captain answered, the admin then approved; 0010 left captain_verdict NULL. */
 async function legacyApproved(id: string) {
-  await h.db('matches').where({ id }).update({ verification_status: 'approved', captain_verdict: null, reviewed_by: ADMIN.uid, reviewed_at: new Date() });
+  // 1.3.9 (V138-3): a legacy answer is one recorded before 1.3.7
+  await h.db('matches').where({ id }).update({ verification_status: 'approved', captain_verdict: null, reviewed_by: ADMIN.uid, reviewed_at: new Date(), verified_at: new Date(LEGACY_VERDICT_BEFORE - 86_400_000) });
 }
 
 describe('V137-1: a captain confirmation recorded before 1.3.7 survives the admin approval', () => {
@@ -119,14 +123,16 @@ describe('V137-8: one account per (normalised) email, enforced by the database',
       await h.db('users').where({ id: 'bob' }).update({ email: 'SAME@x.in', created_at: new Date(t0 - 2000) });
       await h.db('users').where({ id: 'dan' }).update({ email: ' same@x.in', created_at: new Date(t0 - 1000) });
       await h.db('users').where({ id: 'aarav' }).update({ email: 'solo@x.in' });
-      for (const q of statements('0013_users_email_unique.sql', /^(INSERT|UPDATE|CREATE UNIQUE)/)) await h.db.raw(q);
+      // 1.3.9: the whole (re-runnable) file, through the runner, as on a deploy
+      await h.db('schema_migrations').where({ version: '0013_users_email_unique.sql' }).del();
+      assert.deepEqual(await migrate(h.db), ['0013_users_email_unique.sql']);
       assert.equal((await h.db('users').count({ n: '*' }).first())!.n, before);
       const email = async (id: string) => (await h.db('users').where({ id }).first('email')).email;
       assert.deepEqual([await email('cap'), await email('bob'), await email('dan'), await email('aarav')], ['same@x.in', null, null, 'solo@x.in']);
       const listed = await h.db('email_duplicates_0013').orderBy('user_id').select('user_id', 'email', 'kept_user_id');
       assert.deepEqual(listed.map((r: { user_id: string; email: string; kept_user_id: string }) => [r.user_id, r.email, r.kept_user_id]), [['bob', 'SAME@x.in', 'cap'], ['dan', ' same@x.in', 'cap']]);
     } finally {
-      await h.db.raw("CREATE UNIQUE INDEX ux_users_email_norm ON users ((NULLIF(LOWER(TRIM(email)), '')))").catch(() => {});
+      await h.db.raw(`CREATE UNIQUE INDEX ux_users_email_norm ON users ((${EMAIL_NORM_SQL}))`).catch(() => {});
       await h.db('email_duplicates_0013').del();
     }
   });

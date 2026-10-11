@@ -1,4 +1,4 @@
-# Deploying VolleyLive (1.3.8)
+# Deploying VolleyLive (1.3.9)
 
 Nothing in this repo creates accounts, keys or cloud resources, and nothing is deployed for you. The
 builds handed over so far (`volleylive-latest.apk`) are **demo builds, debug-signed** – they must not go
@@ -56,8 +56,13 @@ Before submitting:
    at bundle time; commit the result).
 3. Server: set the env from `server/.env.example` (`NODE_ENV=production`, `AUTH_MODE=otp` or `firebase`,
    never `dev`; `CORS_ORIGINS` https only; `TRUST_PROXY`; `REDIS_URL` if more than one instance).
-   Migrations are additive (0001–0011); the Docker image runs them on start (`MIGRATE_ON_DEPLOY=1`).
-   **Back up the database first.**
+   Migrations are additive (0001–0013) and re-runnable; the Docker image runs them on start
+   (`MIGRATE_ON_DEPLOY=1`). 0013 was fixed in place in 1.3.9 (never deployed; see KNOWN-GAPS) and works on a
+   database whose default collation isn't `utf8mb4_0900_ai_ci`. **Back up the database first.**
+   If this server ran 1.3.6 after 2026-10-11 10:00 UTC, set `LEGACY_VERDICT_BEFORE`
+   (`src/core/antifraud.ts`) to the day it moved to 1.3.7+ before building (KNOWN-GAPS "Legacy captain answers").
+   Firebase: deploy `firestore.rules` together with the app (1.3.9 adds `users/{uid}/private/review` and
+   `dailyItems.createdAt`).
 4. App: `eas build -p android --profile production` (sets `APP_VARIANT=production`,
    `EXPO_PUBLIC_BACKEND=api`, `EXPO_PUBLIC_API_AUTH=otp`, `EXPO_PUBLIC_STRIP_DEMO=1`, empty demo admins).
    Set `EXPO_PUBLIC_API_URL=https://…` (https only) in the EAS "production" environment. The build
@@ -71,7 +76,7 @@ Before submitting:
 |-------|------|-----------------|
 | R1-01 | Demo-free production bundle | Done in code: `EXPO_PUBLIC_STRIP_DEMO=1` swaps the demo backend, seed and QA tools for stubs (`metro.config.js`, `src/stubs/`); `npm run check:strip` greps an export for demo markers (`Simulate offline`, `DEMO_OTP`, `makeSeed`, …). Run it on the real production export – the handed-over APK is a demo build on purpose. |
 | R2-01 | Not debug-signed | Needs Akshit's upload key / Play App Signing (above). Demo APKs stay debug-signed. |
-| R2-02 | versionCode/targetSdk | 1.3.8 = versionCode 14, minSdk 24, targetSdk 36, arm64-v8a included (no armeabi-v7a – product decision, V137-9). EAS `autoIncrement` for Play. |
+| R2-02 | versionCode/targetSdk | 1.3.9 = versionCode 15, minSdk 24, targetSdk 36, arm64-v8a included (no armeabi-v7a – product decision, V137-9). EAS `autoIncrement` for Play. |
 | R2-05 | Permissions | Location (coarse/fine), camera, internet, vibrate, media read/write (legacy). `RECORD_AUDIO` and `SYSTEM_ALERT_WINDOW` are blocked (`blockedPermissions`, `tools:node="remove"`). |
 | R5-03 | Secrets out of git/bundle | Only `EXPO_PUBLIC_*` reach the bundle and they hold no secrets; `.env.example` files are placeholders only; `.env` is git-ignored. |
 | R5-06 | No cleartext in release | Production build guard requires an `https://` API URL; use https for `PUBLIC_BASE_URL`. |

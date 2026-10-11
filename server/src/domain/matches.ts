@@ -13,6 +13,7 @@ import { notify, publicFileUrl, storedFileUrl, type Services } from '../context'
 import { badRequest, forbidden, HttpError, notFound } from '../errors';
 import { POTM_MESSAGES, potmProblem } from '../../../src/core/potm';
 import { hasStoredRegistration } from '../../../src/core/registration';
+import { dobString } from './users';
 import type { Identity } from '../auth/verifier';
 import { topics } from '../live/bus';
 import { checkNotPast, checkOrder } from '../../../src/core/validate';
@@ -51,7 +52,7 @@ export function serverFinishedAt(before: Pick<Doc, 'status' | 'finishedAt'> | nu
 export type ApiMatch = Match & { rotation: RotationState };
 
 /** Server-only fields (1.3.0): never part of a client document, written by dedicated actions only. */
-type ServerOnly = 'verification' | 'startedServerAt' | 'finishedServerAt';
+type ServerOnly = 'verification' | 'startedServerAt' | 'finishedServerAt' | 'confirmedAt';
 type Doc = Omit<Match, 'id' | 'summary' | 'createdAt' | 'updatedAt' | ServerOnly>;
 export const MATCH_KEYS: (keyof Doc)[] = [
   'title', 'teamA', 'teamB', 'rules', 'firstServe', 'events', 'status', 'createdBy', 'scorerId', 'participantIds', 'location',
@@ -273,6 +274,8 @@ export async function loadMatches(s: Services, db: Trx, ids: string[], viewer: I
       captains: r.captain_a && r.captain_b ? { A: r.captain_a, B: r.captain_b } : null,
       ...(r.team_size_mode ? { teamSizeMode: r.team_size_mode } : {}),
       verification: verificationFromRow(r, viewer, parts),
+      // 1.3.9 (V138-11): the confirmation time (verified_at), apart from the match's own times
+      confirmedAt: r.captain_verdict === 'confirmed' || (!r.captain_verdict && r.verification_status === 'confirmed') ? toMs(r.verified_at ?? null) : null,
       startedServerAt: toMs(r.started_server_at),
       // finished_at is always the server's clock (QA NB-R3), stamped when the match finished.
       finishedServerAt: r.status === 'finished' ? toMs(r.finished_at) : null,
@@ -315,7 +318,7 @@ export async function getMatch(s: Services, id: string, viewer: Identity | null)
 
 // ---------------- writing ----------------
 const docOf = (m: Match): Doc => {
-  const { id: _i, summary: _s, createdAt: _c, updatedAt: _u, verification: _v, startedServerAt: _ss, finishedServerAt: _fs, ...rest } = m as ApiMatch;
+  const { id: _i, summary: _s, createdAt: _c, updatedAt: _u, verification: _v, startedServerAt: _ss, finishedServerAt: _fs, confirmedAt: _ca, ...rest } = m as ApiMatch;
   delete (rest as Partial<ApiMatch>).rotation;
   return { ...rest, interestedIds: rest.interestedIds ?? [], lineups: rest.lineups ?? null };
 };
@@ -580,7 +583,7 @@ export async function createMatch(s: Services, viewer: Identity, input: Doc, fix
   // match – also a legacy row marked complete before 1.3.6 that has no registration fields.
   if (!fixedId) {
     const u = await s.db('users').where({ id: viewer.uid }).first('first_name', 'last_name', 'dob', 'pincode');
-    if (!u || !hasStoredRegistration({ firstName: u.first_name, lastName: u.last_name, dob: u.dob ? 'set' : null, pincode: u.pincode }))
+    if (!u || !hasStoredRegistration({ firstName: u.first_name, lastName: u.last_name, dob: u.dob ? dobString(u.dob) : null, pincode: u.pincode }))
       throw new HttpError(403, 'profile_incomplete', 'Complete your profile (name, date of birth and pincode) to create a match', { field: 'profile' });
   }
   const id = fixedId ?? newId(); // fixedId: seeds only
@@ -759,7 +762,11 @@ export async function listFlagged(s: Services, viewer: Identity) {
 
 // ---------------- queries ----------------
 export async function listMatchIds(db: Trx, q: { status?: string[]; participant?: string; tournament?: string; withLocation?: boolean; limit: number }) {
-  const query = db('matches').select('matches.id').orderBy('matches.updated_at', 'desc').limit(q.limit);
+  // 1.3.9 (V138-11): a player's matches by the match's own date (finished, started, scheduled, created):
+  // a confirmation or review bumps updated_at, which must not move an old match to the top
+  const query = db('matches').select('matches.id').limit(q.limit);
+  if (q.participant) query.orderByRaw('COALESCE(matches.finished_at, matches.started_at, matches.scheduled_at, matches.created_at) DESC, matches.id');
+  else query.orderBy('matches.updated_at', 'desc');
   if (q.status?.length) query.whereIn('matches.status', q.status);
   if (q.tournament) query.where('matches.tournament_id', q.tournament);
   if (q.withLocation) query.whereNotNull('matches.location_name');

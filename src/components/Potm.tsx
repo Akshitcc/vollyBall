@@ -23,20 +23,30 @@ export function PotmBadge({ match, compact }: { match: Match; compact?: boolean 
   const id = match.playerOfMatchId;
   const p = id ? playersOf(match).find((x) => x.id === id) : null;
   const pts = useMemo(() => (id ? potmLines(match).find((l) => l.playerId === id)?.points ?? 0 : 0), [match, id]);
+  // 1.3.9 (V138-10): say how this Player of the Match was decided (auto-pick rule, or the scorer's choice)
+  const auto = useMemo(() => (id ? pickPlayerOfMatch(match) : null), [match, id]);
   if (!id || !p) return null;
+  // (no auto-pick = nobody was credited a point: no rule to show)
+  const basis = auto === null ? null : auto === id ? t('potm.basisAuto') : t('potm.basisScorer');
   return (
-    <View style={[s.badge, compact && { marginVertical: 6 }]} testID="potm-badge" accessible accessibilityLabel={`${t('potm.title')}: ${p.name}`}>
+    <View style={[s.badge, compact && { marginVertical: 6 }]} testID="potm-badge" accessible accessibilityLabel={`${t('potm.title')}: ${p.name}${basis ? `. ${basis}` : ''}`}>
       <View style={s.star}>
         <Ionicons name="star" size={18} color={colors.ink} />
       </View>
       <Avatar name={p.name} uri={p.photoURL} size={36} color={p.color} />
       <View style={{ flex: 1, marginLeft: 10 }}>
-        <Text style={s.badgeLabel} numberOfLines={1}>
+        {/* 1.3.9 (V138-12): the label wraps instead of being cut ("PLAYER OF THE MAT…") */}
+        <Text style={s.badgeLabel} numberOfLines={2} testID="potm-label">
           {t('potm.title')}
         </Text>
         <Text style={s.badgeName} numberOfLines={1}>
           {p.name}
         </Text>
+        {basis ? (
+          <Text style={s.badgeBasis} testID="potm-basis">
+            {basis}
+          </Text>
+        ) : null}
       </View>
       <Text style={s.badgePts} numberOfLines={1}>
         {t('potm.points', { count: pts })}
@@ -86,6 +96,9 @@ export function PotmPicker({ match, uid, onDark }: { match: Match; uid: string; 
       </Text>
       <Text style={s.note} testID="potm-auto-note">
         {auto ? t('potm.autoNote', { name: byId.get(auto)?.name ?? '', count: pts.get(auto) ?? 0 }) : t('potm.noAuto')}
+      </Text>
+      <Text style={s.zeroHint} testID="potm-rule">
+        <Ionicons name="information-circle-outline" size={13} color={colors.muted} /> {t('potm.rule')}
       </Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 4 }}>
         {lines.map((l) => {
@@ -145,6 +158,7 @@ const s = StyleSheet.create({
   badgeLabel: { fontSize: 12, fontWeight: '900', color: colors.primaryText, textTransform: 'uppercase' },
   badgeName: { fontSize: 17, fontWeight: '900', color: colors.ink },
   badgePts: { fontSize: 13, fontWeight: '800', color: colors.ink, marginLeft: 6 },
+  badgeBasis: { fontSize: 12, fontWeight: '600', color: colors.muted, marginTop: 2 },
   picker: { borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 12, marginVertical: 8, backgroundColor: colors.white },
   pickerTitle: { fontSize: 17, fontWeight: '900', color: colors.ink },
   note: { fontSize: 13, color: colors.muted, marginTop: 2, marginBottom: 4 },

@@ -129,7 +129,14 @@ export interface Match {
   startedServerAt?: number | null;
   finishedServerAt?: number | null;
   createdAt: number;
+  /** Last modification of the document (any write: scoring, confirmation, review…). Never the match's date. */
   updatedAt: number;
+  /**
+   * 1.3.9 (V138-11): when the opposing captain confirmed the result (server time), kept apart from the
+   * match's own times – confirming never changes startedAt / finishedAt / scheduledAt / createdAt.
+   * Filled on read by every backend (API: verified_at, Firebase/demo: verification.at); see core/antifraud.ts confirmedAtOf.
+   */
+  confirmedAt?: number | null;
 }
 
 export interface MatchCaptains {

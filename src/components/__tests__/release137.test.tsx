@@ -128,7 +128,8 @@ describe('About VolleyLive', () => {
     expect(committed.packages.length).toBeGreaterThan(Object.keys(pkg.dependencies).length * 5); // and transitive ones
     for (const dev of Object.keys(pkg.devDependencies ?? {}).filter((d) => !pkg.dependencies[d])) {
       // a dev-only tool appears only when a production package depends on it too
-      if (names.has(dev)) expect(dev).toMatch(/^(jest-worker|@types\/node)$/);
+      // 1.3.9 (V138-5): @types/react comes in through react-native-gesture-handler's own dependencies
+      if (names.has(dev)) expect(dev).toMatch(/^(jest-worker|@types\/node|@types\/react)$/);
     }
     const store = committed.packages.find((x: { name: string }) => x.name === 'expo-store-review');
     expect(store.license).toBe('MIT');

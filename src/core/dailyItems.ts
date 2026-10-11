@@ -7,6 +7,7 @@
  * Quotes ONLY with a solid, verified attribution and a source URL – none made the cut for 1.3.7, so the
  * bundled list is facts only. HI translations: reviewed by QA in 1.3.7 (20 rewrites applied in 1.3.8).
  */
+import { HIDDEN_RE } from './text';
 import { todayIST } from './registration';
 import { CodedError } from './codedError';
 
@@ -19,11 +20,28 @@ export interface DailyItem {
   attribution?: string | null;
   sourceUrl?: string | null;
   active: boolean;
+  /** 1.3.9 (V138-7): when an admin added it (server time, ms). Bundled items have none (= always in the rotation). */
+  createdAt?: number | null;
 }
 
 const RULES = 'FIVB Official Volleyball Rules';
 const f = (id: number, textEn: string, textHi: string, attribution = RULES): DailyItem => ({ id: `b${String(id).padStart(2, '0')}`, type: 'fact', textEn, textHi, attribution, sourceUrl: null, active: true });
 const HIST = 'Volleyball history (FIVB / Olympics)';
+const BEACH = 'FIVB Official Beach Volleyball Rules';
+
+/** 1.3.9 (V138-14): Hindi names of the bundled sources (shown as "स्रोत: …"); other attributions are shown as written. */
+export const ATTRIBUTION_HI: Readonly<Record<string, string>> = Object.freeze({
+  [RULES]: 'एफआईवीबी के आधिकारिक वॉलीबॉल नियम',
+  [BEACH]: 'एफआईवीबी के आधिकारिक बीच वॉलीबॉल नियम',
+  [HIST]: 'वॉलीबॉल का इतिहास (एफआईवीबी / ओलंपिक)',
+  'World ParaVolley rules': 'वर्ल्ड पैरावॉली के नियम',
+  'Volleyball terminology': 'वॉलीबॉल की शब्दावली',
+});
+export function dailyAttribution(item: Pick<DailyItem, 'attribution'>, lang: string): string | null {
+  const a = item.attribution ?? null;
+  if (!a) return null;
+  return lang.startsWith('hi') ? ATTRIBUTION_HI[a] ?? a : a;
+}
 
 /** Bundled facts (offline + demo). HI: QA-reviewed (1.3.8). */
 export const BUNDLED_DAILY_ITEMS: readonly DailyItem[] = Object.freeze([
@@ -32,7 +50,7 @@ export const BUNDLED_DAILY_ITEMS: readonly DailyItem[] = Object.freeze([
   f(3, 'William G. Morgan was a YMCA physical education director when he created the game.', 'खेल बनाते समय विलियम जी. मॉर्गन YMCA में शारीरिक शिक्षा निदेशक थे।', HIST),
   f(4, 'The name “volley ball” came after a demonstration in 1896, because players volley the ball back and forth over the net.', '“वॉली बॉल” नाम 1896 के एक प्रदर्शन के बाद आया, क्योंकि खिलाड़ी गेंद को नेट के ऊपर से एक-दूसरे की ओर वॉली करते हैं।', HIST),
   f(5, 'An indoor volleyball team has 6 players on court.', 'इनडोर वॉलीबॉल में एक टीम के 6 खिलाड़ी कोर्ट पर होते हैं।'),
-  f(6, 'Beach volleyball is played with 2 players per team.', 'बीच वॉलीबॉल में हर टीम में 2 खिलाड़ी होते हैं।', 'FIVB Official Beach Volleyball Rules'),
+  f(6, 'Beach volleyball is played with 2 players per team.', 'बीच वॉलीबॉल में हर टीम में 2 खिलाड़ी होते हैं।', BEACH),
   f(7, 'A set is won by the first team to reach 25 points with a lead of at least 2 points.', 'सेट वह टीम जीतती है जो पहले 25 अंक तक पहुँचे और कम से कम 2 अंक आगे हो।'),
   f(8, 'The deciding fifth set is played to 15 points, still with a 2-point lead.', 'निर्णायक पाँचवाँ सेट 15 अंकों तक खेला जाता है, इसमें भी 2 अंक की बढ़त ज़रूरी है।'),
   f(9, 'A match is won by the team that wins three sets (best of five).', 'मैच वह टीम जीतती है जो पाँच में से तीन सेट जीते।'),
@@ -52,7 +70,7 @@ export const BUNDLED_DAILY_ITEMS: readonly DailyItem[] = Object.freeze([
   f(23, 'An indoor court measures 18 m × 9 m.', 'इनडोर कोर्ट 18 मी × 9 मी का होता है।'),
   f(24, 'The attack line is 3 m from the centre line on each side.', 'अटैक लाइन हर तरफ़ सेंटर लाइन से 3 मी दूर होती है।'),
   f(25, 'The net is 2.43 m high for men and 2.24 m for women.', 'नेट की ऊँचाई पुरुषों के लिए 2.43 मी और महिलाओं के लिए 2.24 मी होती है।'),
-  f(26, 'A beach volleyball court measures 16 m × 8 m.', 'बीच वॉलीबॉल कोर्ट 16 मी × 8 मी का होता है।', 'FIVB Official Beach Volleyball Rules'),
+  f(26, 'A beach volleyball court measures 16 m × 8 m.', 'बीच वॉलीबॉल कोर्ट 16 मी × 8 मी का होता है।', BEACH),
   f(27, 'A ball that lands on the boundary line is in.', 'सीमा रेखा पर गिरी गेंद अंदर मानी जाती है।'),
   f(28, 'The ball must cross the net between the two antennae.', 'गेंद को दोनों एंटीना के बीच से ही नेट पार करना चाहिए।'),
   f(29, 'A serve that touches the net but still crosses into the opponents’ court stays in play.', 'जो सर्व नेट को छूकर भी विरोधी कोर्ट में चला जाए, वह खेल में रहता है।'),
@@ -77,9 +95,9 @@ export const BUNDLED_DAILY_ITEMS: readonly DailyItem[] = Object.freeze([
   f(48, 'The Volleyball Nations League began in 2018.', 'वॉलीबॉल नेशंस लीग 2018 में शुरू हुई।', HIST),
   f(49, 'Sitting volleyball has been a Paralympic sport for men since 1980 and for women since 2004.', 'सिटिंग वॉलीबॉल पुरुषों के लिए 1980 से और महिलाओं के लिए 2004 से पैरालंपिक खेल है।', HIST),
   f(50, 'In sitting volleyball the net is 1.15 m high for men and 1.05 m for women.', 'सिटिंग वॉलीबॉल में नेट पुरुषों के लिए 1.15 मी और महिलाओं के लिए 1.05 मी ऊँचा होता है।', 'World ParaVolley rules'),
-  f(51, 'Beach volleyball sets are played to 21 points, and a deciding third set to 15.', 'बीच वॉलीबॉल के सेट 21 अंकों तक खेले जाते हैं, और निर्णायक तीसरा सेट 15 अंकों तक।', 'FIVB Official Beach Volleyball Rules'),
-  f(52, 'In beach volleyball teams switch sides every 7 points (every 5 in the third set).', 'बीच वॉलीबॉल में टीमें हर 7 अंक पर पाला बदलती हैं (तीसरे सेट में हर 5 अंक पर)।', 'FIVB Official Beach Volleyball Rules'),
-  f(53, 'Beach volleyball has no substitutions.', 'बीच वॉलीबॉल में कोई सब्स्टिट्यूशन नहीं होता।', 'FIVB Official Beach Volleyball Rules'),
+  f(51, 'Beach volleyball sets are played to 21 points, and a deciding third set to 15.', 'बीच वॉलीबॉल के सेट 21 अंकों तक खेले जाते हैं, और निर्णायक तीसरा सेट 15 अंकों तक।', BEACH),
+  f(52, 'In beach volleyball teams switch sides every 7 points (every 5 in the third set).', 'बीच वॉलीबॉल में टीमें हर 7 अंक पर पाला बदलती हैं (तीसरे सेट में हर 5 अंक पर)।', BEACH),
+  f(53, 'Beach volleyball has no substitutions.', 'बीच वॉलीबॉल में कोई सब्स्टिट्यूशन नहीं होता।', BEACH),
   f(54, 'An “ace” is a serve that wins the point directly.', '“ऐस” वह सर्व है जिससे सीधे अंक मिल जाए।', 'Volleyball terminology'),
   f(55, 'A “kill” is an attack that wins the point directly.', '“किल” वह अटैक है जिससे सीधे अंक मिल जाए।', 'Volleyball terminology'),
   f(56, 'A “dig” is passing a hard-driven attack to keep the rally alive.', '“डिग” का मतलब है तेज़ अटैक को उठाकर रैली जारी रखना।', 'Volleyball terminology'),
@@ -94,9 +112,31 @@ export function istDayNumber(now = Date.now()): number {
   return Math.floor(Date.parse(`${todayIST(now)}T00:00:00Z`) / 86_400_000);
 }
 
-/** Today's item (+offset for "next"), from the active items in a stable order. */
+/** ms of today's IST midnight. */
+export function istDayStart(now = Date.now()): number {
+  return Date.parse(`${todayIST(now)}T00:00:00+05:30`);
+}
+
+/**
+ * Today's item (+offset for "next").
+ *
+ * 1.3.9 (QA V138-7) – stable daily selection:
+ *  - the rotation is the active items ORDERED BY ID, and the rotation index is the IST day number
+ *    (`list[day % n]`), so every item comes round once in any n consecutive days;
+ *  - an item an admin adds today (createdAt ≥ today's IST midnight) joins the rotation from TOMORROW, so
+ *    adding a fact never changes today's fact for anyone, and the new fact is shown within the next cycle
+ *    (at most n days, n = number of items in the rotation);
+ *  - deactivating or deleting an item takes effect at once (an admin hiding a fact expects it gone), which
+ *    can change today's fact – documented in KNOWN-GAPS;
+ *  - bundled items have no createdAt and are always in the rotation; an item with no createdAt from a backend
+ *    (pre-1.3.9 Firebase docs) is treated the same.
+ */
 export function pickDaily(items: readonly DailyItem[], now = Date.now(), offset = 0): DailyItem | null {
-  const list = items.filter((i) => i.active).slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const today = istDayStart(now);
+  const list = items
+    .filter((i) => i.active && !(typeof i.createdAt === 'number' && i.createdAt >= today))
+    .slice()
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   if (!list.length) return null;
   const n = list.length;
   return list[(((istDayNumber(now) + offset) % n) + n) % n];
@@ -120,7 +160,8 @@ export function msUntilNextIstDay(now = Date.now()): number {
 }
 
 export const DAILY_LIMITS = Object.freeze({ text: 400, attribution: 120, url: 500 });
-const CTRL = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
+// 1.3.9 (V138-4): the shared hidden-character set (core/text.ts; firestore.rules dailyItems uses hidden())
+const CTRL = HIDDEN_RE;
 const bad = (field: string, code = 'daily_invalid') => Object.assign(new CodedError(code, `Invalid ${field}`), { field });
 /** Admin add/edit (app, demo, API server). Quotes need an attribution and an https source URL. */
 export function checkDailyItem(x: Partial<DailyItem>): Omit<DailyItem, 'id'> {

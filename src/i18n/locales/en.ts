@@ -154,6 +154,11 @@ const en = {
     nothingScheduled: 'Nothing scheduled',
   },
   profile: {
+    // 1.3.9 (V138-13): admin tools, shown on Profile only to admins (demo admin / server role)
+    adminSection: 'Admin',
+    adminReview: 'Admin: Review flagged',
+    adminFacts: 'Admin: Facts',
+    adminFeedback: 'Admin: Feedback',
     privateDetails: 'My details (only you can see these)',
     pinLine: 'Pincode: {{pin}}',
     dobAge_one: '{{dob}} · {{count}} year',
@@ -876,6 +881,10 @@ const en = {
     auto: 'AUTO',
     confirm: 'Confirm {{name}}',
     choose: 'Choose a player',
+    // 1.3.9 (V138-10): how the pick works, shown with it (core/potm.ts)
+    basisAuto: 'Most player points, from either team',
+    basisScorer: 'Chosen by the scorer (the auto-pick is the most player points, from either team)',
+    rule: 'How it’s picked: the most points credited to a player, from either team. Team points don’t count. Tie: more points in the deciding set, then a fixed order.',
   },
   rankings: {
     ofTotal: "of {{total}}",
@@ -979,13 +988,20 @@ const en = {
   verify: {
     awaiting_potm: "Waiting for Player of the Match",
     awaiting_confirmation: "Waiting for the other captain",
-    confirmed: "Result confirmed",
+    // 1.3.9 (V138-12): one message after confirming (the badge); the inline notice only when the badge says something else
+    confirmed: "Result confirmed by the opposing captain",
     flagged: "Flagged: doesn't count until an admin reviews it",
     approved: "Approved by an admin",
     // 1.3.7 (F135-1): approval clears the flag only
     approved_awaiting_confirmation: "Flag cleared · Waiting for opponent confirmation",
     approved_rejected: "Flag cleared, but the opponent rejected the result: doesn't count",
     approveClears: "Approve (clears the flag)",
+    // 1.3.9 (V138-14): short button text + a subtitle under it (the long labels clipped at 360 px in Hindi)
+    approveShort: "Approve",
+    voidShort: "Void",
+    approveSubClears: "Clears the flag",
+    approveSubCounts: "Counts",
+    voidSub: "Never counts",
     waitingOpponent: "Waiting for opponent confirmation",
     opponentConfirmed: "Opponent confirmed",
     opponentRejected: "Opponent rejected: won't count even if approved",
@@ -1005,7 +1021,7 @@ const en = {
     reason: "What's wrong? (optional)",
     sendReject: "Reject result",
     cancel: "Cancel",
-    confirmedToast: "Result confirmed",
+    confirmedToast: "Result confirmed by the opposing captain",
     rejectedToast: "Result reported. An admin will review it.",
     waitingFor: "{{name}} (captain) confirms the result",
     captains: "Captains",

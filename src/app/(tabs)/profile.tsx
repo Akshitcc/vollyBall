@@ -137,11 +137,21 @@ export default function Profile() {
 
         <View style={{ paddingHorizontal: 16, marginTop: -64 }}>
           <RankCard rankings={rankings} style={{ marginTop: 0 }} />
-          {/* 1.3.0: in-app points wallet (balance only) and, for admins, the review queue */}
+          {/* 1.3.0: in-app points wallet (balance only) */}
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
             <Button title={t('wallet.open')} icon="wallet-outline" variant="secondary" onPress={() => router.push('/wallet')} style={{ flex: 1 }} testID="open-wallet" />
-            {isAdmin ? <Button title={t('verify.flaggedList')} icon="flag-outline" variant="secondary" onPress={() => router.push('/admin-review')} style={{ flex: 1 }} testID="open-admin" /> : null}
           </View>
+          {/* 1.3.9 (V138-13): all admin tools in one place, only for admins (isAdmin comes from the backend:
+              the demo admin in demo, the server's admin role on the API, the admin claim on Firebase).
+              Stacked full-width so the Hindi labels never clip. The screens check admin rights themselves. */}
+          {isAdmin ? (
+            <View style={[card, { marginTop: 10, gap: 8 }]} testID="profile-admin">
+              <Text style={{ color: colors.muted, fontSize: 12, fontWeight: '700' }}>{t('profile.adminSection')}</Text>
+              <Button title={t('profile.adminReview')} icon="flag-outline" variant="secondary" onPress={() => router.push('/admin-review')} testID="open-admin" />
+              <Button title={t('profile.adminFacts')} icon="bulb-outline" variant="secondary" onPress={() => router.push('/admin-daily')} testID="open-admin-facts" />
+              <Button title={t('profile.adminFeedback')} icon="chatbox-outline" variant="secondary" onPress={() => router.push('/admin-feedback')} testID="open-admin-feedback-profile" />
+            </View>
+          ) : null}
 
           {/* 1.3.7 (R136-19): my own registration details – only on my own Profile tab (other players never get them) */}
           {me.dob || me.pincode ? (

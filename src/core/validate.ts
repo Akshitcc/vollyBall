@@ -42,7 +42,7 @@ export function checkText(field: string, raw: unknown, key: LimitKey, opts: { mu
   const p = textProblem(raw, limit, opts);
   if (p) throw new ValidationError(TEXT_ERROR_CODES[p], field, { min: limit.min, max: limit.max });
   if (raw == null) return undefined;
-  const s = cleanText(raw as string);
+  const s = cleanText(raw as string, { name: limit.min > 0 }); // 1.3.9 (V138-4): names keep Devanagari joiners
   return s === '' ? undefined : s;
 }
 

@@ -64,7 +64,7 @@ const LIVE_STATUSES = ['live', 'scheduled'];
  * server times and T&C acceptance have their own actions). A client sending one gets 400 instead of a
  * silent strip, so a forged write is visible (QA AF-46, AF-51, WL-03, TC-08).
  */
-const SERVER_ONLY_FIELDS = ['verification', 'startedServerAt', 'finishedServerAt', 'points', 'bonus', 'winBonus', 'wallet', 'balance', 'rankingPoints', 'termsVersion', 'termsAcceptedAt', 'flags', 'isAdmin', 'role'];
+const SERVER_ONLY_FIELDS = ['verification', 'startedServerAt', 'finishedServerAt', 'confirmedAt' /* 1.3.9 V138-11 */, 'points', 'bonus', 'winBonus', 'wallet', 'balance', 'rankingPoints', 'termsVersion', 'termsAcceptedAt', 'flags', 'isAdmin', 'role'];
 function rejectServerFields(body: unknown) {
   if (!body || typeof body !== 'object') return;
   const bad = SERVER_ONLY_FIELDS.filter((k) => k in (body as object));

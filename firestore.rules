@@ -40,18 +40,27 @@ service cloud.firestore {
     // Checked on write only (create, or update of that field): stored documents are never rewritten.
     // One regex each (cheap in the rules' 1000-expression budget). Allowed characters exclude
     // control (C0/C1, incl. tab/newline), soft hyphen, zero-width, bidi marks/overrides/isolates, BOM.
+    // 1.3.9 (V138-4): ONE hidden-character set, written out in each regex below (no string building:
+    // match writes are close to the expression budget) and equal to src/core/text.ts HIDDEN_CHARS –
+    // rules-tests parse every copy and compare: C0/C1, U+00AD, U+061C, U+180E, U+200B-200F, U+2028/2029,
+    // U+202A-202E, U+2060-2064, U+2066-2069, U+FEFF. Variants: multi-line text (feedback, challenge
+    // message) allows newline/tab. Names (nameRe): ZWNJ/ZWJ (U+200C/200D, in the set) appear only inside
+    // a "joined chain" D(JD)+ of Devanagari characters D, so a joiner is always directly between two
+    // Devanagari characters (src/core/text.ts removeInvisible keeps exactly these) - in the regex
+    // itself, at no extra expression cost. The chain also counts as the required letter when it holds
+    // a Devanagari letter or digit.
     // textRe: empty, or starts and ends with a character JavaScript's trim() keeps: not ASCII space,
     // no-break space, U+1680, U+2000-200A, line/paragraph separator, U+202F, U+205F, U+3000, and
     // not an invisible filler (Hangul U+115F/1160/3164/FFA0, braille blank U+2800), the same set
     // src/core/text.ts cleanText trims (QA retest 217 #4, #7). U+180E is refused anywhere (the app
     // removes it). nameRe: same, plus a letter or digit somewhere that is not a filler.
     // Lengths: size() counts UTF-16 units and so does the app (text.ts textLength, retest 217 #6).
-    function textRe() { return '^([^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]([^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}])?)?$'; }
-    function nameRe() { return '^((?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})|(?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})[^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]|[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}][^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*(?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})|[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}][^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*(?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})[^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}])$'; }
+    function textRe() { return '^([^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]([^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]*[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}])?)?$'; }
+    function nameRe() { return '^((?:(?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})|(?:[\\x{900}-\\x{97F}][\\x{200C}\\x{200D}])*(?:[^\\P{L}\\x{0}-\\x{8FF}\\x{980}-\\x{10FFFF}]|[\\x{966}-\\x{96F}])(?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])*)|(?:(?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})|(?:[\\x{900}-\\x{97F}][\\x{200C}\\x{200D}])*(?:[^\\P{L}\\x{0}-\\x{8FF}\\x{980}-\\x{10FFFF}]|[\\x{966}-\\x{96F}])(?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])*)(?:[^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]|[\\x{900}-\\x{97F}](?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])+)*(?:[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]|[\\x{900}-\\x{97F}](?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])+)|(?:[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]|[\\x{900}-\\x{97F}](?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])+)(?:[^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]|[\\x{900}-\\x{97F}](?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])+)*(?:(?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})|(?:[\\x{900}-\\x{97F}][\\x{200C}\\x{200D}])*(?:[^\\P{L}\\x{0}-\\x{8FF}\\x{980}-\\x{10FFFF}]|[\\x{966}-\\x{96F}])(?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])*)|(?:[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]|[\\x{900}-\\x{97F}](?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])+)(?:[^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]|[\\x{900}-\\x{97F}](?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])+)*(?:(?:[^\\P{L}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}]|\\p{N})|(?:[\\x{900}-\\x{97F}][\\x{200C}\\x{200D}])*(?:[^\\P{L}\\x{0}-\\x{8FF}\\x{980}-\\x{10FFFF}]|[\\x{966}-\\x{96F}])(?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])*)(?:[^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]|[\\x{900}-\\x{97F}](?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])+)*(?:[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]|[\\x{900}-\\x{97F}](?:[\\x{200C}\\x{200D}][\\x{900}-\\x{97F}])+))$'; }
     function textOk(s, max) { return s is string && s.size() <= max && s.matches(textRe()); }
     function optTextOk(s, max) { return s == null || textOk(s, max); }
     function nameOk(s, min, max) { return s is string && s.size() >= min && s.size() <= max && s.matches(nameRe()); }
-    function noBadChars(s) { return s.matches('[^\\x{0}-\\x{9}\\x{B}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]*'); }  // multi-line text: newline allowed
+    function noBadChars(s) { return s.matches('[^\\x{0}-\\x{8}\\x{B}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]*'); }  // multi-line text: newline/tab allowed
     function intIn(v, lo, hi) { return v is int && v >= lo && v <= hi; }
     function optIntIn(v, lo, hi) { return v == null || intIn(v, lo, hi); }
     function msOk(v) { return v is int && v >= 0; }
@@ -275,10 +284,20 @@ service cloud.firestore {
       // the owner reads or writes them (the profile doc above is readable by every signed-in user).
       // Same checks as src/core/registration.ts: real past date, age minAge()..100 in IST, optional
       // email, pincode ^[1-9][0-9]{5}$ (the India Post lookup happens in the app / API server only).
+      // 1.3.9 (V137-4): the in-app review prompt's clock (services/review.ts, firebaseBackend.reviewClock):
+      // lastAskedAt (when we last asked) and checkedAt (written just to read the server's "now") are server
+      // timestamps – each is either unchanged or exactly request.time, so the 60-day check never uses the phone clock.
+      function stampOk(d, old, k) {
+        return d.get(k, null) == (old == null ? null : old.get(k, null)) || d.get(k, null) == request.time;
+      }
+      function reviewClockOk(d, old) {
+        return d.keys().hasOnly(['checkedAt', 'lastAskedAt']) && stampOk(d, old, 'checkedAt') && stampOk(d, old, 'lastAskedAt');
+      }
       match /private/{docId} {
         allow read: if signedIn() && uid() == userId;
-        allow create, update: if signedIn() && uid() == userId && docId == 'registration'
-          && registrationOk(request.resource.data, resource == null ? null : resource.data.get('dob', null));
+        allow create, update: if signedIn() && uid() == userId && ((docId == 'registration'
+          && registrationOk(request.resource.data, resource == null ? null : resource.data.get('dob', null)))
+          || (docId == 'review' && reviewClockOk(request.resource.data, resource == null ? null : resource.data)));
         allow delete: if false;
       }
     }
@@ -519,7 +538,7 @@ service cloud.firestore {
     // Optional one-line text of at most 120 UTF-16 units (as the app counts): no control/zero-width/bidi characters and
     // no leading/trailing space, in ONE regex (the roster checks use most of the rules'
     // 1000-expression budget, so match checks are kept to a few expressions each).
-    function titleOk(t) { return t == null || (t is string && t.size() <= 120 && t.matches('^([^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]([^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]{0,118}[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}])?)?$')); }
+    function titleOk(t) { return t == null || (t is string && t.size() <= 120 && t.matches('^([^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]([^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}]{0,118}[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}])?)?$')); }
     // ks = the doc's keys (create, extra = 'createdBy'; createdBy == uid() is required there) or the
     // changed keys (update, extra = 'title'). 1.3.7: createdBy is only allowed on create, so no update can
     // change it (this replaced the scorer's createdBy comparison: the 12-a-side finishing write and the
@@ -674,9 +693,11 @@ service cloud.firestore {
             ? !onSide(r, true, r.scorerId) && !onSide(r, true, r.createdBy)
             : (uid() == r.captains.B && !onSide(r, false, r.scorerId) && !onSide(r, false, r.createdBy)));
     }
-    // verdict 'confirmed'/'rejected' must match the decision; older clients may leave it out
+    // verdict 'confirmed'/'rejected' must match the decision. 1.3.9 (V138-3): required on every new
+    // answer (1.3.7+ clients always send it); a 1.3.6 client's answer without it is refused, so the
+    // ambiguous older shape (approved + by, no reason, no verdict) can't be created any more.
     function verdictOk(v, decision) {
-      return v.get('captain', null) == null || v.get('captain', null) == (decision == 'confirmed' ? 'confirmed' : 'rejected');
+      return v.get('captain', null) == (decision == 'confirmed' ? 'confirmed' : 'rejected');
     }
     function confirmFromPending(v) {
       return v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain'])
@@ -713,7 +734,10 @@ service cloud.firestore {
         && v.status in ['approved', 'voided'] && v.reviewedBy == uid() && v.reviewedAt == request.time
         && v.get('by', null) == old.get('by', null) && v.get('at', null) == old.get('at', null)
         && v.get('reason', null) == old.get('reason', null)
-        && (v.get('captain', null) == old.get('captain', null) || v.get('captain', null) == verdictFromOld(old));
+        // 1.3.9 (V138-3): when the captain answered (`by`), the approval/void MUST carry the verdict
+        // (stored, or derived from the older status); an outdated admin client that drops it is refused.
+        // Nobody answered: no verdict can be added.
+        && (old.get('by', null) == null ? v.get('captain', null) == null : v.get('captain', null) == verdictFromOld(old));
     }
     function verificationWriteOk() {
       return changed().hasOnly(['verification', 'updatedAt'])
@@ -1027,8 +1051,8 @@ service cloud.firestore {
         && request.resource.data.userId == uid()
         && request.resource.data.stars is int && request.resource.data.stars >= 1 && request.resource.data.stars <= 5
         && request.resource.data.text is string && request.resource.data.text.size() <= 1000
-        && !request.resource.data.text.matches('(?s).*[\\x00-\\x08\\x0B-\\x1F\\x7F\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2066}-\\x{2069}\\x{FEFF}].*')
-        && (request.resource.data.get('appVersion', null) == null || !request.resource.data.appVersion.matches('(?s).*[\\x00-\\x1F\\x7F\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2066}-\\x{2069}\\x{FEFF}].*'))
+        && !request.resource.data.text.matches('(?s).*[\\x{0}-\\x{8}\\x{B}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}].*')
+        && (request.resource.data.get('appVersion', null) == null || !request.resource.data.appVersion.matches('(?s).*[\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}].*'))
         && (request.resource.data.get('appVersion', null) == null || (request.resource.data.appVersion is string && request.resource.data.appVersion.size() <= 40))
         && request.resource.data.createdAt == request.time;
       allow update, delete: if false;
@@ -1040,10 +1064,10 @@ service cloud.firestore {
       allow read: if true;
       // 1.3.8 (V137-5): no control / zero-width / bidi characters (core/dailyItems.ts CTRL)
       function cleanText(x) {
-        return !x.matches('(?s).*[\\x00-\\x1F\\x7F-\\x{9F}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2066}-\\x{2069}\\x{FEFF}].*');
+        return !x.matches('(?s).*[\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}].*');
       }
       function dailyOk(d) {
-        return d.keys().hasOnly(['type', 'textEn', 'textHi', 'attribution', 'sourceUrl', 'active', 'updatedAt'])
+        return d.keys().hasOnly(['type', 'textEn', 'textHi', 'attribution', 'sourceUrl', 'active', 'updatedAt', 'createdAt'])
           && d.keys().hasAll(['type', 'textEn', 'textHi', 'active'])
           && d.type in ['fact', 'quote'] && d.active is bool
           && d.textEn is string && d.textEn.size() > 0 && d.textEn.size() <= 400 && cleanText(d.textEn)
@@ -1052,7 +1076,13 @@ service cloud.firestore {
           && (d.get('sourceUrl', null) == null || (d.sourceUrl is string && d.sourceUrl.size() <= 500 && d.sourceUrl.matches('https://[^\\s]+') && cleanText(d.sourceUrl)))
           && (d.type == 'fact' || (d.get('attribution', null) is string && d.get('sourceUrl', null) is string));
       }
-      allow create, update: if signedIn() && isAdmin() && dailyOk(request.resource.data);
+      // 1.3.9 (V138-7): createdAt = server time on create, unchanged afterwards (a new fact joins the daily
+      // rotation the next IST day: core/dailyItems.ts pickDaily). Absent (pre-1.3.9 admin app / docs): the item
+      // is simply always in the rotation. It can never be back- or forward-dated.
+      allow create: if signedIn() && isAdmin() && dailyOk(request.resource.data)
+        && (request.resource.data.get('createdAt', null) == null || request.resource.data.createdAt == request.time);
+      allow update: if signedIn() && isAdmin() && dailyOk(request.resource.data)
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null);
       allow delete: if signedIn() && isAdmin();
     }
   }

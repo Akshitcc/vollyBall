@@ -108,8 +108,8 @@ describe('services/review', () => {
 
 describe('feedback validation', () => {
   it('1–5 whole stars; text trimmed, control / zero-width removed, <= 1000 characters', () => {
-    expect(checkFeedback({ stars: 5, text: '  ok\u200B ' })).toEqual({ stars: 5, text: 'ok' });
-    expect(checkFeedback({ stars: 1 })).toEqual({ stars: 1, text: '' });
+    expect(checkFeedback({ stars: 5, text: '  ok\u200B ' })).toEqual({ stars: 5, text: 'ok', appVersion: null }); // 1.3.9: appVersion is cleaned here too
+    expect(checkFeedback({ stars: 1 })).toEqual({ stars: 1, text: '', appVersion: null });
     for (const s of [0, 6, 2.5, 'x', null]) expect(() => checkFeedback({ stars: s })).toThrow(expect.objectContaining({ code: 'feedback_stars' }));
     expect(checkFeedback({ stars: 3, text: 'अ'.repeat(FEEDBACK_MAX) }).text).toHaveLength(FEEDBACK_MAX);
     expect(() => checkFeedback({ stars: 3, text: 'x'.repeat(FEEDBACK_MAX + 1) })).toThrow(expect.objectContaining({ code: 'feedback_too_long' }));

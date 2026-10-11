@@ -5,6 +5,7 @@
  * after at least MIN_COMPLETED completed matches, at most once every COOLDOWN_DAYS per user, and never
  * while live scoring. Reviews are never rewarded (no points, no badges, nothing).
  */
+import { stripHidden } from './text';
 import { CodedError } from './codedError';
 
 export const REVIEW_RULES = Object.freeze({ MIN_COMPLETED: 3, COOLDOWN_DAYS: 60, RECENT_MINUTES: 10 });
@@ -72,10 +73,17 @@ export const PLAY_WEB_URL = `https://play.google.com/store/apps/details?id=${PLA
 
 /** Feedback (Profile > Send feedback): 1–5 stars, optional text up to FEEDBACK_MAX characters. */
 export const FEEDBACK_MAX = 1000;
-export function checkFeedback(f: { stars?: unknown; text?: unknown }): { stars: number; text: string } {
+/**
+ * Every backend (API server, demo, Firebase app) stores exactly this. 1.3.9 (V138-4): the text loses
+ * every character of the shared hidden set (core/text.ts HIDDEN_CHARS) except newline and tab, so
+ * firestore.rules (hiddenML()) never refuses what the app sends; the app version keeps only
+ * [0-9A-Za-z.+- ()] (as the API always did) and is null when nothing is left.
+ */
+export function checkFeedback(f: { stars?: unknown; text?: unknown; appVersion?: unknown }): { stars: number; text: string; appVersion: string | null } {
   const stars = Number(f.stars);
   if (!Number.isInteger(stars) || stars < 1 || stars > 5) throw Object.assign(new CodedError('feedback_stars', 'Choose 1 to 5 stars'), { field: 'stars' });
-  const text = String(f.text ?? '').replace(/[\u0000-\u0008\u000B-\u001F\u007F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, '').trim();
+  const text = stripHidden(String(f.text ?? ''), { multiline: true }).trim();
   if ([...text].length > FEEDBACK_MAX) throw Object.assign(new CodedError('feedback_too_long', 'Feedback is too long'), { field: 'text', max: FEEDBACK_MAX });
-  return { stars, text };
+  const appVersion = typeof f.appVersion === 'string' ? f.appVersion.replace(/[^0-9A-Za-z.+\- ()]/g, '').trim().slice(0, 40) || null : null;
+  return { stars, text, appVersion };
 }

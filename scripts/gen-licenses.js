@@ -3,7 +3,8 @@
  * Generates src/generated/licenses.json (About VolleyLive > Open-source licenses).
  *
  * 1.3.8 (QA V137-7): walks the app's TRANSITIVE production dependency tree offline from node_modules
- * (dependencies + optionalDependencies; never devDependencies or peerDependencies), resolving
+ * (dependencies + optionalDependencies; never devDependencies or peerDependencies), plus (1.3.9, V138-5)
+ * every installed package that ships native code (autolinking links it however it was installed), resolving
  * each name the way Node does (nearest node_modules up the tree), deduplicated by name@version. For each
  * package it records the declared licence and the full text of its LICENSE / LICENCE / COPYING / NOTICE
  * files when the package ships them. Identical texts are stored once (`texts`, referenced by index).
@@ -74,6 +75,35 @@ function repoOf(pkg) {
   return repo ? String(repo).replace(/^git\+/, '').replace(/\.git$/, '') : null;
 }
 
+/** Ships native code that autolinking picks up: an Android library, an iOS podspec or an Expo module. */
+function shipsNativeCode(dir) {
+  if (fs.existsSync(path.join(dir, 'expo-module.config.json'))) return true;
+  if (fs.existsSync(path.join(dir, 'android', 'build.gradle')) || fs.existsSync(path.join(dir, 'android', 'build.gradle.kts'))) return true;
+  try {
+    return fs.readdirSync(dir).some((f) => f.endsWith('.podspec'));
+  } catch {
+    return false;
+  }
+}
+
+/** Top-level installed packages (node_modules/x and node_modules/@scope/x) that ship native code. */
+function nativePackageDirs(root) {
+  const nm = path.join(root, 'node_modules');
+  const out = [];
+  let names = [];
+  try {
+    names = fs.readdirSync(nm);
+  } catch {
+    return out;
+  }
+  for (const n of names.sort()) {
+    if (n.startsWith('.')) continue;
+    const dirs = n.startsWith('@') ? (() => { try { return fs.readdirSync(path.join(nm, n)).sort().map((x) => path.join(nm, n, x)); } catch { return []; } })() : [path.join(nm, n)];
+    for (const d of dirs) if (fs.existsSync(path.join(d, 'package.json')) && shipsNativeCode(d)) out.push(d);
+  }
+  return out;
+}
+
 function collect(root = path.resolve(__dirname, '..')) {
   const app = readJson(path.join(root, 'package.json')) || {};
   const seenDirs = new Set();
@@ -94,6 +124,16 @@ function collect(root = path.resolve(__dirname, '..')) {
   };
   enqueue(app.dependencies, root, false);
   enqueue(app.optionalDependencies, root, true);
+  // 1.3.9 (QA V138-5): every installed package that ships native code is linked into the app by
+  // autolinking wherever it came from – e.g. react-native-gesture-handler, a peer dependency of
+  // expo-router, whose libgesturehandler.so is in the APK – so all of them are listed (with their
+  // dependencies), not only those reached through `dependencies`.
+  for (const dir of nativePackageDirs(root)) {
+    const real = fs.realpathSync(dir);
+    if (seenDirs.has(real)) continue;
+    seenDirs.add(real);
+    queue.push(dir);
+  }
   while (queue.length) {
     const dir = queue.shift();
     const pkg = readJson(path.join(dir, 'package.json'));
@@ -136,7 +176,7 @@ function generate(root = path.resolve(__dirname, '..')) {
   return data;
 }
 
-module.exports = { collect, build, generate, licenseOf, licenseTexts, resolvePkgDir };
+module.exports = { collect, build, generate, licenseOf, licenseTexts, resolvePkgDir, nativePackageDirs, shipsNativeCode };
 if (require.main === module) {
   const d = generate();
   const missing = d.packages.filter((p) => p.text === null).length;

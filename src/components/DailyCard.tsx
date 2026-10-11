@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { Text, View } from 'react-native';
 import { card } from './Hero';
 import { PressableScale } from './PressableScale';
-import { BUNDLED_DAILY_ITEMS, mergeDailyItems, msUntilNextIstDay, pickDaily, type DailyItem } from '../core/dailyItems';
+import { BUNDLED_DAILY_ITEMS, dailyAttribution, mergeDailyItems, msUntilNextIstDay, pickDaily, type DailyItem } from '../core/dailyItems';
 import { backend } from '../services/backend';
 import { shareOrCopy } from '../services/share';
 import { colors, overlineFor, type } from '../theme';
@@ -76,7 +76,7 @@ export function DailyCard({ now, items: given }: { now?: number; items?: readonl
         </Text>
         {item.attribution ? (
           <Text style={[type.caption, { color: colors.muted, marginTop: 6 }]} testID="daily-attribution">
-            {item.type === 'quote' ? `— ${item.attribution}` : t('daily.source', { source: item.attribution })}
+            {item.type === 'quote' ? `— ${dailyAttribution(item, lang)}` : t('daily.source', { source: dailyAttribution(item, lang) })}
           </Text>
         ) : null}
       </PressableScale>

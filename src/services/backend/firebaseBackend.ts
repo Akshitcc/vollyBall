@@ -45,7 +45,7 @@ import { planEventSteps } from '../../core/eventSteps';
 import { computeState, summarize, type Side } from '../../core/scoring';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
-import { CONFIRM_MESSAGES, captainVerdict, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
+import { CONFIRM_MESSAGES, byMatchDateDesc, captainVerdict, confirmedAtOf, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
 import { guardCreate, guardProgress, guardUpdate } from '../../core/matchGuards';
 import { TERMS_VERSION, TERMS_VERSION_MISMATCH, type TermsAcceptance } from '../../core/terms';
 import { checkText } from '../../core/validate';
@@ -73,6 +73,8 @@ function matchFrom(data: DocumentData, id: string): Match {
     startedServerAt: ms(data.startedServerAt),
     finishedServerAt: ms(data.finishedServerAt),
     verification: v ? ({ ...v, at: ms(v.at), reviewedAt: ms(v.reviewedAt) } as Match['verification']) : null,
+    // 1.3.9 (V138-11): derived from the captain's answer time, never stored over a match time
+    confirmedAt: v ? confirmedAtOf({ verification: { ...(v as object), at: ms(v.at) } as Match['verification'] }) : null,
   };
 }
 const matchOf = (d: QueryDocumentSnapshot<DocumentData>): Match => matchFrom(d.data(), d.id);
@@ -104,9 +106,15 @@ function finishFields(prev: Match['status'] | undefined, next: Match['status']):
   return { finishedAt: done ? Date.now() : null, finishedServerAt: next === 'finished' ? serverTimestamp() : null };
 }
 
-function clean<T>(v: T): T {
+/**
+ * Drops undefined fields (Firestore refuses them), recursively in plain objects and arrays.
+ * 1.3.9: only PLAIN objects are rebuilt – Firestore sentinels (serverTimestamp(), deleteField()) and
+ * Timestamp/GeoPoint instances are passed through as they are. Before, clean() copied them into plain maps
+ * (e.g. {_methodName:'serverTimestamp'}), so a "server time" field was not a timestamp.
+ */
+export function clean<T>(v: T): T {
   if (Array.isArray(v)) return v.map(clean) as unknown as T;
-  if (v && typeof v === 'object' && !(v instanceof Date)) {
+  if (v && typeof v === 'object' && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null)) {
     const out: Record<string, unknown> = {};
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) if (val !== undefined) out[k] = clean(val);
     return out as T;
@@ -312,7 +320,7 @@ export class FirebaseBackend implements Backend {
     // firestore.rules compare participantIds position by position (team A, team B, creator/scorer).
     // 1.3.0: scheduled/live only, captains (a registered team's captain / a player of a built side),
     // no POTM, finish or server fields (core/matchGuards.ts; firestore.rules matchCreateOk).
-    const { startedAt: _s, startedServerAt: _ss, finishedServerAt: _fs, verification: _v, ...rest } = m;
+    const { startedAt: _s, startedServerAt: _ss, finishedServerAt: _fs, verification: _v, confirmedAt: _ca, ...rest } = m;
     const teams = await this.getTeams([m.teamA.teamId, m.teamB.teamId].filter((x): x is string => !!x));
     const cap = (t: Match['teamA']) => (t.teamId ? teams.get(t.teamId)?.captainId ?? null : null);
     guardCreate(rest, { A: cap(m.teamA), B: cap(m.teamB) });
@@ -411,7 +419,7 @@ export class FirebaseBackend implements Backend {
   }
   watchMyMatches(uid: string, cb: (m: Match[]) => void) {
     return onSnapshot(query(collection(this.fb.db, 'matches'), where('participantIds', 'array-contains', uid), limit(200)), (s) =>
-      cb(s.docs.map((d) => matchOf(d)).sort((a, b) => b.updatedAt - a.updatedAt)),
+      cb(s.docs.map((d) => matchOf(d)).sort(byMatchDateDesc)), // 1.3.9 (V138-11): not by updatedAt
     );
   }
   watchTournamentMatches(tid: string, cb: (m: Match[]) => void) {
@@ -515,7 +523,7 @@ export class FirebaseBackend implements Backend {
     const played = ms.docs
       .map((d) => matchOf(d))
       .filter((m) => [...m.teamA.players, ...m.teamB.players].some((p) => p.id === uid))
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .sort(byMatchDateDesc)
       .slice(0, 20);
     const lists = await Promise.all(
       played.map((m) => getDocs(query(collection(this.fb.db, 'matches', m.id, 'photos'), orderBy('createdAt', 'desc'), limit(20)))),
@@ -638,7 +646,7 @@ export class FirebaseBackend implements Backend {
     const me = this.fb.auth.currentUser?.uid;
     if (!me) throw new Error('Not signed in yet');
     const c = checkFeedback(f);
-    await addDoc(collection(this.fb.db, 'feedback'), { userId: me, stars: c.stars, text: c.text, appVersion: f.appVersion ?? null, createdAt: serverTimestamp() });
+    await addDoc(collection(this.fb.db, 'feedback'), { userId: me, stars: c.stars, text: c.text, appVersion: c.appVersion, createdAt: serverTimestamp() });
   }
   async listFeedback() {
     const snap = await getDocs(query(collection(this.fb.db, 'feedback'), orderBy('createdAt', 'desc'), limit(200)));
@@ -649,16 +657,36 @@ export class FirebaseBackend implements Backend {
     });
     return out;
   }
+  // 1.3.9 (V137-4): review prompt clock = server time (firestore.rules private/review: each stamp == request.time)
+  async reviewClock(uid: string) {
+    const ref = doc(this.fb.db, 'users', uid, 'private', 'review');
+    await setDoc(ref, { checkedAt: serverTimestamp() }, { merge: true });
+    const snap = await getDoc(ref);
+    const ms = (v: unknown) => (v && typeof (v as { toMillis?: unknown }).toMillis === 'function' ? (v as { toMillis: () => number }).toMillis() : null);
+    const now = ms(snap.get('checkedAt'));
+    if (now == null) throw new Error('no server time');
+    return { now, lastAskedAt: ms(snap.get('lastAskedAt')) };
+  }
+  async markReviewAsked(uid: string) {
+    await setDoc(doc(this.fb.db, 'users', uid, 'private', 'review'), { lastAskedAt: serverTimestamp() }, { merge: true });
+  }
   async listDailyItems(opts?: { all?: boolean }) {
     const snap = await getDocs(collection(this.fb.db, 'dailyItems'));
     const out: DailyItem[] = [];
-    snap.forEach((d) => out.push({ ...(d.data() as Omit<DailyItem, 'id'>), id: d.id }));
+    snap.forEach((d) => {
+      const x = d.data() as Omit<DailyItem, 'id' | 'createdAt'> & { createdAt?: { toMillis?: () => number } | null; updatedAt?: unknown };
+      const { updatedAt: _u, createdAt, ...rest } = x;
+      out.push({ ...rest, id: d.id, createdAt: typeof createdAt?.toMillis === 'function' ? createdAt.toMillis() : null });
+    });
     return opts?.all ? out : out.filter((x) => x.active !== false);
   }
   async saveDailyItem(item: Partial<DailyItem>) {
     const c = checkDailyItem(item);
     const ref = item.id ? doc(this.fb.db, 'dailyItems', item.id) : doc(collection(this.fb.db, 'dailyItems'));
-    await setDoc(ref, clean({ ...c, updatedAt: serverTimestamp() }));
+    // 1.3.9 (V138-7): createdAt is the server's time on create and never changes (firestore.rules dailyItems)
+    const old = item.id ? await getDoc(ref) : null;
+    const createdAt = old?.exists() ? old.get('createdAt') ?? null : serverTimestamp();
+    await setDoc(ref, clean({ ...c, updatedAt: serverTimestamp(), createdAt }));
     return ref.id;
   }
   async deleteDailyItem(id: string) {

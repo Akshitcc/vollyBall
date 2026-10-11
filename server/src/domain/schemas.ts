@@ -30,7 +30,7 @@ const text = (key: LimitKey, opts: { multiline?: boolean } = {}) =>
   z.string().superRefine((v, ctx) => {
     const p = textProblem(v, LIMITS[key], opts);
     if (p) ctx.addIssue({ code: 'custom', message: TEXT_ERROR_CODES[p], params: { min: LIMITS[key].min, max: LIMITS[key].max } });
-  }).transform((v) => cleanText(v));
+  }).transform((v) => cleanText(v, { name: LIMITS[key].min > 0 })); // 1.3.9 (V138-4)
 /** Optional text: null/undefined/blank ("   ") all become undefined, never whitespace (QA B3). */
 const optText = (key: LimitKey, opts: { multiline?: boolean } = {}) =>
   text(key, opts).nullish().transform((v) => (v ? v : undefined));

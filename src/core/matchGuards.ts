@@ -27,7 +27,7 @@ const fail = (code: string): never => {
 };
 
 /** Fields no client may write on a match (server/rules-set). */
-export const MATCH_SERVER_FIELDS = ['verification', 'startedServerAt', 'finishedServerAt'] as const;
+export const MATCH_SERVER_FIELDS = ['verification', 'startedServerAt', 'finishedServerAt', 'confirmedAt'] as const; // confirmedAt: 1.3.9 (V138-11)
 
 type CreateInput = Pick<Match, 'status' | 'teamA' | 'teamB'> & { captains?: MatchCaptains | null } & Partial<Pick<Match, 'playerOfMatchId' | 'finishedAt'>> & Record<string, unknown>;
 

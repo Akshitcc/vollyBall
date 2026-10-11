@@ -155,6 +155,10 @@ const hi: Translations = {
     nothingScheduled: 'कुछ भी तय नहीं है',
   },
   profile: {
+    adminSection: 'एडमिन',
+    adminReview: 'एडमिन: फ़्लैग किए मैच देखें',
+    adminFacts: 'एडमिन: तथ्य',
+    adminFeedback: 'एडमिन: फ़ीडबैक',
     privateDetails: 'निजी जानकारी (सिर्फ़ आपको दिखती है)',
     pinLine: 'पिनकोड: {{pin}}',
     dobAge_one: '{{dob}} · {{count}} साल',
@@ -208,7 +212,7 @@ const hi: Translations = {
     nameRequired: 'कृपया अपना नाम डालें।',
     setupIntro: 'अपने साथियों को बताएँ कि आप कौन हैं। आप इसे कभी भी बदल सकते हैं।',
     differentNumber: 'यह आपका नंबर नहीं है? साइन आउट करें',
-    // 1.3.6 registration – NEEDS REVIEW (machine-quality Hindi)
+    // 1.3.6 registration – reviewed (QA, 1.3.8 retest)
     firstName: 'पहला नाम',
     lastName: 'सरनेम',
     firstNamePlaceholder: 'जैसे अक्षित',
@@ -323,7 +327,7 @@ const hi: Translations = {
     followingBanner: 'आप यह मैच लाइव देख रहे हैं। स्कोर अपने-आप अपडेट होता है।',
     imIn: 'मैं शामिल हूँ ✓',
     wantToPlay: 'मुझे खेलना है',
-    videoSoon: 'लाइव वीडियो स्ट्रीमिंग अगले वर्ज़न में आएगी।',
+    videoSoon: 'लाइव वीडियो स्ट्रीमिंग अगले संस्करण में आएगी।',
     scorer: 'स्कोरर',
     scorerHint: 'स्कोर केवल एक व्यक्ति बदल सकता है। चुनें कि वह कौन है:',
     wantToPlayCount: 'खेलना चाहते हैं ({{count}})',
@@ -362,7 +366,7 @@ const hi: Translations = {
     backTo: 'वापस {{score}} पर',
     nothingToUndo: 'अभी वापस लेने को कुछ नहीं',
     court: 'कोर्ट और रोटेशन',
-    sub: 'बदलें',
+    sub: 'खिलाड़ी बदलें', // 1.3.9 (V138-14): substitution – distinct from 'बदलें' (Change)
     noRallies: 'अभी कोई रैली नहीं · स्कोर के लिए टीम दबाएँ',
     runOf: 'लगातार {{n}}',
     scoreIs: 'स्कोर {{n}}',
@@ -494,7 +498,7 @@ const hi: Translations = {
     nameRequired: 'अपनी टीम को एक नाम दें।',
   },
   newMatch: {
-    // 1.3.6 team size – NEEDS REVIEW
+    // 1.3.6 team size – reviewed (QA, 1.3.8 retest)
     teamSize: 'टीम में खिलाड़ी',
     sizeExact: 'सटीक 6',
     sizeCustom: 'अपनी पसंद (6–12)',
@@ -691,7 +695,7 @@ const hi: Translations = {
       admin_only: "यह सिर्फ़ एडमिन कर सकता है।",
       own_match: "आप उस मैच की समीक्षा नहीं कर सकते जिसमें आप खेले, जिसका स्कोर रखा या जिसे बनाया।",
       potm_required: "मैच पूरा करने के लिए प्लेयर ऑफ़ द मैच चुनें।",
-      // 1.3.6 registration + team size – NEEDS REVIEW
+      // 1.3.6 registration + team size – reviewed (QA, 1.3.8 retest)
       name_empty: '{{field}} ज़रूरी है।',
       name_length: '{{fieldIn}} में {{min}}–{{max}} अक्षर होने चाहिए।',
       name_chars: "{{fieldIn}} में केवल अक्षर, खाली जगह, ( ' ) और ( - ) ही हो सकते हैं।",
@@ -876,6 +880,9 @@ const hi: Translations = {
     auto: 'ऑटो',
     confirm: '{{name}} पक्का करें',
     choose: 'खिलाड़ी चुनें',
+    basisAuto: 'सबसे ज़्यादा खिलाड़ी अंक, किसी भी टीम से',
+    basisScorer: 'स्कोरर ने चुना (अपने-आप चुनाव: सबसे ज़्यादा खिलाड़ी अंक, किसी भी टीम से)',
+    rule: 'कैसे चुना जाता है: किसी खिलाड़ी के नाम सबसे ज़्यादा अंक, किसी भी टीम से। टीम अंक नहीं गिने जाते। बराबरी पर: निर्णायक सेट में ज़्यादा अंक, फिर एक तय क्रम।',
   },
   rankings: {
     ofTotal: "{{total}} में से",
@@ -979,13 +986,18 @@ const hi: Translations = {
   verify: {
     awaiting_potm: "प्लेयर ऑफ़ द मैच का इंतज़ार",
     awaiting_confirmation: "विरोधी कप्तान का इंतज़ार",
-    confirmed: "नतीजे की पुष्टि हुई",
+    confirmed: "विरोधी कप्तान ने नतीजे की पुष्टि की",
     flagged: "चिह्नित: एडमिन की समीक्षा तक नहीं गिना जाएगा",
     approved: "एडमिन ने मंज़ूरी दी",
-    // 1.3.7 (F135-1) – NEEDS REVIEW
+    // 1.3.7 (F135-1) – reviewed (QA, 1.3.8 retest)
     approved_awaiting_confirmation: "एडमिन ने फ़्लैग हटाया · विरोधी कप्तान की पुष्टि बाकी",
     approved_rejected: "फ़्लैग हटाया गया, पर विरोधी कप्तान ने नतीजा नहीं माना: यह मैच नहीं गिना जाएगा",
     approveClears: "मंज़ूर करें (फ़्लैग हटाएँ)",
+    approveShort: "मंज़ूर करें",
+    voidShort: "रद्द करें",
+    approveSubClears: "फ़्लैग हट जाएगा",
+    approveSubCounts: "मैच गिना जाएगा",
+    voidSub: "कभी नहीं गिना जाएगा",
     waitingOpponent: "विरोधी कप्तान की पुष्टि का इंतज़ार",
     opponentConfirmed: "विरोधी कप्तान ने पुष्टि की",
     opponentRejected: "विरोधी कप्तान ने नतीजा नहीं माना: मंज़ूरी के बाद भी यह मैच नहीं गिना जाएगा",
@@ -1005,7 +1017,7 @@ const hi: Translations = {
     reason: "क्या गलत है? (वैकल्पिक)",
     sendReject: "नतीजा अस्वीकार करें",
     cancel: "रद्द करें",
-    confirmedToast: "नतीजे की पुष्टि हो गई",
+    confirmedToast: "विरोधी कप्तान ने नतीजे की पुष्टि की",
     rejectedToast: "नतीजा रिपोर्ट हो गया। एडमिन इसकी समीक्षा करेंगे।",
     waitingFor: "{{name}} (कप्तान) नतीजे की पुष्टि करेंगे",
     captains: "कप्तान",
@@ -1069,7 +1081,7 @@ const hi: Translations = {
   },
   about: {
     title: "ऐप के बारे में",
-    version: "वर्ज़न",
+    version: "संस्करण",
     backend: "बैकएंड",
     backendDemo: "डेमो (डेटा इसी फ़ोन पर रहता है)",
     backendApi: "API सर्वर",
@@ -1084,7 +1096,7 @@ const hi: Translations = {
     simulateOfflineHint: "सेव ऐसे रुकेंगे जैसे नेटवर्क न हो",
     simulateOfflineOn: "अभी ऑफ़लाइन – बदलाव इसी फ़ोन पर रुके हैं",
   },
-  // NEEDS REVIEW
+  // sub – reviewed (QA, 1.3.8 retest)
   sub: {
     title: "सब्स्टिट्यूशन · सेट {{n}}",
     off: "बाहर जाने वाला खिलाड़ी (कोर्ट से)",
@@ -1095,7 +1107,7 @@ const hi: Translations = {
     save: "सब्स्टिट्यूशन सेव करें",
     onlyAtSetStart: "सब्स्टिट्यूशन सिर्फ़ सेट की पहली रैली से पहले ही किए जा सकते हैं।",
   },
-  // 1.3.7 in-app review – NEEDS REVIEW (Hindi)
+  // 1.3.7 in-app review – reviewed (QA, 1.3.8 retest)
   review: {
     rate: "VolleyLive को रेट करें",
     notLive: "VolleyLive के Google Play पर आने के बाद ही रेटिंग दी जा सकेगी।",
@@ -1172,8 +1184,8 @@ const hi: Translations = {
     licensesNoMatch: "कोई पैकेज नहीं मिला।",
     licenseShowText: "लाइसेंस टेक्स्ट दिखाएँ",
     licenseHideText: "लाइसेंस टेक्स्ट छिपाएँ",
-    licenseNoText: "इस पैकेज में लाइसेंस फ़ाइल नहीं है; उसका होमपेज देखें।", // NEEDS REVIEW
-    licensesNative: "बिल्ड में जुड़ी नेटिव Android लाइब्रेरी (जैसे AndroidX) यहाँ शामिल नहीं हैं।", // NEEDS REVIEW
+    licenseNoText: "इस पैकेज में लाइसेंस फ़ाइल नहीं है; उसका होमपेज देखें।", // reviewed (QA: 1.3.8 licence strings)
+    licensesNative: "बिल्ड में जुड़ी नेटिव Android लाइब्रेरी (जैसे AndroidX) यहाँ शामिल नहीं हैं।", // reviewed (QA: 1.3.8 licence strings)
     support: "फ़ीडबैक",
     madeInIndia: "भारत में बना 🇮🇳",
     technical: "तकनीकी जानकारी",

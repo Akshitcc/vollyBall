@@ -73,14 +73,36 @@ export async function maybeAskForReview(p: {
   now?: number;
   preprompt?: boolean;
   demo?: boolean;
+  /**
+   * 1.3.9 (V137-4): a server-kept clock (Firebase). When given, "now" and the last-asked time are both
+   * server timestamps and the phone clock is not used; if it fails, nothing is asked this time.
+   * Without it: API → p.now from the server's Date header; demo → the phone clock (documented: a demo
+   * has no server, so changing the phone's date can re-show the mock sheet – harmless, nothing is sent).
+   */
+  serverClock?: { read: () => Promise<{ now: number; lastAskedAt: number | null }>; mark: () => Promise<void> };
 }): Promise<boolean> {
-  const now = p.now ?? Date.now();
-  const ok = reviewEligible({ completedMatches: p.completedMatches, lastAskedAt: await lastAskedAt(p.uid), now, liveScoring: !!p.liveScoring, moment: p.moment });
-  if (!ok) return false;
-  try {
-    await AsyncStorage.setItem(KEY(p.uid), String(now));
-  } catch {
-    // storage failure: still at most once per session (the caller keeps its own guard)
+  if (p.serverClock) {
+    let c: { now: number; lastAskedAt: number | null };
+    try {
+      c = await p.serverClock.read();
+    } catch {
+      return false;
+    }
+    if (!reviewEligible({ completedMatches: p.completedMatches, lastAskedAt: c.lastAskedAt, now: c.now, liveScoring: !!p.liveScoring, moment: p.moment })) return false;
+    try {
+      await p.serverClock.mark();
+    } catch {
+      return false; // not recorded = don't ask (no repeat prompts)
+    }
+  } else {
+    const now = p.now ?? Date.now();
+    const ok = reviewEligible({ completedMatches: p.completedMatches, lastAskedAt: await lastAskedAt(p.uid), now, liveScoring: !!p.liveScoring, moment: p.moment });
+    if (!ok) return false;
+    try {
+      await AsyncStorage.setItem(KEY(p.uid), String(now));
+    } catch {
+      // storage failure: still at most once per session (the caller keeps its own guard)
+    }
   }
   if (p.preprompt ?? REVIEW_PREPROMPT) {
     // Policy risk – see REVIEW_PREPROMPT. "Not really" never leads to the store.

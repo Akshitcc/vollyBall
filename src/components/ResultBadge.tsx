@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { AccessibilityInfo, StyleSheet, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 import { ADMIN_APPROVAL, ANTI_FRAUD, confirmProblem, expectedConfirmer, matchFlags, resultState, verificationStatus, type FraudFlag, type ResultState } from '../core/antifraud';
 import type { Match } from '../core/types';
 import { translateError } from '../i18n/format';
@@ -58,6 +58,9 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
   // 1.3.8 (V137-13): the "Result confirmed" message is shown here, under the badge, instead of a floating
   // toast that covered the stats below.
   const [notice, setNotice] = useState<string | null>(null);
+  // 1.3.9 (V138-12): which action the notice is for – after confirming, the badge itself says "Result confirmed
+  // by the opposing captain", so the notice is shown only when the badge says something else (e.g. still flagged)
+  const [noticeKind, setNoticeKind] = useState<'confirmed' | 'other'>('other');
   useEffect(() => {
     if (!notice) return;
     const id = setTimeout(() => setNotice(null), 5000);
@@ -67,12 +70,14 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
   if (state === 'not_finished' || state === 'abandoned') return null;
   const canConfirm = confirmProblem(match, meId) === null;
   const confirmer = expectedConfirmer(match);
-  const run = async (f: () => Promise<void>, ok: string) => {
+  const run = async (f: () => Promise<void>, ok: string, kind: 'confirmed' | 'other' = 'other') => {
     setBusy(true);
     setError(null);
     try {
       await f();
+      setNoticeKind(kind);
       setNotice(ok);
+      if (kind === 'confirmed') AccessibilityInfo.announceForAccessibility(ok);
       setRejecting(false);
       return true;
     } catch (e) {
@@ -87,7 +92,7 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
   return (
     <View style={{ marginBottom: 10 }} testID="result-panel">
       <ResultBadge match={match} />
-      {notice ? (
+      {notice && !(noticeKind === 'confirmed' && state === 'confirmed') ? (
         <View style={s.notice} accessibilityRole="alert" accessibilityLiveRegion="polite" testID="result-notice">
           <Ionicons name="checkmark-circle" size={16} color={colors.successStrong} />
           <Text style={[type.body, { color: colors.successStrong, fontWeight: '700', flex: 1 }]}>{notice}</Text>
@@ -127,7 +132,7 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
             </>
           ) : (
             <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Button title={t('verify.confirm')} icon="checkmark" loading={busy} onPress={() => void run(() => backend.confirmResult(match.id), t('verify.confirmedToast')).then((ok) => ok && onConfirmed?.())} style={{ flex: 1 }} testID="confirm-result" />
+              <Button title={t('verify.confirm')} icon="checkmark" loading={busy} onPress={() => void run(() => backend.confirmResult(match.id), t('verify.confirmedToast'), 'confirmed').then((ok) => ok && onConfirmed?.())} style={{ flex: 1 }} testID="confirm-result" />
               <Button title={t('verify.reject')} icon="flag-outline" variant="secondary" onPress={() => setRejecting(true)} style={{ flex: 1 }} testID="reject-result" />
             </View>
           )}
@@ -136,10 +141,13 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
       {reviewable ? (
         <View style={s.panel} testID="admin-panel">
           <Text style={[type.h3, { color: colors.text, marginBottom: 8 }]}>{t('verify.adminTitle')}</Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Button title={t(ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN ? 'verify.approve' : 'verify.approveClears')} loading={busy} onPress={() => void run(() => backend.reviewMatch(match.id, 'approve'), t('verify.reviewedToast'))} style={{ flex: 1 }} testID="admin-approve" />
-            <Button title={t('verify.void')} variant="danger" loading={busy} onPress={() => void run(() => backend.reviewMatch(match.id, 'void'), t('verify.reviewedToast'))} style={{ flex: 1 }} testID="admin-void" />
-          </View>
+          <AdminReviewButtons
+            busy={busy}
+            onApprove={() => void run(() => backend.reviewMatch(match.id, 'approve'), t('verify.reviewedToast'))}
+            onVoid={() => void run(() => backend.reviewMatch(match.id, 'void'), t('verify.reviewedToast'))}
+            approveID="admin-approve"
+            voidID="admin-void"
+          />
         </View>
       ) : null}
       {error ? <Text style={[type.body, { color: colors.danger, marginTop: 6 }]} accessibilityRole="alert">{error}</Text> : null}
@@ -153,3 +161,24 @@ const s = StyleSheet.create({
   panel: { backgroundColor: colors.white, borderRadius: radius.md, padding: 14, marginTop: 10, borderWidth: 1, borderColor: colors.border },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, minHeight: 72, padding: 10, color: colors.text, backgroundColor: colors.white, textAlignVertical: 'top', marginTop: 4 },
 });
+
+/**
+ * 1.3.9 (V138-14): the admin's Approve / Void pair. Short button text ("Approve" / "मंज़ूर करें") with what it
+ * does as a subtitle underneath, so nothing clips at 360 px in Hindi. Used on the match screen and in admin-review.
+ */
+export function AdminReviewButtons({ busy, onApprove, onVoid, approveID, voidID, style }: { busy?: boolean; onApprove: () => void; onVoid: () => void; approveID: string; voidID: string; style?: StyleProp<ViewStyle> }) {
+  const { t } = useTranslation();
+  const approveSub = t(ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN ? 'verify.approveSubCounts' : 'verify.approveSubClears');
+  return (
+    <View style={[{ flexDirection: 'row', gap: 8 }, style]}>
+      <View style={{ flex: 1 }}>
+        <Button title={t('verify.approveShort')} loading={busy} onPress={onApprove} testID={approveID} />
+        <Text style={[type.caption, { color: colors.muted, marginTop: 4, textAlign: 'center' }]} testID={`${approveID}-sub`}>{approveSub}</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Button title={t('verify.voidShort')} variant="danger" loading={busy} onPress={onVoid} testID={voidID} />
+        <Text style={[type.caption, { color: colors.muted, marginTop: 4, textAlign: 'center' }]} testID={`${voidID}-sub`}>{t('verify.voidSub')}</Text>
+      </View>
+    </View>
+  );
+}

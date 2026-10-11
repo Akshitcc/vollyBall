@@ -123,7 +123,7 @@ function SidePicker({
         ).map(([m, icon, key, go]) => (
           <PressableScale key={m} onPress={go} accessibilityRole="tab" accessibilityState={{ selected: mode === m }} style={[st.segItem, mode === m && st.segOn]} testID={`${testID}-mode-${m}`}>
             <Ionicons name={icon} size={16} color={mode === m ? colors.text : colors.muted} />
-            <Text style={{ color: mode === m ? colors.text : colors.muted, fontWeight: '700', fontSize: 13, flexShrink: 1 }} numberOfLines={2}>
+            <Text style={{ color: mode === m ? colors.text : colors.muted, fontWeight: '700', fontSize: 13, flexShrink: 1, minWidth: 0, textAlign: 'center' }} numberOfLines={2}>
               {tr(key)}
             </Text>
           </PressableScale>
@@ -637,7 +637,8 @@ const st = StyleSheet.create({
   seg3: { height: 4, borderRadius: 2 },
   badge: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   seg: { flexDirection: 'row', backgroundColor: colors.bg, borderRadius: 12, padding: 4, marginBottom: 10 },
-  segItem: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 40, borderRadius: 10, paddingHorizontal: 6 },
+  // 1.3.9 (V138-14): minWidth 0 lets a long (Hindi) label wrap onto 2 lines instead of overflowing the tab at 360 px
+  segItem: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 40, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 4 },
   segOn: { backgroundColor: colors.white, ...elevation.e1 },
   hidden: { display: 'none' },
   sumSection: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },

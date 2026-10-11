@@ -8,7 +8,7 @@ import path from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { ADMIN, EVERYONE, SQUAD_A, SQUAD_B, createMatch, makeTeam, newMatchBody, playersOf, pt, register, startHarness, team, type Harness, regFor } from './helpers';
 import { TERMS_VERSION } from '../../src/core/terms';
-import { ANTI_FRAUD } from '../../src/core/antifraud';
+import { ANTI_FRAUD, LEGACY_VERDICT_BEFORE } from '../../src/core/antifraud';
 import { RANKING_POINTS_PER_POTM, RANKING_POINTS_PER_WIN } from '../../src/core/ranking';
 import { parseAdminUids } from '../src/config';
 
@@ -352,8 +352,12 @@ describe('flags, admin review, caps, wallet and bonus', () => {
     assert.equal((await h.db('matches').where({ id: c }).first()).captain_verdict, 'confirmed');
     // 1.3.8 (V137-1): approved after the captain confirmed (verified_by set, no reason) counts even with
     // captain_verdict NULL; approved with no captain answer at all still waits.
-    await h.db('matches').where({ id: c }).update({ verification_status: 'approved', captain_verdict: null, reviewed_by: ADMIN, reviewed_at: new Date() });
+    // 1.3.9 (V138-3): that reading is only for answers recorded before 1.3.7 (verified_at < LEGACY_VERDICT_BEFORE)
+    await h.db('matches').where({ id: c }).update({ verification_status: 'approved', captain_verdict: null, reviewed_by: ADMIN, reviewed_at: new Date(), verified_at: new Date(LEGACY_VERDICT_BEFORE - 86_400_000) });
     assert.ok((await h.as('bob').get('/api/me/wallet')).body.balance > 0);
+    await h.db('matches').where({ id: c }).update({ verified_at: new Date(LEGACY_VERDICT_BEFORE + 60_000) }); // a 1.3.7+ answer without a verdict
+    assert.equal((await h.as('bob').get('/api/me/wallet')).body.balance, 0);
+    await h.db('matches').where({ id: c }).update({ verified_at: new Date(LEGACY_VERDICT_BEFORE - 86_400_000) });
     await h.db('matches').where({ id: c }).update({ verified_by: null, verified_at: null });
     assert.equal((await h.as('bob').get('/api/me/wallet')).body.balance, 0);
   });
