@@ -13,7 +13,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   name: 'VolleyLive',
   slug: 'volleylive',
   scheme: 'volleylive',
-  version: '1.3.1',
+  version: '1.3.2',
   orientation: 'portrait',
   icon: './assets/icon.png',
   userInterfaceStyle: 'light',
@@ -28,7 +28,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
   },
   android: {
-    versionCode: 7,
+    versionCode: 8,
     package: process.env.ANDROID_PACKAGE ?? 'com.volleylive.app',
     adaptiveIcon: {
       backgroundColor: '#002E6E', // theme palette.navy (checked in src/theme/__tests__/contrast.test.ts)

@@ -59,6 +59,15 @@ export function playerStats(rules: RuleSet, events: readonly MatchEvent[], first
   return out;
 }
 
+/**
+ * 1.3.2: live point count per player (the number on each court tile). The same derivation as the
+ * match stats, Profile career, rankings and the Player of the Match (playerStats), so the counts
+ * shown while scoring always agree with them.
+ */
+export function playerPointCounts(rules: RuleSet, events: readonly MatchEvent[], firstServe: Side = 'A', rosters?: MatchRosters): Record<string, number> {
+  return Object.fromEntries(Object.entries(playerStats(rules, events, firstServe, rosters)).map(([id, l]) => [id, l.points]));
+}
+
 /** Events up to and including the match-winning point. */
 export function acceptedEvents(rules: RuleSet, events: readonly MatchEvent[], firstServe: Side = 'A'): MatchEvent[] {
   const st = computeState(rules, events, firstServe);

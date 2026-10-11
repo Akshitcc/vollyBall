@@ -58,8 +58,12 @@ export const gradients = {
   hero: ['#002E6E', '#003B8C', '#0A56B5'] as const,
   heroLocations: [0, 0.7, 1] as const,
   // QA N121-4: white 17 px team name needs 4.5:1 at the top stop under the 6 % highlight (4.80)
-  teamA: ['#C93434', '#B02626'] as const,
+  // 1.3.2 (live match v2): the Team A dark red is #B92A2A.
+  teamA: ['#C93434', '#B92A2A'] as const,
   teamB: ['#0A2F66', '#001F4D'] as const,
+  /** Player chips on the live court (§11.2): white text ≥ 4.5:1 on both stops. */
+  chipA: ['#D93636', '#B92A2A'] as const,
+  chipB: ['#0F3A78', '#001F4D'] as const,
   progress: ['#0072BC', '#00BAF2'] as const,
   gold: ['#FFD75E', '#F2B300'] as const,
   silver: ['#C9D3DF', '#9FB0C4'] as const,
@@ -242,6 +246,14 @@ export const TEAM_HIGHLIGHT_ALPHA = 0.06;
  * text), both stops are darkened until white reaches 4.5:1 on the lightest point (the top stop under
  * the 6 % highlight). A legacy #E53935 custom team is darkened the same way.
  */
+/** Live court chip gradient (§11.2): the spec stops for the defaults, teamGradient for custom colours. */
+export function chipGradient(teamColor: string): [string, string] {
+  const c = teamColor.toUpperCase();
+  if (c === palette.teamRed) return [...gradients.chipA];
+  if (c === palette.navyDeep) return [...gradients.chipB];
+  return teamGradient(teamColor);
+}
+
 export function teamGradient(teamColor: string): [string, string] {
   const c = teamColor.toUpperCase();
   if (c === palette.teamRed) return [...gradients.teamA];

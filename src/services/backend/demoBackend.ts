@@ -346,6 +346,12 @@ export class DemoBackend implements Backend {
     guardProgress(m, p.status);
     this.checkRoster({ ...m, ...p });
     checkMatchFields({ events: p.events });
+    // 1.3.2 parity with the API (validateEvents) and firestore.rules (creditIn): a point may only be
+    // credited to a player of the team that won the rally (tap-a-player scoring).
+    const rosterOf = { A: new Set(m.teamA.players.map((x) => x.id)), B: new Set(m.teamB.players.map((x) => x.id)) };
+    p.events.forEach((ev, i) => {
+      if (ev.type === 'point' && ev.playerId && !rosterOf[ev.side].has(ev.playerId)) throw new CodedError('bad_request', `Event ${i + 1}: ${ev.playerId} is not a player of team ${ev.side}`);
+    });
     const { startedAt: _s, finishedAt: _f, playerOfMatchId: _p, ...rest } = p;
     this.db.matches[id] = { ...m, ...rest, ...stampTimes(m, p.status, Date.now()), updatedAt: Date.now() };
     this.changed();

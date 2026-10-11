@@ -274,3 +274,21 @@ export function timeline(rules: RuleSet, events: readonly MatchEvent[], firstSer
   }
   return out;
 }
+
+/**
+ * 1.3.2 "tap a player to score": ONE point event that gives the rally to the player's team AND
+ * credits the player (rules allow one event per write; undo drops it, reverting both). The player
+ * must be on that team's roster and, when `onCourt` is given, on court (bench players can't win a
+ * rally). Returns the events unchanged otherwise or when the match is over.
+ */
+export function playerPoint(
+  rules: RuleSet,
+  events: readonly MatchEvent[],
+  side: Side,
+  playerId: string,
+  opts: { roster: readonly string[]; onCourt?: readonly (string | null)[]; at?: number; firstServe?: Side; kind?: PointKind },
+): MatchEvent[] {
+  if (!playerId || !opts.roster.includes(playerId)) return [...events];
+  if (opts.onCourt && !opts.onCourt.includes(playerId)) return [...events];
+  return addPoint(rules, events, side, { at: opts.at, playerId, kind: opts.kind, firstServe: opts.firstServe });
+}

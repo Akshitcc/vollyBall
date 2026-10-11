@@ -61,23 +61,32 @@ const first = (r: ImagePicker.ImagePickerResult): PickedPhoto | null =>
  * by its bytes before it is queued (services/photoFile.ts).
  */
 export function pickWebFile(doc: Document = document): Promise<PickedPhoto | null> {
+  return pickWebFiles(doc, 1).then((l) => l[0] ?? null);
+}
+
+/** 1.3.2: up to `limit` photos at once from the gallery / file picker. */
+export const MAX_GALLERY_PICK = 10;
+
+/** Web: the same allow-listed file input, with `multiple`; at most `limit` files are kept. */
+export function pickWebFiles(doc: Document = document, limit = MAX_GALLERY_PICK): Promise<PickedPhoto[]> {
   return new Promise((resolve) => {
     const input = doc.createElement('input');
     input.type = 'file';
     input.accept = PHOTO_ACCEPT;
+    if (limit > 1) input.multiple = true;
     input.style.display = 'none';
     let done = false;
-    const finish = (v: PickedPhoto | null) => {
+    const finish = (v: PickedPhoto[]) => {
       if (done) return;
       done = true;
       input.remove();
       resolve(v);
     };
     input.addEventListener('change', () => {
-      const f = input.files?.[0];
-      finish(f ? { uri: URL.createObjectURL(f), fileSize: f.size, mimeType: f.type || null } : null);
+      const files = Array.from(input.files ?? []).slice(0, limit);
+      finish(files.map((f) => ({ uri: URL.createObjectURL(f), fileSize: f.size, mimeType: f.type || null })));
     });
-    input.addEventListener('cancel', () => finish(null));
+    input.addEventListener('cancel', () => finish([]));
     doc.body.appendChild(input);
     input.click();
   });
@@ -90,5 +99,15 @@ export async function takePhoto(): Promise<PickedPhoto | null> {
 export async function pickPhoto(): Promise<PickedPhoto | null> {
   if (Platform.OS === 'web') return pickWebFile();
   return first(await ImagePicker.launchImageLibraryAsync(OPTS));
+}
+/**
+ * 1.3.2 "Choose from gallery": several photos at once (Android/iOS photo picker with
+ * allowsMultipleSelection + selectionLimit; web file input with `multiple`). Never more than `limit`.
+ */
+export async function pickPhotos(limit = MAX_GALLERY_PICK): Promise<PickedPhoto[]> {
+  if (Platform.OS === 'web') return pickWebFiles(document, limit);
+  const r = await ImagePicker.launchImageLibraryAsync({ ...OPTS, allowsMultipleSelection: limit > 1, selectionLimit: limit, orderedSelection: true });
+  if (r.canceled || !r.assets?.length) return [];
+  return r.assets.slice(0, limit).map((a) => ({ uri: a.uri, fileSize: a.fileSize, mimeType: a.mimeType ?? null }));
 }
 export const openSettings = () => Linking.openSettings().catch(() => {});

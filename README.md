@@ -8,51 +8,6 @@ Built with **React Native + Expo (SDK 57) + TypeScript**. The backend is either 
 
 ---
 
-## Quick start: run the app + local server (MySQL)
-
-**Version:** 1.3.1 (Android versionCode 7). Docs: [`docs/PRD.md`](docs/PRD.md) (also `docs/PRD.pdf`), design spec [`docs/design/design-spec.md`](docs/design/design-spec.md), DB schema `docs/db-schema.png`.
-
-Requirements: Node.js 20+, npm, MySQL 8.x (e.g. `brew install mysql && brew services start mysql`), and Expo Go or an Android device/emulator.
-
-**1. Database (once)**
-
-```sql
--- in the mysql shell (mysql -u root -p)
-CREATE DATABASE volleylive CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE DATABASE volleylive_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;  -- only for npm test
-CREATE USER 'volleylive'@'localhost' IDENTIFIED BY '<choose-a-password>';
-GRANT ALL ON volleylive.* TO 'volleylive'@'localhost';
-GRANT ALL ON volleylive_test.* TO 'volleylive'@'localhost';
-```
-
-**2. API server**
-
-```bash
-cd server
-cp .env.example .env          # then edit .env: DATABASE_URL with your password, AUTH_MODE=dev for local testing
-npm install
-npm run migrate               # create / update tables
-npm run seed                  # optional sample data
-npm run dev                   # http://localhost:<PORT from .env>
-npm test                      # optional; uses TEST_DATABASE_URL (database name must end in _test)
-```
-
-**3. Mobile app**
-
-```bash
-cd ..                         # repo root
-cp .env.example .env          # set EXPO_PUBLIC_API_URL=http://<your-computer-LAN-IP>:<PORT> and EXPO_PUBLIC_API_DEV_AUTH=1
-npm install
-npx expo start                # scan the QR code with Expo Go, or press a for Android
-```
-
-Sign in with any 10-digit Indian mobile number (+91, starts with 6-9). The demo/dev **OTP is `123456`**.
-With no `.env` at all the app runs in **Demo mode** (sample data on the phone, OTP `123456`).
-
-To build an Android APK locally: `npx expo prebuild -p android && cd android && ./gradlew assembleRelease` (the generated `android/` and `ios/` folders are not committed; use your own signing key, never commit it).
-
-`.env` files, keystores, `google-services.json`, service-account keys, `node_modules`, build outputs and uploaded photos are git-ignored. Never commit real secrets.
-
 ## Features
 
 | Area | What you get |

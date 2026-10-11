@@ -6,11 +6,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { photoSizeProblem } from '../core/photos';
 import { photoErrorMessage } from '../i18n/format';
 import { photoError, readPhoto } from '../services/photoFile';
-import { cameraAccess, hasCameraButton, isPhone, openSettings, pickPhoto, requestCamera, takePhoto, type PickedPhoto } from '../services/camera';
+import { cameraAccess, hasCameraButton, isPhone, MAX_GALLERY_PICK, openSettings, pickPhotos, requestCamera, takePhoto, type PickedPhoto } from '../services/camera';
+import { queuePickedPhotos } from '../services/photoPick';
 import { photoQueue } from '../services/photoQueue';
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { useReduceMotion } from '../hooks/useReduceMotion';
@@ -34,10 +36,18 @@ export function useAddPhoto(matchId: string, uid: string) {
     await readPhoto(p.uri, p.mimeType ?? null);
     await photoQueue.add(matchId, uid, p.uri);
   };
+  // 1.3.2: "Choose from gallery" picks up to MAX_GALLERY_PICK photos; each one is checked and queued.
+  const [added, setAdded] = useState<number | null>(null);
   const gallery = async () => {
     setPanel(null);
+    setAdded(null);
     try {
-      await queue(await pickPhoto());
+      const r = await queuePickedPhotos(await pickPhotos(MAX_GALLERY_PICK), matchId, uid);
+      if (r.queued) setAdded(r.queued);
+      if (r.failed.length) {
+        const reason = photoErrorMessage(r.failed[0].error);
+        setPanel({ error: r.queued || r.failed.length > 1 ? i18n.t('photos.someSkipped', { count: r.failed.length, reason }) : reason });
+      }
     } catch (e) {
       setPanel({ error: photoErrorMessage(e) });
     }
@@ -61,8 +71,17 @@ export function useAddPhoto(matchId: string, uid: string) {
     setPanel('denied');
   };
 
-  const element = <CameraPanel panel={panel} onAllow={allow} onGallery={gallery} onClose={() => setPanel(null)} />;
-  return { camera, gallery, element, panel };
+  const element = (
+    <>
+      <CameraPanel panel={panel} onAllow={allow} onGallery={gallery} onClose={() => setPanel(null)} />
+      {added != null && !panel ? (
+        <Text style={s.added} testID="photos-added" accessibilityLiveRegion="polite">
+          {i18n.t('photos.addedCount', { count: added })}
+        </Text>
+      ) : null}
+    </>
+  );
+  return { camera, gallery, element, panel, added };
 }
 
 /** Soft red ring around the LIVE pill: scales 1 → 1.15 and fades, 1600 ms loop (off with Reduce Motion). */
@@ -249,6 +268,7 @@ export function UploadChip({ matchId, tone = 'dark' }: { matchId: string; tone?:
 }
 
 const s = StyleSheet.create({
+  added: { color: colors.successStrong, fontWeight: '700', marginTop: 6 },
   livePill: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 36, minWidth: 44, paddingHorizontal: 12, borderRadius: 999, backgroundColor: colors.live, borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)' },
   webPill: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 36, minWidth: 44, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1.5, borderColor: colors.onInkMuted },
   livePillText: { color: colors.white, fontWeight: '900', fontSize: 13 },

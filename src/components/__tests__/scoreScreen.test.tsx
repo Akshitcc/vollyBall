@@ -9,6 +9,8 @@ import type { Match } from '../../core/types';
 import i18n from '../../i18n';
 import ScoreScreen from '../../app/match/[id]/score';
 
+// These suites cover the v1 team-half scoring model (still behind core/liveFlags TEAM_HALF_TAP).
+jest.mock('../../core/liveFlags', () => ({ TEAM_HALF_TAP: true, CHIP_DEBOUNCE_MS: 250 }));
 jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null, MaterialCommunityIcons: () => null }));
 jest.mock('expo-haptics', () => ({ impactAsync: () => Promise.resolve(), selectionAsync: () => Promise.resolve(), notificationAsync: () => Promise.resolve(), ImpactFeedbackStyle: { Medium: 'm', Light: 'l' }, NotificationFeedbackType: { Success: 's' } }));
@@ -286,7 +288,7 @@ test('Undo shows the score it reverts to, and looks disabled before the first ra
   await fireEvent.press(screen.getByTestId('tap-A'));
   await fireEvent.press(screen.getByTestId('attrib-skip'));
   expect(screen.getByTestId('undo').props.accessibilityState?.disabled).toBe(false);
-  expect(screen.getByTestId('undo-sub').props.children).toBe('Back to 1–0');
+  expect(screen.getByTestId('undo-sub').props.children).toBe('Delhi −1 · Back to 1–0'); // 1.3.2 §11.3: Undo says what it will undo (a team point here)
 });
 
 test('lineup court card sits in its own card below the halves (no clipped edge inside a team half)', async () => {

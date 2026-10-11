@@ -11,6 +11,8 @@ import { addPoint, type MatchEvent } from '../../core/scoring';
 import type { Match, MatchPhoto } from '../../core/types';
 import i18n from '../../i18n';
 
+// These suites cover the v1 team-half scoring model (still behind core/liveFlags TEAM_HALF_TAP).
+jest.mock('../../core/liveFlags', () => ({ TEAM_HALF_TAP: true, CHIP_DEBOUNCE_MS: 250 }));
 jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null, MaterialCommunityIcons: () => null }));
 jest.mock('expo-image', () => ({ Image: () => null }));

@@ -1,0 +1,211 @@
+/**
+ * Live match v2 scoreboard (design-spec §11.1), shared by the scorer and the viewer: navy card,
+ * team dot + name, 76 dp tabular scores (the trailing team in #DCE6F2), sets-won bars, the Serving
+ * pill on the serving team, and in the centre the sets count with the finished set chips and the
+ * current set chip. A score change rolls in (up for a point, down for an undo) with a light-blue glow;
+ * Reduce Motion turns that into a 150 ms fade.
+ */
+import { Ionicons } from '@expo/vector-icons';
+import React, { forwardRef, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
+import Animated, { Easing, FadeIn, runOnJS, SlideInDown, SlideInUp, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
+import type { MatchState, Side } from '../core/scoring';
+import { useReduceMotion } from '../hooks/useReduceMotion';
+import { letterSpacing } from '../i18n/format';
+import { colors } from '../theme';
+
+/** What a score change looks like: a roll, or with Reduce Motion a fade (never movement). */
+export const bumpKind = (reduceMotion: boolean): 'bump' | 'fade' => (reduceMotion ? 'fade' : 'bump');
+/** The trailing team's score colour on the navy scoreboard (§11.1). */
+export const TRAILING_SCORE = '#DCE6F2';
+
+export function RollScore({ value, style, testID }: { value: number; style?: StyleProp<TextStyle>; testID?: string }) {
+  const reduce = useReduceMotion();
+  const prev = useRef(value);
+  const glow = useSharedValue(0);
+  const up = value >= prev.current;
+  useEffect(() => {
+    if (value > prev.current && !reduce) glow.value = withSequence(withTiming(0.45, { duration: 100 }), withTiming(0, { duration: 140 }));
+    prev.current = value;
+  }, [value, reduce, glow]);
+  const glowStyle = useAnimatedStyle(() => ({ opacity: glow.value }));
+  const entering = reduce ? FadeIn.duration(150) : (up ? SlideInDown : SlideInUp).duration(220);
+  return (
+    <View style={{ alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+      <Animated.View pointerEvents="none" style={[st.glow, glowStyle]} />
+      <Animated.View key={value} entering={entering}>
+        <Text style={[st.score, style]} testID={testID} accessibilityLiveRegion="polite">
+          {value}
+        </Text>
+      </Animated.View>
+    </View>
+  );
+}
+/** Kept for 1.3.2 tests / callers: the bump is the roll above. */
+export const BumpScore = RollScore;
+
+export function ServingPill({ testID }: { testID?: string }) {
+  const { t } = useTranslation();
+  return (
+    <View style={st.pill} testID={testID} accessible accessibilityLabel={t('viewer.serving')}>
+      <Ionicons name="tennisball" size={14} color={colors.onPrimary} />
+      <Text style={st.pillText} numberOfLines={1}>
+        {t('viewer.serving')}
+      </Text>
+    </View>
+  );
+}
+
+/** LIVE pill with a pulsing dot (1400 ms; still with Reduce Motion). */
+export function PulsingLive() {
+  const { t } = useTranslation();
+  const reduce = useReduceMotion();
+  const v = useSharedValue(1);
+  useEffect(() => {
+    if (!reduce) v.value = withRepeat(withSequence(withTiming(0.25, { duration: 700 }), withTiming(1, { duration: 700 })), -1, false);
+  }, [reduce, v]);
+  const dot = useAnimatedStyle(() => ({ opacity: v.value }));
+  return (
+    <View style={st.live} testID="live-pill" accessible accessibilityLabel={t('common.live')}>
+      <Animated.View style={[st.liveDot, dot]} />
+      <Text style={[st.liveText, { letterSpacing: letterSpacing(1) }]}>{t('common.live')}</Text>
+    </View>
+  );
+}
+
+export interface ScoreboardTeam {
+  name: string;
+  color: string;
+}
+
+/** The navy scoreboard. `left`/`right` follow the scorer's Swap; `scoreRef` lets the +1 fly to a score. */
+export const LiveScoreboard = forwardRef<View, {
+  teamA: ScoreboardTeam;
+  teamB: ScoreboardTeam;
+  st: MatchState;
+  setsNeeded: number;
+  live: boolean;
+  left?: Side;
+  scoreRefs?: Partial<Record<Side, React.RefObject<View | null>>>;
+  testID?: string;
+}>(function LiveScoreboard({ teamA, teamB, st, setsNeeded, live, left = 'A', scoreRefs, testID = 'live-scoreboard' }, ref) {
+  const { t } = useTranslation();
+  const order: Side[] = left === 'A' ? ['A', 'B'] : ['B', 'A'];
+  const score = (side: Side) => (live ? (side === 'A' ? st.current.a : st.current.b) : side === 'A' ? st.setsWon.A : st.setsWon.B);
+  const lead = score('A') === score('B') ? null : score('A') > score('B') ? 'A' : 'B';
+  return (
+    <View ref={ref} style={st2.row} testID={testID}>
+      {order.map((side, i) => {
+        const team = side === 'A' ? teamA : teamB;
+        const won = side === 'A' ? st.setsWon.A : st.setsWon.B;
+        const serving = live && st.serving === side && !st.finished;
+        return (
+          <React.Fragment key={side}>
+            {i === 1 && (
+              <View style={st2.center} testID="viewer-sets">
+                <Text style={st2.overline}>{t('common.sets')}</Text>
+                <Text style={st2.sets} testID="viewer-sets-count">
+                  {left === 'A' ? `${st.setsWon.A}:${st.setsWon.B}` : `${st.setsWon.B}:${st.setsWon.A}`}
+                </Text>
+                {st.sets.map((x, k) => (
+                  <View key={k} style={st2.setChip}>
+                    <Text style={st2.setChipText}>{left === 'A' ? `${x.a}–${x.b}` : `${x.b}–${x.a}`}</Text>
+                  </View>
+                ))}
+                {live && !st.finished && (
+                  <View style={[st2.setChip, { backgroundColor: colors.primary }]} testID="viewer-set-now">
+                    <Text style={[st2.setChipText, { color: colors.onPrimary }]}>{t('match.setShort', { n: st.setIndex + 1 })}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+            <View style={{ flex: 1, alignItems: 'center' }} testID={`viewer-team-${side}`}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', maxWidth: '100%' }}>
+                <View style={[st2.dot, { backgroundColor: team.color }]} />
+                <Text style={st2.name} numberOfLines={1}>
+                  {team.name}
+                </Text>
+              </View>
+              <View ref={scoreRefs?.[side]} collapsable={false}>
+                <RollScore value={score(side)} style={lead && lead !== side ? { color: TRAILING_SCORE } : null} testID={`viewer-score-${side}`} />
+              </View>
+              <View style={{ flexDirection: 'row', gap: 4 }} accessibilityLabel={t('viewer.setsWon', { count: won })} testID={`sets-won-${side}`}>
+                {Array.from({ length: setsNeeded }, (_, k) => (
+                  <View key={k} style={[st2.pip, k < won && { backgroundColor: colors.primary }]} />
+                ))}
+              </View>
+              {serving ? <ServingPill testID={`serving-${side}`} /> : <View style={{ height: 38 }} />}
+            </View>
+          </React.Fragment>
+        );
+      })}
+    </View>
+  );
+});
+
+const st = StyleSheet.create({
+  score: { color: colors.white, fontSize: 76, lineHeight: 84, fontWeight: '900', fontVariant: ['tabular-nums'], textAlign: 'center' },
+  glow: { position: 'absolute', width: 96, height: 96, borderRadius: 48, backgroundColor: colors.primary },
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.primary, borderRadius: 999, paddingHorizontal: 12, minHeight: 30, marginTop: 8, maxWidth: '100%' },
+  pillText: { color: colors.onPrimary, fontWeight: '800', fontSize: 13, flexShrink: 1 },
+  live: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.live, borderRadius: 999, paddingHorizontal: 12, minHeight: 32, borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)' },
+  liveDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.white },
+  liveText: { color: colors.white, fontWeight: '900', fontSize: 13 },
+});
+const st2 = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'flex-start' },
+  center: { width: 76, alignItems: 'center', paddingTop: 4 },
+  overline: { color: colors.onInkMuted, fontWeight: '800', fontSize: 11, letterSpacing: 1 },
+  sets: { color: colors.white, fontSize: 28, lineHeight: 34, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  setChip: { backgroundColor: 'rgba(255,255,255,0.14)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2, marginTop: 4 },
+  setChipText: { color: colors.white, fontWeight: '800', fontSize: 12, fontVariant: ['tabular-nums'] },
+  dot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5, borderColor: colors.white, marginRight: 6 },
+  name: { color: colors.white, fontWeight: '800', fontSize: 14, flexShrink: 1 },
+  pip: { width: 18, height: 5, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.25)' },
+});
+
+export interface Flight {
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  key: number;
+}
+
+/**
+ * The green "+1" token that flies from the tapped chip to the team score (§11.4): quadratic curve
+ * bowing outwards, 420 ms ease-in-out cubic, scale 1 → 0.8, fades in the last 80 ms. One absolutely
+ * positioned overlay at the screen root. Not rendered with Reduce Motion (the caller skips it).
+ */
+export function FlyingPoint({ flight, onDone }: { flight: Flight | null; onDone: () => void }) {
+  const p = useSharedValue(0);
+  const pts = useSharedValue({ sx: 0, sy: 0, cx: 0, cy: 0, ex: 0, ey: 0 });
+  useEffect(() => {
+    if (!flight) return;
+    const { from, to } = flight;
+    pts.value = { sx: from.x, sy: from.y, cx: Math.max(from.x, to.x) + 50, cy: (from.y + to.y) / 2, ex: to.x, ey: to.y };
+    p.value = 0;
+    p.value = withTiming(1, { duration: 420, easing: Easing.inOut(Easing.cubic) }, (done) => {
+      if (done) runOnJS(onDone)();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flight?.key]);
+  const style = useAnimatedStyle(() => {
+    const t = p.value;
+    const u = 1 - t;
+    const v = pts.value;
+    const x = u * u * v.sx + 2 * u * t * v.cx + t * t * v.ex;
+    const y = u * u * v.sy + 2 * u * t * v.cy + t * t * v.ey;
+    return { transform: [{ translateX: x - 20 }, { translateY: y - 12 }, { scale: 1 - 0.2 * t }], opacity: t > 0.8 ? (1 - t) * 5 : 1 };
+  });
+  if (!flight) return null;
+  return (
+    <Animated.View pointerEvents="none" style={[st3.token, style]} testID="flying-point">
+      <Text style={st3.tokenText}>+1</Text>
+    </Animated.View>
+  );
+}
+
+const st3 = StyleSheet.create({
+  token: { position: 'absolute', left: 0, top: 0, zIndex: 50, backgroundColor: colors.success, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, borderWidth: 1.5, borderColor: colors.white },
+  tokenText: { color: colors.white, fontWeight: '900', fontSize: 12 },
+});

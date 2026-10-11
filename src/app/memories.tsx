@@ -8,7 +8,7 @@ import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { EmptyCard } from '../components/Hero';
-import { UploadChip, useAddPhoto } from '../components/MatchCamera';
+import { AddPhotoButtons } from '../components/PhotoSheet';
 import { PhotoGrid, PhotoViewer } from '../components/PhotoGallery';
 import { Button, Card, TeamDot } from '../components/ui';
 import { canAddMatchPhoto } from '../core/photos';
@@ -28,18 +28,14 @@ export function photoTargets(matches: readonly Match[], uid: string): Match[] {
 
 function AddToMatch({ match, uid, onDone }: { match: Match; uid: string; onDone: () => void }) {
   const { t } = useTranslation();
-  const add = useAddPhoto(match.id, uid);
   return (
     <Card><View testID="memories-add-target">
       <Text style={[font.h3, { marginBottom: 8 }]} numberOfLines={2}>
         {t('memoriesScreen.addTo', { a: match.teamA.name, b: match.teamB.name })}
       </Text>
-      <View style={{ flexDirection: 'row', gap: 10 }}>
-        <Button title={t('match.addPhoto')} icon="images" onPress={add.gallery} style={{ flex: 1 }} testID="memories-choose-photo" />
-        <Button title={t('common.cancel')} variant="ghost" onPress={onDone} testID="memories-add-cancel" />
-      </View>
-      <UploadChip matchId={match.id} tone="light" />
-      {add.element}
+      {/* 1.3.2: Choose from gallery (multi-select) next to Camera (phones only) */}
+      <AddPhotoButtons matchId={match.id} uid={uid} testIDPrefix="memories-add" galleryTestID="memories-choose-photo" />
+      <Button title={t('common.cancel')} variant="ghost" onPress={onDone} testID="memories-add-cancel" />
       </View>
     </Card>
   );

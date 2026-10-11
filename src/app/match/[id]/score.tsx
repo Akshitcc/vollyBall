@@ -23,7 +23,10 @@ import type { TFunction } from 'i18next';
 import { Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import Animated, { SlideInDown } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CourtCard, RallyTicker, TeamHalf } from '../../../components/LiveScoring';
+import { CourtCard, RallyTicker, TeamHalf, TeamPointButton, type ChipOrigin } from '../../../components/LiveScoring';
+import { FlyingPoint, LiveScoreboard, type Flight } from '../../../components/ViewerParts';
+import { PhotoHeaderButton } from '../../../components/PhotoSheet';
+import { CHIP_DEBOUNCE_MS, TEAM_HALF_TAP } from '../../../core/liveFlags';
 import { firstName } from '../../../components/MiniCourt';
 import { useReduceMotion } from '../../../hooks/useReduceMotion';
 import { haptic } from '../../../services/haptics';
@@ -36,6 +39,7 @@ import {
   POINT_KINDS,
   addPoint,
   attributePoint,
+  playerPoint,
   callTimeout,
   computeState,
   summarize,
@@ -44,6 +48,7 @@ import {
   type PointKind,
   type Side,
 } from '../../../core/scoring';
+import { playerPointCounts } from '../../../core/stats';
 import { canStartScoring, isUserId, MIN_PLAYERS, orderedParticipants } from '../../../core/roster';
 import type { Match, Team } from '../../../core/types';
 import { getOnce, matchTeamFromTeam } from '../../../services/matchFactory';
@@ -78,6 +83,11 @@ export default function ScoreScreen() {
   const { height: winH } = useWindowDimensions();
   const reduceMotion = useReduceMotion();
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Live match v2: last chip tap (debounce), the flying "+1" and the score targets it flies to.
+  const lastChip = useRef<{ id: string; at: number } | null>(null);
+  const [flight, setFlight] = useState<Flight | null>(null);
+  const scoreRefA = useRef<View>(null);
+  const scoreRefB = useRef<View>(null);
 
   // Load match once; prefer a newer local copy (unsynced offline points).
   useEffect(() => {
@@ -186,6 +196,10 @@ export default function ScoreScreen() {
       const s = after.sets[after.sets.length - 1];
       flash(tr('score.setTo', { n: after.sets.length, team: s.winner === 'A' ? match.teamA.name : match.teamB.name, a: s.a, b: s.b }));
       haptic('success');
+    } else if (!TEAM_HALF_TAP && after.setPoint && !before.setPoint) {
+      haptic('warning'); // §11.4: set point / match point banner + warning
+      if (after.sideSwitchDue) flash(tr('score.switchSides'));
+      else if (msg) flash(msg);
     } else if (after.sideSwitchDue) {
       flash(tr('score.switchSides'));
     } else if (msg) flash(msg);
@@ -225,6 +239,41 @@ export default function ScoreScreen() {
     setAttrib(roster.length ? { side, index: next.length - 1 } : null);
   };
 
+  /**
+   * 1.3.2: tap a player on the court = ONE event giving that player and their team the point (only
+   * on-court players of the roster; the scorer check is on every backend). Undo drops the event, so
+   * both the player's and the team's point go back. Rotation/serve follow from the event log.
+   */
+  const tapPlayer = (side: Side, playerId: string, origin?: ChipOrigin) => {
+    if (st.finished) return;
+    // §11.3: a second tap on the SAME chip within 250 ms is ignored; taps on other chips always count.
+    const now = Date.now();
+    if (lastChip.current && lastChip.current.id === playerId && now - lastChip.current.at < CHIP_DEBOUNCE_MS) return;
+    lastChip.current = { id: playerId, at: now };
+    const next = playerPoint(match.rules, ev, side, playerId, { roster: rosterIds[side], onCourt: rot.positions[side], firstServe: match.firstServe });
+    if (next.length === ev.length) return;
+    haptic('point');
+    setAttrib(null); // already credited: no "Who scored?" sheet
+    commit(next);
+    if (!reduceMotion && origin) {
+      const target = (side === 'A' ? scoreRefA : scoreRefB).current;
+      Promise.all([origin(), new Promise<{ x: number; y: number } | null>((res) => {
+        const tm = setTimeout(() => res(null), 120);
+        try {
+          target?.measureInWindow?.((x, y, w, h) => { clearTimeout(tm); res(w || h ? { x: x + w / 2, y: y + h / 2 } : null); });
+        } catch { clearTimeout(tm); res(null); }
+      })]).then(([from, to]) => from && to && setFlight({ from, to, key: now }));
+    }
+  };
+
+  /** "+1 · Opp. error": a team point with no player credit (never toward POTM). Light haptic. */
+  const teamPoint = (side: Side) => {
+    if (st.finished) return;
+    haptic('undo');
+    setAttrib(null);
+    commit(addPoint(match.rules, ev, side, { firstServe: match.firstServe }));
+  };
+
   // Tapping a player credits the rally to them straight away; the shot type is an optional extra.
   // (QA retest: picking a player and then moving on without a shot type used to leave the point
   // silently uncredited.)
@@ -258,7 +307,9 @@ export default function ScoreScreen() {
   const teamOf = (side: Side) => (side === 'A' ? match.teamA : match.teamB);
   const compact = !!attrib;
   // 288 dp halves on a 800 dp phone (design-spec), smaller on short screens.
-  const halfH = Math.max(200, Math.min(288, Math.round(winH * 0.36)));
+  // 1.3.2: with players the court tiles are the main scoring buttons, so the halves (team point /
+  // opponent error) get shorter to keep the court on screen.
+  const halfH = hasPlayers ? Math.max(150, Math.min(210, Math.round(winH * 0.25))) : Math.max(200, Math.min(288, Math.round(winH * 0.36)));
   const setsToWin = Math.ceil((match.rules.bestOf ?? 1) / 2);
 
   const half = (side: Side) => {
@@ -288,7 +339,18 @@ export default function ScoreScreen() {
   const undoTo = ev.length ? computeState(match.rules, undo(ev), match.firstServe).current : null;
   // QA C130-4: once the Player of the Match is set the match is closed, so Undo looks disabled and says why.
   const canUndo = ev.length > 0 && !closed;
-  const undoSub = closed ? tr('score.undoClosed') : undoTo ? tr('score.backTo', { score: left === 'A' ? `${undoTo.a}–${undoTo.b}` : `${undoTo.b}–${undoTo.a}` }) : tr('score.nothingToUndo');
+  const lastEv = ev[ev.length - 1];
+  const backTo = undoTo ? tr('score.backTo', { score: left === 'A' ? `${undoTo.a}–${undoTo.b}` : `${undoTo.b}–${undoTo.a}` }) : null;
+  // "Aarav −1 · back to 18–17": undoing a tapped point takes it back from the player too.
+  const undoSub = closed
+    ? tr('score.undoClosed')
+    : backTo
+      ? lastEv?.type === 'point'
+        ? lastEv.playerId && names[lastEv.playerId]
+          ? `${tr('liveV2.undoPlayer', { name: firstName(names[lastEv.playerId]) })} · ${backTo}`
+          : `${tr('liveV2.undoTeam', { team: teamOf(lastEv.side).name.split(/\s+/)[0] })} · ${backTo}`
+        : backTo
+      : tr('score.nothingToUndo');
 
   // Last rally ticker: who scored, how, and the current run; the last 4 rallies as dots.
   const points = ev.filter((e): e is Extract<MatchEvent, { type: 'point' }> => e.type === 'point');
@@ -311,7 +373,8 @@ export default function ScoreScreen() {
     : [];
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={['bottom']}>
+    // 1.3.2: no bottom edge here – the action bar / sheet add the gesture inset themselves (min 16 dp, §11.1)
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={[]}>
       {/* navy header: close · SET n · TO 25 + sync · LIVE camera · menu; set strip below */}
       <View style={[s.header, { paddingTop: insets.top + 6 }]}>
         <View style={s.top}>
@@ -333,13 +396,25 @@ export default function ScoreScreen() {
             {/* live photo upload progress: inside the header, never over the score or "Who scored" */}
             <UploadChip matchId={match.id} />
           </View>
-          <LiveCameraButton matchId={match.id} uid={me.id} pill />
+          {TEAM_HALF_TAP ? <LiveCameraButton matchId={match.id} uid={me.id} pill /> : <PhotoHeaderButton matchId={match.id} uid={me.id} onOpenPhotos={() => router.replace(`/match/${match.id}`)} />}
           {/* 44 px target: hitSlop does nothing on web, so the bare 24 px icon was easy to miss (QA retest) */}
           <Pressable onPress={() => setMenu(true)} hitSlop={10} accessibilityRole="button" accessibilityLabel={tr('score.options')} testID="score-menu" style={s.iconBtn}>
             <Ionicons name="ellipsis-vertical" size={22} color={colors.white} />
           </Pressable>
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.setStrip} testID="set-strip">
+        {!TEAM_HALF_TAP && (
+          <View style={{ paddingHorizontal: 8, paddingTop: 6 }}>
+            <LiveScoreboard teamA={match.teamA} teamB={match.teamB} st={st} setsNeeded={setsToWin} live left={left} scoreRefs={{ A: scoreRefA, B: scoreRefB }} />
+          </View>
+        )}
+        {!TEAM_HALF_TAP && st.setPoint && !st.finished && (
+          <View style={s.pointBanner} testID="point-banner">
+            <Text style={s.pointBannerText} numberOfLines={1}>
+              {`${tr(st.matchPoint ? 'score.matchPoint' : 'score.setPoint')} · ${teamOf(st.setPoint).name}`}
+            </Text>
+          </View>
+        )}
+        {TEAM_HALF_TAP && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.setStrip} testID="set-strip">
           {/* finished sets in screen order (left team first), so the strip matches the halves after a swap */}
           {st.sets.map((x, i) => (
             <View key={i} style={s.setPill}>
@@ -352,7 +427,7 @@ export default function ScoreScreen() {
               <Text style={[s.setPillText, { color: colors.onPrimary }]}>{st.sets.length ? `S${st.setIndex + 1}` : tr('score.firstSet')}</Text>
             </View>
           )}
-        </ScrollView>
+        </ScrollView>}
       </View>
       {error && <Text style={s.error}>{error}</Text>}
 
@@ -365,23 +440,40 @@ export default function ScoreScreen() {
             </Text>
           </Pressable>
         )}
-        {/* the two halves: each whole half is the tap target */}
-        <View style={s.halves}>
-          {half(left)}
-          {half(right)}
-        </View>
-        {!compact && <RallyTicker text={tickerText} dots={dots} onPress={() => router.replace(`/match/${match.id}`)} />}
+        {/* v1 (TEAM_HALF_TAP): the two halves, each whole half is the tap target */}
+        {TEAM_HALF_TAP && (
+          <View style={s.halves}>
+            {half(left)}
+            {half(right)}
+          </View>
+        )}
+        {!compact && <RallyTicker text={lastPt ? `${tr('liveV2.lastRally')}: ${tickerText}` : tickerText} dots={dots} onPress={() => router.replace(`/match/${match.id}`)} />}
         {!compact && hasPlayers && (
-          <CourtCard
-            left={{ side: left, name: teamOf(left).name, color: teamOf(left).color, positions: rot.positions[left] }}
-            right={{ side: right, name: teamOf(right).name, color: teamOf(right).color, positions: rot.positions[right] }}
-            names={names}
-            server={st.finished ? null : rot.server}
-            onSub={() => (canSetLineup ? setLineupOpen(true) : flash(tr('rotation.onlyAtSetStart')))}
-          />
+          <>
+            <CourtCard
+              left={{ side: left, name: teamOf(left).name, color: teamOf(left).color, positions: rot.positions[left] }}
+              right={{ side: right, name: teamOf(right).name, color: teamOf(right).color, positions: rot.positions[right] }}
+              names={names}
+              server={st.finished ? null : rot.server}
+              points={playerPointCounts(match.rules, ev, match.firstServe, match)}
+              onPlayer={tapPlayer}
+              disabled={st.finished}
+              onSub={() => (canSetLineup ? setLineupOpen(true) : flash(tr('rotation.onlyAtSetStart')))}
+            />
+            {TEAM_HALF_TAP && <Text style={s.oppHint} testID="opp-error-hint">{tr('score.oppErrorHint')}</Text>}
+          </>
+        )}
+        {/* v2: team-only points for opponent errors (no player credit) */}
+        {!TEAM_HALF_TAP && (
+          <View style={s.teamBtns} testID="team-point-row">
+            {[left, right].map((side) => (
+              <TeamPointButton key={side} side={side} name={teamOf(side).name} color={teamOf(side).color} disabled={st.finished} onPress={() => teamPoint(side)} />
+            ))}
+          </View>
         )}
       </ScrollView>
 
+      {!reduceMotion && <FlyingPoint flight={flight} onDone={() => setFlight(null)} />}
       {toast && (
         <View style={s.toast} pointerEvents="none">
           <Text style={s.toastText}>{toast}</Text>
@@ -390,7 +482,7 @@ export default function ScoreScreen() {
 
       {/* "Who scored?" sheet: slides up below the halves, which stay tappable (next point = skip) */}
       {attribTeam && (
-        <Animated.View entering={reduceMotion ? undefined : SlideInDown.duration(280)} style={s.sheet} testID="who-scored">
+        <Animated.View entering={reduceMotion ? undefined : SlideInDown.duration(280)} style={[s.sheet, { paddingBottom: Math.max(16, insets.bottom) }]} testID="who-scored">
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
             <Text style={s.attribTitle} numberOfLines={2}>
               {tr('score.whoScored', { team: attribTeam.name })}
@@ -406,7 +498,7 @@ export default function ScoreScreen() {
 
       {/* bottom bar: Undo (with the score it reverts to) · Swap · Stats */}
       {!attribTeam && (
-        <View style={s.bottom}>
+        <View style={[s.bottom, { paddingTop: 10, paddingBottom: Math.max(16, insets.bottom) }]} testID="score-bottom-bar">
           <Pressable
             onPress={doUndo}
             style={({ pressed }) => [s.undo, !canUndo ? s.undoDisabled : elevation.glowPrimary, pressed && canUndo ? { opacity: 0.85 } : null]}
@@ -592,6 +684,10 @@ const s = StyleSheet.create({
   setPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.ink2, borderRadius: 999, paddingHorizontal: 12, height: 30 },
   setPillNow: { backgroundColor: colors.primary },
   setPillText: { color: colors.white, fontWeight: '800', fontSize: 13, fontVariant: ['tabular-nums'] },
+  teamBtns: { flexDirection: 'row', gap: 10, marginHorizontal: 12, marginTop: 10 },
+  pointBanner: { alignSelf: 'center', backgroundColor: colors.gold, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 4, marginTop: 8 },
+  pointBannerText: { color: colors.ink, fontWeight: '900', fontSize: 13 },
+  oppHint: { color: colors.muted, fontWeight: '600', fontSize: 12, textAlign: 'center', marginTop: 8, marginHorizontal: 16 },
   error: { backgroundColor: colors.danger, color: colors.white, textAlign: 'center', padding: 6, fontWeight: '800' },
   halves: { flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingTop: 12 },
   lineupBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', alignSelf: 'center', backgroundColor: colors.primary, borderRadius: 999, paddingHorizontal: 14, minHeight: 36, marginTop: 10, maxWidth: '92%' },

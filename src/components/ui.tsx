@@ -21,6 +21,7 @@ import { letterSpacing } from '../i18n/format';
 import { clampInput, cleanText } from '../core/text';
 import { colors, font, onColor, radius, readableFill, shadow, space, swatchRing } from '../theme';
 import { PressableScale } from './PressableScale';
+import { useInsets } from './SafeFooter';
 
 const DISABLED = { bg: colors.disabledBg, fg: colors.disabledText };
 
@@ -37,11 +38,14 @@ export function Screen({
   edges?: ('top' | 'bottom')[];
   padded?: boolean;
 }) {
-  const inner = padded ? { padding: space(4), paddingBottom: space(10) } : undefined;
+  // 1.3.2: without the bottom edge, scrolling content still clears the Android nav bar (edge-to-edge).
+  const insets = useInsets();
+  const navPad = scroll && !edges.includes('bottom') ? insets.bottom : 0;
+  const inner = padded ? { padding: space(4), paddingBottom: space(10) + navPad } : navPad ? { paddingBottom: navPad } : undefined;
   return (
     <SafeAreaView style={[styles.screen, style]} edges={edges}>
       {scroll ? (
-        <ScrollView contentContainerStyle={inner} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={inner} keyboardShouldPersistTaps="handled" testID="screen-scroll">
           {children}
         </ScrollView>
       ) : (

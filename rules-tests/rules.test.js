@@ -960,3 +960,26 @@ describe('1.3.0: T&C gate, anti-fraud, baseline holes', () => {
     await assertSucceeds(deleteDoc(m('s1')));
   });
 });
+
+describe('1.3.2: tap a player to score', () => {
+  const m1 = (uid) => doc(ctx(uid).firestore(), 'matches/m1');
+  test('one tapped point (team point + player credit in one event): the scorer only', async () => {
+    const tapped = [{ type: 'point', side: 'A', at: Date.now(), playerId: 'p2' }];
+    await assertFails(updateDoc(m1('p2'), { events: tapped })); // the credited player
+    await assertFails(updateDoc(m1('eve'), { events: tapped })); // the other captain
+    await assertFails(updateDoc(m1('bob'), { events: tapped }));
+    await assertSucceeds(updateDoc(m1('cap'), { events: tapped }));
+  });
+  test('the credit must be a player of the team that won the rally; team-only points carry none', async () => {
+    await assertFails(updateDoc(m1('cap'), { events: [{ type: 'point', side: 'A', at: Date.now(), playerId: 'q1' }] }));
+    await assertFails(updateDoc(m1('cap'), { events: [{ type: 'point', side: 'A', at: Date.now(), playerId: 'zz' }] }));
+    await assertSucceeds(updateDoc(m1('cap'), { events: [{ type: 'point', side: 'B', at: Date.now() }] }));
+  });
+  test('one rally per write, and undo pops it', async () => {
+    const at = Date.now();
+    const two = [{ type: 'point', side: 'A', at, playerId: 'p2' }, { type: 'point', side: 'A', at, playerId: 'p3' }];
+    await assertFails(updateDoc(m1('cap'), { events: two }));
+    await assertSucceeds(updateDoc(m1('cap'), { events: two.slice(0, 1) }));
+    await assertSucceeds(updateDoc(m1('cap'), { events: [] }));
+  });
+});

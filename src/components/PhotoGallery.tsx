@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import type { MatchPhoto } from '../core/types';
 import { colors } from '../theme';
+import { bottomPadding, useInsets } from './SafeFooter';
 
 /** An image that shows a broken-photo placeholder in its place when it can't be loaded. */
 export function PhotoImage({ uri, style, contentFit, label, dark, testID }: { uri: string; style: object; contentFit: 'cover' | 'contain'; label?: string; dark?: boolean; testID?: string }) {
@@ -149,6 +150,7 @@ export function PhotoViewer({
   onDelete?: (p: MatchPhoto) => Promise<void>;
 }) {
   const { t, i18n } = useTranslation();
+  const insets = useInsets(); // 1.3.2: caption bar and close button clear the system bars
   const [asking, setAsking] = useState<MatchPhoto | null>(null);
   const { width, height } = useWindowDimensions();
   const list = useRef<FlatList<MatchPhoto>>(null);
@@ -198,7 +200,7 @@ export function PhotoViewer({
             </View>
           )}
         />
-        <View style={s.top} pointerEvents="box-none">
+        <View style={[s.top, { paddingTop: Math.max(36, insets.top + 12) }]} pointerEvents="box-none">
           <Text style={s.counter} testID="viewer-counter" accessibilityLiveRegion="polite">
             {t('photos.counter', { n: cur + 1, total: photos.length })}
           </Text>
@@ -223,7 +225,7 @@ export function PhotoViewer({
             <Ionicons name="chevron-forward" size={28} color={colors.white} />
           </Pressable>
         )}
-        <View style={s.bottom} pointerEvents="none">
+        <View style={[s.bottom, { paddingBottom: bottomPadding(insets.bottom, 28) }]} pointerEvents="none" testID="photo-viewer-caption">
           <Text style={s.caption} numberOfLines={2} testID="viewer-caption">
             {who ? t('photos.addedBy', { name: who, when }) : when}
           </Text>

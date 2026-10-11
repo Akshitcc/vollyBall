@@ -48,7 +48,7 @@ const mockBackend = {
 };
 let mockMatches: unknown[] = [];
 jest.mock('../../services/backend', () => ({ backend: mockBackend }));
-jest.mock('../../services/camera', () => ({ cameraAccess: jest.fn(), hasCameraButton: () => false, isPhone: () => false, openSettings: jest.fn(), pickPhoto: jest.fn(async () => null), requestCamera: jest.fn(), takePhoto: jest.fn() }));
+jest.mock('../../services/camera', () => ({ cameraAccess: jest.fn(), hasCameraButton: () => false, isPhone: () => false, openSettings: jest.fn(), pickPhoto: jest.fn(async () => null), pickPhotos: jest.fn(async () => []), MAX_GALLERY_PICK: 10, requestCamera: jest.fn(), takePhoto: jest.fn() }));
 
 const mkMatch = (over: Partial<Match> = {}): Match =>
   ({

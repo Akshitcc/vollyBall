@@ -12,13 +12,14 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withSequence, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withDelay, withSequence, withSpring, withTiming } from 'react-native-reanimated';
 import { courtGrid, type Slot } from '../core/rotation';
 import type { Side } from '../core/scoring';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 import { letterSpacing } from '../i18n/format';
-import { colors, elevation, onColor, palette, radius, servePill, teamGradient, teamInk, teamRing, type } from '../theme';
+import { chipGradient, colors, elevation, onColor, palette, radius, servePill, teamGradient, teamInk, teamRing, type } from '../theme';
 import { firstName } from './MiniCourt';
+import { PressableScale } from './PressableScale';
 
 export interface TeamHalfProps {
   side: Side;
@@ -188,41 +189,73 @@ interface CourtTeam {
   positions: readonly Slot[];
 }
 
+/** Where a tapped chip is on screen (window coordinates), for the flying "+1" (§11.4). */
+export type ChipOrigin = () => Promise<{ x: number; y: number } | null>;
+
 /**
- * Both teams on one court (left team faces right): front column next to the net in the middle,
- * back column outside; each player a 30 dp chip in the team colour (initials) with the first name
- * under it, the position number top-left, a light-blue ball badge on the server.
+ * Both teams on one court (left team faces right), design 11 "live match v2" §11.2: front column
+ * next to the net, back column outside; every player a 84 dp chip in the team colour with the
+ * position badge, their live points ("6 pts"), the first name, a ball badge on the server and a gold
+ * underline under each team's top scorer.
+ *
+ * With `onPlayer` the chips are the scoring buttons (tap the player who won the rally: player AND
+ * team +1 in one event, core/scoring.ts playerPoint). Without it the court is read-only (viewer: no
+ * shadow, no press, role text).
  */
-export function CourtCard({ left, right, names, server, onSub }: { left: CourtTeam; right: CourtTeam; names: Record<string, string>; server: string | null; onSub?: () => void }) {
+export function CourtCard({
+  left,
+  right,
+  names,
+  server,
+  onSub,
+  points,
+  onPlayer,
+  disabled,
+  title,
+  testID = 'court-card',
+}: {
+  left: CourtTeam;
+  right: CourtTeam;
+  names: Record<string, string>;
+  server: string | null;
+  onSub?: () => void;
+  /** player id → points credited so far (core/stats.ts playerPointCounts). */
+  points?: Record<string, number>;
+  /** Tap a player to score (scorer only). */
+  onPlayer?: (side: Side, playerId: string, origin: ChipOrigin) => void;
+  /** Set / match over or waiting for the lineup: chips at 40 %, a11y disabled. */
+  disabled?: boolean;
+  title?: string;
+  testID?: string;
+}) {
   const { t } = useTranslation();
+  const pts = points ?? {};
   const half = (team: CourtTeam, screenSide: 'left' | 'right') => {
     const grid = courtGrid(screenSide);
-    const fg = onColor(team.color);
-    const ring = teamRing(team.color);
+    const fg = onColor(team.color); // white or navy text on the chip (≥ 4.5:1)
+    const best = Math.max(0, ...team.positions.map((id) => (id ? (pts[id] ?? 0) : 0)));
     return (
-      <View style={s.courtHalf} testID={`court-${team.side}`} accessible accessibilityLabel={t('rotation.courtA11y', { team: team.name })}>
+      <View style={s.courtHalf} testID={`court-${team.side}`} accessibilityLabel={t('rotation.courtA11y', { team: team.name })}>
         {grid.map((row, r) => (
           <View key={r} style={s.courtRow}>
             {row.map((pos) => {
               const id = team.positions[pos - 1] ?? null;
-              const nm = id ? firstName(names[id]) || '?' : '–';
-              const initials = id ? (names[id] ?? '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('') : '';
               return (
                 <View key={pos} style={s.cell} testID={`court-${team.side}-p${pos}`}>
-                  <Text style={s.cellPos}>{pos}</Text>
-                  <View style={[s.chip, { backgroundColor: id ? team.color : colors.white, borderColor: ring ?? colors.white }, !id && { borderColor: colors.border, borderStyle: 'dashed' }]}>
-                    <Text style={[s.chipText, { color: id ? fg : colors.muted }]} numberOfLines={1}>
-                      {initials}
-                    </Text>
-                    {!!id && id === server && (
-                      <View style={s.serverBadge} testID="court-server">
-                        <Ionicons name="tennisball" size={10} color={colors.ink} />
-                      </View>
-                    )}
-                  </View>
-                  <Text style={s.cellName} numberOfLines={1}>
-                    {nm}
-                  </Text>
+                  <PlayerTile
+                    id={id}
+                    pos={pos}
+                    name={id ? firstName(names[id]) || '?' : '–'}
+                    fullName={id ? (names[id] ?? '') : ''}
+                    team={team}
+                    fg={fg}
+                    count={id ? (pts[id] ?? 0) : 0}
+                    showCount={!!points}
+                    top={!!id && best > 0 && (pts[id] ?? 0) === best}
+                    serving={!!id && id === server}
+                    disabled={!!disabled}
+                    onPress={onPlayer && id ? (origin) => onPlayer(team.side, id, origin) : undefined}
+                  />
                 </View>
               );
             })}
@@ -232,11 +265,20 @@ export function CourtCard({ left, right, names, server, onSub }: { left: CourtTe
     );
   };
   return (
-    <View style={s.courtCard} testID="court-card">
+    <View style={s.courtCard} testID={testID}>
       <View style={s.courtHead}>
-        <Text style={[type.h3, { color: colors.text, flex: 1 }]}>{t('score.court')}</Text>
+        <Ionicons name={onPlayer ? 'hand-left-outline' : 'people-outline'} size={18} color={colors.text} style={{ marginRight: 6 }} />
+        <Text style={[type.h3, { color: colors.text, flex: 1 }]} numberOfLines={2} testID="court-title">
+          {title ?? (onPlayer ? t('liveV2.tapPlayerToScore') : points ? `${t('liveV2.court')} · ${t('score.ptsShort')}` : t('score.court'))}
+        </Text>
+        {!onPlayer && points && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }} testID="court-top-legend">
+            <View style={[s.topBarLegend]} />
+            <Text style={{ color: colors.muted, fontWeight: '700', fontSize: 12 }}>{t('liveV2.topScorer')}</Text>
+          </View>
+        )}
         {onSub && (
-          <Pressable onPress={onSub} hitSlop={10} accessibilityRole="button" testID="court-sub" style={{ flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 32 }}>
+          <Pressable onPress={onSub} hitSlop={10} accessibilityRole="button" testID="court-sub" style={{ flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 48, paddingLeft: 8 }}>
             <Ionicons name="swap-vertical" size={16} color={colors.primaryText} />
             <Text style={{ color: colors.primaryText, fontWeight: '700' }}>{t('score.sub')}</Text>
           </Pressable>
@@ -248,6 +290,156 @@ export function CourtCard({ left, right, names, server, onSub }: { left: CourtTe
         {half(right, 'right')}
       </View>
     </View>
+  );
+}
+
+/**
+ * One court chip (§11.2 / §11.4). Pressed: scale 0.94 + light-blue ring. When the count goes up it
+ * pops (1 → 1.2 → spring) with a green "+1" bump; when it goes down (undo) a red "−1" bump shows for
+ * 600 ms. Reduce Motion: no scale/pop, the bumps only fade.
+ */
+function PlayerTile(p: {
+  id: string | null;
+  pos: number;
+  name: string;
+  fullName: string;
+  team: CourtTeam;
+  fg: string;
+  count: number;
+  showCount: boolean;
+  top: boolean;
+  serving: boolean;
+  disabled: boolean;
+  onPress?: (origin: ChipOrigin) => void;
+}) {
+  const { t } = useTranslation();
+  const reduce = useReduceMotion();
+  const pop = useSharedValue(1);
+  const last = useRef(p.count);
+  const box = useRef<View>(null);
+  const [bump, setBump] = React.useState<{ d: 1 | -1; k: number } | null>(null);
+  useEffect(() => {
+    if (p.count !== last.current) {
+      const d = p.count > last.current ? 1 : -1;
+      if (d > 0 && !reduce) pop.value = withSequence(withTiming(1.2, { duration: 80 }), withSpring(1, { damping: 12, stiffness: 260 }));
+      setBump({ d, k: Date.now() });
+      const tm = setTimeout(() => setBump(null), 600);
+      last.current = p.count;
+      return () => clearTimeout(tm);
+    }
+  }, [p.count, reduce, pop]);
+  const popStyle = useAnimatedStyle(() => ({ transform: [{ scale: pop.value }] }));
+  if (!p.id)
+    return (
+      <View style={[s.tile, s.tileEmpty]}>
+        <Text style={s.tilePosEmpty}>{p.pos}</Text>
+        <Text style={[s.tileName, { color: colors.muted }]}>–</Text>
+      </View>
+    );
+  const fg = p.fg;
+  const darkFill = fg === colors.white;
+  const label = p.showCount ? t('liveV2.playerChipA11y', { name: p.fullName || p.name, pos: p.pos, count: p.count }) : `${p.fullName || p.name}, ${p.pos}`;
+  const body = (pressed: boolean) => (
+    <>
+      <LinearGradient colors={chipGradient(p.team.color)} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={[StyleSheet.absoluteFill, { borderRadius: 14 }]} />
+      <View style={[s.tilePos, { backgroundColor: darkFill ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.55)' }]}>
+        <Text style={[s.tilePosText, { color: darkFill ? colors.white : colors.ink }]}>{p.pos}</Text>
+      </View>
+      {p.showCount ? (
+        <Animated.View style={[{ flexDirection: 'row', alignItems: 'baseline' }, popStyle]}>
+          <Text style={[s.tileCount, { color: fg }]} testID={`court-pts-${p.id}`}>
+            {p.count}
+          </Text>
+          <Text style={[s.tilePts, { color: fg }]}>{t('score.ptsShort')}</Text>
+        </Animated.View>
+      ) : null}
+      <Text style={[s.tileName, { color: fg }]} numberOfLines={1} ellipsizeMode="tail">
+        {p.name}
+      </Text>
+      {p.top && <View style={s.topBar} testID={`court-top-${p.id}`} />}
+      {p.serving && (
+        <View style={s.serverBadge} testID="court-server">
+          <Ionicons name="tennisball" size={12} color={colors.ink} />
+        </View>
+      )}
+      {pressed && <View pointerEvents="none" style={s.ring} />}
+      {bump && (
+        <Animated.View key={bump.k} entering={FadeIn.duration(reduce ? 150 : 120)} exiting={FadeOut.duration(150)} pointerEvents="none" style={[s.bump, { backgroundColor: bump.d > 0 ? colors.success : colors.lossText }]} testID={`court-bump-${p.id}`}>
+          <Text style={s.bumpText}>{bump.d > 0 ? '+1' : '−1'}</Text>
+        </Animated.View>
+      )}
+    </>
+  );
+  const border = { borderColor: 'rgba(255,255,255,0.35)' };
+  if (!p.onPress)
+    return (
+      <View style={[s.tile, border, s.tileViewer]} accessible accessibilityRole="text" accessibilityLabel={label} testID={`court-tile-${p.id}`}>
+        {body(false)}
+      </View>
+    );
+  const origin: ChipOrigin = () =>
+    new Promise((resolve) => {
+      const done = setTimeout(() => resolve(null), 120);
+      try {
+        box.current?.measureInWindow?.((x, y, w, h) => {
+          clearTimeout(done);
+          resolve(w || h ? { x: x + w / 2, y: y + h / 3 } : null);
+        });
+      } catch {
+        clearTimeout(done);
+        resolve(null);
+      }
+    });
+  return (
+    <View ref={box} collapsable={false}>
+      <PressableScale
+        onPress={() => p.onPress?.(origin)}
+        disabled={p.disabled}
+        scaleTo={0.94}
+        android_ripple={{ color: 'rgba(255,255,255,0.18)', borderless: false }}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: p.disabled }}
+        accessibilityLabel={label}
+        accessibilityHint={t('score.tileHint', { name: p.fullName || p.name, team: p.team.name })}
+        style={[s.tile, border, elevation.e1, p.disabled && { opacity: 0.4 }]}
+        testID={`court-tile-${p.id}`}
+      >
+        {({ pressed }: { pressed: boolean }) => body(pressed && !p.disabled)}
+      </PressableScale>
+    </View>
+  );
+}
+
+/**
+ * "+1 · Opp. error" (§11.1): a TEAM point only – no player credit, so it never counts toward the
+ * Player of the Match. Light haptic, the +1 tile pulses (press scale), the score rolls.
+ */
+export function TeamPointButton({ side, name, color, disabled, onPress }: { side: Side; name: string; color: string; disabled?: boolean; onPress: () => void }) {
+  const { t } = useTranslation();
+  const fg = teamInk(color).fg;
+  return (
+    <PressableScale
+      onPress={onPress}
+      disabled={disabled}
+      scaleTo={0.94}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
+      accessibilityLabel={t('liveV2.teamPointA11y', { team: name })}
+      style={[s.teamBtn, disabled && { opacity: 0.4 }]}
+      testID={`team-point-${side}`}
+    >
+      <View style={[s.teamBtnTile, { backgroundColor: color }]}>
+        <Text style={{ color: fg, fontWeight: '900', fontSize: 15 }}>+1</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={s.teamBtnName} numberOfLines={1}>
+          {name.split(/\s+/)[0]}
+        </Text>
+        <Text style={s.teamBtnSub} numberOfLines={1}>
+          {t('liveV2.oppError')}
+        </Text>
+      </View>
+    </PressableScale>
   );
 }
 
@@ -276,15 +468,29 @@ const s = StyleSheet.create({
   tickerText: { flex: 1, color: colors.text, fontWeight: '700', fontSize: 13 },
   dot: { width: 9, height: 9, borderRadius: 5 },
   courtCard: { backgroundColor: colors.white, borderRadius: radius.md, marginHorizontal: 12, marginTop: 10, padding: 12, ...elevation.e2 },
-  courtHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  court: { flexDirection: 'row', backgroundColor: palette.court, borderRadius: 10, borderWidth: 2, borderColor: colors.white, padding: 6 },
-  courtHalf: { flex: 1, gap: 4 },
-  net: { width: 4, backgroundColor: colors.ink, borderRadius: 2, marginHorizontal: 6 },
-  courtRow: { flexDirection: 'row', justifyContent: 'space-around' },
-  cell: { alignItems: 'center', width: '48%', paddingTop: 2 },
-  cellPos: { position: 'absolute', top: 0, left: 2, fontSize: 9, fontWeight: '700', color: '#3F6E99' },
-  chip: { width: 30, height: 30, borderRadius: 15, borderWidth: 2, alignItems: 'center', justifyContent: 'center', ...elevation.e1 },
-  chipText: { fontSize: 11, fontWeight: '800' },
-  serverBadge: { position: 'absolute', right: -8, bottom: -4, width: 16, height: 16, borderRadius: 8, backgroundColor: colors.primary, borderWidth: 1.5, borderColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
-  cellName: { fontSize: 11, fontWeight: '700', color: colors.text, marginTop: 2, maxWidth: '100%' },
+  courtHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, minHeight: 32 },
+  court: { flexDirection: 'row', backgroundColor: palette.court, borderRadius: 12, borderWidth: 2, borderColor: colors.white, padding: 6 },
+  courtHalf: { flex: 1, gap: 6 },
+  net: { width: 4, backgroundColor: colors.ink, borderRadius: 2, marginHorizontal: 5 },
+  courtRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 6 },
+  cell: { flex: 1 },
+  tile: { minHeight: 84, borderRadius: 16, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', paddingTop: 12, paddingBottom: 8, paddingHorizontal: 3 },
+  tileViewer: {},
+  tileEmpty: { backgroundColor: colors.white, borderColor: colors.border, borderStyle: 'dashed' },
+  tilePos: { position: 'absolute', top: 5, left: 5, width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  tilePosText: { fontSize: 10, fontWeight: '800' },
+  tilePosEmpty: { position: 'absolute', top: 4, left: 6, fontSize: 10, fontWeight: '700', color: colors.muted },
+  tileCount: { fontSize: 24, lineHeight: 28, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  tilePts: { fontSize: 10, fontWeight: '700', marginLeft: 2 },
+  tileName: { fontSize: 12, fontWeight: '700', marginTop: 2, maxWidth: 64 },
+  topBar: { position: 'absolute', bottom: -6, alignSelf: 'center', width: 30, height: 3, borderRadius: 2, backgroundColor: colors.gold },
+  topBarLegend: { width: 16, height: 3, borderRadius: 2, backgroundColor: colors.gold },
+  serverBadge: { position: 'absolute', right: -6, top: -6, width: 22, height: 22, borderRadius: 11, backgroundColor: colors.primary, borderWidth: 1.5, borderColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
+  ring: { position: 'absolute', top: -4, left: -4, right: -4, bottom: -4, borderRadius: 19, borderWidth: 3, borderColor: colors.primary },
+  bump: { position: 'absolute', top: -10, alignSelf: 'center', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 },
+  bumpText: { color: colors.white, fontWeight: '900', fontSize: 12 },
+  teamBtn: { flex: 1, minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.white, borderRadius: 14, borderWidth: 1.5, borderColor: colors.hairline, paddingHorizontal: 10, ...elevation.e1 },
+  teamBtnTile: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  teamBtnName: { color: colors.text, fontWeight: '800', fontSize: 15 },
+  teamBtnSub: { color: colors.muted, fontWeight: '600', fontSize: 12 },
 });

@@ -1,10 +1,11 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { HeaderBackButton } from 'expo-router/react-navigation';
 import { firstFutureHour, isPastStart, localAt, localDayOffset, localDayStart } from '../../core/dates';
 import { LIMITS } from '../../core/limits';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
-import { StyleSheet, Text, View } from 'react-native';
+import { BackHandler, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { card } from '../../components/Hero';
 import { PressableScale } from '../../components/PressableScale';
 import { LocationPicker, placeReady } from '../../components/LocationPicker';
@@ -21,9 +22,12 @@ import { MIN_PLAYERS, missingPlayers, ROSTER_MESSAGES, rosterErrors, teamCanPlay
 import { buildMatch, matchTeamFromTeam } from '../../services/matchFactory';
 import { useMe } from '../../state/AuthContext';
 import { useWatch } from '../../state/hooks';
-import { formatDayChipT, hourLabel, translateError } from '../../i18n/format';
+import { describeRulesT, formatDayChipT, hourLabel, translateError } from '../../i18n/format';
 import { colors, elevation, onColor, readableFill, type } from '../../theme';
 import { captainsProblem } from '../../core/antifraud';
+import { SafeFooter } from '../../components/SafeFooter';
+import { canOpenStep, previousStep, teamsProblem, type NewMatchStep, type SideSummary, type TeamsProblem } from '../../core/newMatchFlow';
+import { goBackOr } from '../../services/nav';
 
 /** A side is either a registered team or a roster built from registered players by number. */
 type SideInput = { kind: 'team'; team: Team } | BuiltTeam | null;
@@ -41,8 +45,14 @@ function SidePicker({
   otherTeamId,
   otherColor,
   badge,
+  ready,
+  open,
+  onToggle,
   testID,
 }: {
+  /** 1.3.2: collapsed to its header row (mockup 05: "Team B · Tap to set up"). */
+  open: boolean;
+  onToggle: () => void;
   otherColor?: string | null;
   badge: 'A' | 'B';
   label: string;
@@ -53,6 +63,8 @@ function SidePicker({
   otherPlayerIds: string[];
   /** The registered team already picked for the other side: not offered here (fix re-test 204). */
   otherTeamId?: string | null;
+  /** Side complete (players, name, captain): tick in the header. */
+  ready: boolean;
   testID: string;
 }) {
   const { t: tr } = useTranslation();
@@ -68,18 +80,38 @@ function SidePicker({
   useEffect(() => {
     if (value?.kind === 'build') setBuilt(value);
   }, [value]);
+  const colorNow = value?.kind === 'team' ? value.team.color : value?.kind === 'build' ? value.color : defaultColor;
+  const count = value?.kind === 'team' ? value.team.memberIds.length : value?.kind === 'build' ? value.players.length : 0;
+  const name = value?.kind === 'team' ? value.team.name : value?.kind === 'build' ? value.name.trim() : '';
+  const summary = value && (name || count) ? [name, tr('newMatch.summaryPlayers', { count })].filter(Boolean).join(' · ') : null;
   const teamChip = (t: Team) => (
     <Chip key={t.id} label={t.name} color={t.color} active={value?.kind === 'team' && value.team.id === t.id} onPress={() => onChange({ kind: 'team', team: t })} />
   );
   return (
-    <View style={[card, { marginBottom: 12 }]}>
-      <Row style={{ marginBottom: 10 }}>
-        <View style={[st.badge, { backgroundColor: readableFill(value?.kind === 'team' ? value.team.color : value?.kind === 'build' ? value.color : defaultColor) }]}>
-          <Text style={{ color: onColor(readableFill(value?.kind === 'team' ? value.team.color : value?.kind === 'build' ? value.color : defaultColor)), fontWeight: '800' }}>{badge}</Text>
+    <View style={[card, { marginBottom: 12 }]} testID={testID}>
+      <Pressable
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${label}: ${summary ?? tr(open ? 'newMatch.required' : 'newMatch.tapToSetUp')}`}
+        testID={`${testID}-toggle`}
+        style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44, marginBottom: open ? 10 : 0 }}
+      >
+        <View style={[st.badge, { backgroundColor: readableFill(colorNow) }]}>
+          <Text style={{ color: onColor(readableFill(colorNow)), fontWeight: '800' }}>{badge}</Text>
         </View>
-        <Text style={[type.h2, { color: colors.text, marginLeft: 8, flex: 1 }]}>{label}</Text>
-        {value ? <Ionicons name="checkmark-circle" size={20} color={colors.successStrong} /> : <Text style={[type.caption, { color: colors.muted }]}>{tr('newMatch.required')}</Text>}
-      </Row>
+        <Text style={[type.h2, { color: colors.text, marginLeft: 8, flexShrink: 1 }]} numberOfLines={1}>{label}</Text>
+        <View style={{ flex: 1 }} />
+        {summary ? (
+          <Text style={[type.caption, { color: colors.muted, marginRight: 6, flexShrink: 1 }]} numberOfLines={1}>{summary}</Text>
+        ) : !open ? (
+          <Text style={[type.caption, { color: colors.muted, marginRight: 6 }]}>{tr('newMatch.tapToSetUp')}</Text>
+        ) : null}
+        {ready ? <Ionicons name="checkmark-circle" size={20} color={colors.successStrong} /> : open ? <Text style={[type.caption, { color: colors.muted }]}>{tr('newMatch.required')}</Text> : null}
+        {!open && <Ionicons name="chevron-down" size={18} color={colors.muted} style={{ marginLeft: 4 }} />}
+      </Pressable>
+      {open && (
+      <>
       <View style={st.seg} accessibilityRole="tablist">
         {(
           [
@@ -112,6 +144,8 @@ function SidePicker({
       ) : (
         <TeamBuilder value={built} onChange={(v) => { setBuilt(v); onChange(v); }} otherPlayerIds={otherPlayerIds} otherColor={otherColor} testID={testID} />
       )}
+      </>
+      )}
     </View>
   );
 }
@@ -121,8 +155,12 @@ export default function NewMatch() {
   const me = useMe();
   const params = useLocalSearchParams<{ teamId?: string; courtId?: string }>();
   const myTeams = useWatch<Team[]>((cb) => backend.watchMyTeams(me.id, cb), [me.id]) ?? [];
+  // 1.3.2: one screen, three steps (Teams → Rules → Start). Every step stays mounted (only the current
+  // one is shown), so nothing typed or picked is lost when moving between steps.
+  const [step, setStep] = useState<NewMatchStep>(0);
   const [a, setA] = useState<SideInput>(null);
   const [b, setB] = useState<SideInput>(null);
+  const [open, setOpen] = useState<{ A: boolean; B: boolean }>({ A: true, B: false });
   // Rosters of picked registered teams (loaded once per team, used for the both-teams check).
   const [rosters, setRosters] = useState<Record<string, MatchTeam>>({});
   useEffect(() => {
@@ -164,6 +202,63 @@ export default function NewMatch() {
     if (t && !a) setA({ kind: 'team', team: t });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myTeams.length]);
+
+  const sideLabel = (s: 'A' | 'B') => (s === 'A' ? t('common.teamA') : t('common.teamB'));
+  const summaryOf = (v: SideInput, cap: string | null): SideSummary | null =>
+    !v ? null : v.kind === 'team' ? { kind: 'team', teamId: v.team.id, name: v.team.name, players: v.team.memberIds.length } : { kind: 'build', name: v.name, players: v.players.length, captain: cap };
+  const problem = teamsProblem(summaryOf(a, capA), summaryOf(b, capB));
+  const teamsReady = !problem;
+  const now = Date.now();
+  const rulesProblem = location && !placeReady(location) ? t('location.nameRequired') : when !== 'now' && isPastStart(when, now, 0) ? t('errors.codes.time_in_past') : null;
+  const rulesReady = !rulesProblem;
+  /** One side on its own is complete (picked, named, 6+ players, captain): the tick on its card. */
+  const sideReady = (s: 'A' | 'B') => {
+    const one = summaryOf(s === 'A' ? a : b, s === 'A' ? capA : capB);
+    const own = teamsProblem(one, one);
+    return !!one && (!own || own.code === 'sameTeams');
+  };
+  // Team A done and Team B still untouched: open Team B's card (it starts collapsed, mockup 05).
+  const aReady = sideReady('A');
+  useEffect(() => {
+    if (aReady && !b) setOpen((o) => (o.B ? o : { ...o, B: true }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aReady]);
+  const hint = (p: TeamsProblem | null): string | undefined => {
+    if (!p) return undefined;
+    switch (p.code) {
+      case 'pickBoth':
+        return t('newMatch.hintPickBoth');
+      case 'nameRequired':
+        return t('newMatch.hintName', { side: sideLabel(p.side) });
+      case 'needPlayers':
+        return t('newMatch.hintPlayers', { side: sideLabel(p.side), count: p.missing, min: MIN_PLAYERS });
+      case 'captainRequired':
+        return t('newMatch.hintCaptain', { side: sideLabel(p.side) });
+      case 'sameTeams':
+        return t('newMatch.sameTeams');
+    }
+  };
+
+  // A step that became unreachable (e.g. a player removed) can't stay open.
+  useEffect(() => {
+    if (!canOpenStep(step, teamsReady, rulesReady) && step > 0) setStep(teamsReady ? 1 : 0);
+  }, [step, teamsReady, rulesReady]);
+  const goTo = (target: NewMatchStep) => {
+    if (target === step || !canOpenStep(target, teamsReady, rulesReady)) return;
+    setError(null);
+    setStep(target);
+  };
+  /** Header arrow / Android back: previous step; leave the screen only from the Teams step. */
+  const back = useCallback(() => {
+    const prev = previousStep(step);
+    if (prev == null) return false;
+    setStep(prev);
+    return true;
+  }, [step]);
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', back);
+    return () => sub.remove();
+  }, [back]);
 
   const create = async () => {
     setError(null);
@@ -220,64 +315,179 @@ export default function NewMatch() {
   const days = [0, 1, 2, 3, 4, 5, 6];
   const hours = [6, 7, 8, 16, 17, 18, 19, 20];
   // Local calendar days on this device (src/core/dates.ts), never UTC (QA B2).
-  const now = Date.now();
   const selDay = when === 'now' ? null : localDayOffset(when, now);
   const selHour = when === 'now' ? null : new Date(when).getHours();
   const hourPast = (d: number, h: number) => d === 0 && isPastStart(localAt(0, h, now), now, 0);
   const pick = (d: number, h: number) => setWhen(localAt(d, hourPast(d, h) ? (firstFutureHour(hours, d, now) ?? h) : h, now));
 
   const colorOf = (v: SideInput) => (v?.kind === 'team' ? v.team.color : v?.kind === 'build' ? v.color : null);
-  const sideOk = (v: SideInput) => !!v && (v.kind === 'team' ? teamCanPlay(v.team) : !!v.name.trim() && v.players.length >= MIN_PLAYERS);
-  const step = !sideOk(a) || !sideOk(b) ? 0 : 1;
+  const whenText =
+    when === 'now'
+      ? t('newMatch.nowLabel')
+      : `${selDay === 0 ? t('common.today') : selDay === 1 ? t('common.tomorrow') : formatDayChipT(localDayStart(selDay ?? 1, now))} · ${hourLabel(selHour ?? 18, t)}`;
+
+  const footer =
+    step === 0 ? (
+      <SafeFooter testID="new-match-footer">
+        <Button
+          title={`${teamsReady ? t('newMatch.nextRules') : t('newMatch.nextRulesNeeds', { min: MIN_PLAYERS })} →`}
+          disabled={!teamsReady}
+          disabledHint={hint(problem)}
+          onPress={() => goTo(1)}
+          testID="next-rules"
+        />
+      </SafeFooter>
+    ) : step === 1 ? (
+      <SafeFooter testID="new-match-footer">
+        <Row style={{ gap: 10 }}>
+          <Button title={t('newMatch.back')} variant="secondary" onPress={back} style={{ flex: 1 }} testID="step-back" />
+          <Button title={`${t('newMatch.nextStart')} →`} disabled={!rulesReady} disabledHint={rulesProblem ?? undefined} onPress={() => goTo(2)} style={{ flex: 2 }} testID="next-start" />
+        </Row>
+      </SafeFooter>
+    ) : (
+      <SafeFooter testID="new-match-footer">
+        <Row style={{ gap: 10, alignItems: 'stretch' }}>
+          <Button title={t('newMatch.back')} variant="secondary" onPress={back} style={{ flex: 1 }} testID="step-back" />
+          <Button title={when === 'now' ? t('newMatch.start') : t('newMatch.scheduleMatch')} icon="play" big onPress={create} loading={busy} style={{ flex: 2 }} testID="create-match" />
+        </Row>
+      </SafeFooter>
+    );
+
+  const teamCard = (s: 'A' | 'B') => {
+    const v = s === 'A' ? a : b;
+    const cap = s === 'A' ? capA : capB;
+    const players = v?.kind === 'build' ? v.players : v?.kind === 'team' ? (rosters[v.team.id]?.players ?? []) : [];
+    const capId = v?.kind === 'team' ? v.team.captainId : cap;
+    const capName = players.find((p) => p.id === capId)?.name;
+    const count = v?.kind === 'team' ? v.team.memberIds.length : players.length;
+    const col = colorOf(v) ?? TEAM_COLORS[s === 'A' ? 0 : 1];
+    return (
+      <View style={st.sumRow} testID={`summary-team-${s}`}>
+        <View style={[st.badge, { backgroundColor: readableFill(col) }]}>
+          <Text style={{ color: onColor(readableFill(col)), fontWeight: '800' }}>{s}</Text>
+        </View>
+        <View style={{ flex: 1, marginLeft: 10 }}>
+          <Text style={[type.h2, { color: colors.text }]} numberOfLines={2}>{v?.kind === 'team' ? v.team.name : v?.name.trim() || sideLabel(s)}</Text>
+          <Text style={{ color: colors.muted, fontWeight: '600' }}>
+            {t('newMatch.summaryPlayers', { count })}
+            {capName ? ` · ${t('newMatch.summaryCaptain', { name: capName })}` : ''}
+          </Text>
+        </View>
+      </View>
+    );
+  };
+  const sumSection = (label: string, target: NewMatchStep, body: React.ReactNode, testID: string) => (
+    <View style={st.sumSection} testID={testID}>
+      <Row style={{ marginBottom: 6 }}>
+        <Text style={[ui.label, { flex: 1, marginBottom: 0 }]}>{label}</Text>
+        <PressableScale onPress={() => goTo(target)} accessibilityRole="button" accessibilityLabel={t('newMatch.changeStep', { label })} hitSlop={8} testID={`${testID}-change`}>
+          <Text style={{ color: colors.primaryText, fontWeight: '800' }}>{t('newMatch.change')}</Text>
+        </PressableScale>
+      </Row>
+      {body}
+    </View>
+  );
+
+  const shown = (i: NewMatchStep) => (step === i ? null : st.hidden);
 
   return (
-    <KeyboardAwareScreen edges={[]} header={<Stepper step={step} />}>
-      <SidePicker label={t('common.teamA')} badge="A" value={a} onChange={setA} myTeams={myTeams} defaultColor={TEAM_COLORS[0]} otherPlayerIds={playerIdsOf(b, rosters)} otherTeamId={b?.kind === 'team' ? b.team.id : null} otherColor={colorOf(b)} testID="side-a" />
-      <CaptainPicker side="A" value={a} captain={capA} onChange={setCapA} />
-      <SidePicker label={t('common.teamB')} badge="B" value={b} onChange={setB} myTeams={myTeams} defaultColor={TEAM_COLORS[1]} otherPlayerIds={playerIdsOf(a, rosters)} otherTeamId={a?.kind === 'team' ? a.team.id : null} otherColor={colorOf(a)} testID="side-b" />
-      <CaptainPicker side="B" value={b} captain={capB} onChange={setCapB} />
-      <Card>
-        <RulesEditor value={rules} onChange={setRules} />
-        <Text style={ui.label}>{t('newMatch.firstServe')}</Text>
-        <Row>
-          <Chip label={t('common.teamA')} active={firstServe === 'A'} onPress={() => setFirstServe('A')} />
-          <Chip label={t('common.teamB')} active={firstServe === 'B'} onPress={() => setFirstServe('B')} />
-        </Row>
-      </Card>
-      <Card>
-        <Text style={ui.label}>{t('newMatch.when')}</Text>
-        <Row style={{ flexWrap: 'wrap' }}>
-          <Chip label={t('newMatch.startNow')} active={when === 'now'} onPress={() => setWhen('now')} />
-          <Chip label={t('newMatch.schedule')} active={when !== 'now'} onPress={() => setWhen(localAt(1, 18, now))} testID="when-schedule" />
-        </Row>
-        {when !== 'now' && (
-          <>
-            <Row style={{ flexWrap: 'wrap' }}>
-              {days.map((d) => (
-                <Chip
-                  key={d}
-                  label={d === 0 ? t('common.today') : d === 1 ? t('common.tomorrow') : formatDayChipT(localDayStart(d, now))}
-                  active={selDay === d}
-                  disabled={d === 0 && firstFutureHour(hours, 0, now) == null}
-                  onPress={() => pick(d, selHour ?? 18)}
-                  testID={`match-day-${d}`}
-                />
-              ))}
-            </Row>
-            <Row style={{ flexWrap: 'wrap' }}>
-              {hours.map((h) => (
-                <Chip key={h} label={hourLabel(h, t)} active={selHour === h} disabled={hourPast(selDay ?? 1, h)} onPress={() => setWhen(localAt(selDay ?? 1, h, now))} testID={`match-hour-${h}`} />
-              ))}
-            </Row>
-          </>
-        )}
-        <Field label={t('newMatch.title')} value={title} onChangeText={setTitle} placeholder={t('newMatch.titlePlaceholder')} maxLength={LIMITS.matchTitle.max} testID="match-title" />
-      </Card>
-      <H2>{t('common.where')}</H2>
-      <LocationPicker value={location} onChange={setLocation} />
-      <P muted style={{ marginBottom: 8 }}>{t('newMatch.scorerNote')}</P>
-      {error && <Text style={{ color: colors.danger, fontWeight: '700' }}>{error}</Text>}
-      <Button title={when === 'now' ? t('newMatch.start') : t('newMatch.scheduleMatch')} icon="play" big onPress={create} loading={busy} testID="create-match" />
+    <KeyboardAwareScreen edges={[]} header={<Stepper step={step} canOpen={(i) => canOpenStep(i, teamsReady, rulesReady)} onOpen={goTo} />} footer={footer} scrollKey={step}>
+      <Stack.Screen
+        options={{
+          // Header arrow follows the steps too (Android back is handled by BackHandler above).
+          headerLeft: () => (
+            <HeaderBackButton onPress={() => back() || goBackOr('/')} tintColor={colors.white} accessibilityLabel={t('common.goBack')} testID="header-back" />
+          ),
+          headerRight: () => (
+            <Text style={{ color: colors.onInkMuted, fontWeight: '700', marginRight: Platform.OS === 'web' ? 16 : 0 }} testID="new-match-step-of">
+              {t('newMatch.stepOf', { n: step + 1, total: 3 })}
+            </Text>
+          ),
+          gestureEnabled: step === 0,
+        }}
+      />
+      {/* Step 1 – Teams */}
+      <View style={shown(0)} testID="new-match-step-teams">
+        <SidePicker label={t('common.teamA')} badge="A" value={a} onChange={setA} myTeams={myTeams} defaultColor={TEAM_COLORS[0]} otherPlayerIds={playerIdsOf(b, rosters)} otherTeamId={b?.kind === 'team' ? b.team.id : null} otherColor={colorOf(b)} ready={sideReady('A')} open={open.A} onToggle={() => setOpen((o) => ({ ...o, A: !o.A }))} testID="side-a" />
+        {open.A && <CaptainPicker side="A" value={a} captain={capA} onChange={setCapA} />}
+        <SidePicker label={t('common.teamB')} badge="B" value={b} onChange={setB} myTeams={myTeams} defaultColor={TEAM_COLORS[1]} otherPlayerIds={playerIdsOf(a, rosters)} otherTeamId={a?.kind === 'team' ? a.team.id : null} otherColor={colorOf(a)} ready={sideReady('B')} open={open.B} onToggle={() => setOpen((o) => ({ ...o, B: !o.B }))} testID="side-b" />
+        {open.B && <CaptainPicker side="B" value={b} captain={capB} onChange={setCapB} />}
+      </View>
+      {/* Step 2 – Rules */}
+      <View style={shown(1)} testID="new-match-step-rules">
+        <Card>
+          <RulesEditor value={rules} onChange={setRules} />
+          <Text style={ui.label}>{t('newMatch.firstServe')}</Text>
+          <Row>
+            <Chip label={t('common.teamA')} active={firstServe === 'A'} onPress={() => setFirstServe('A')} testID="first-serve-A" />
+            <Chip label={t('common.teamB')} active={firstServe === 'B'} onPress={() => setFirstServe('B')} testID="first-serve-B" />
+          </Row>
+        </Card>
+        <Card>
+          <Text style={ui.label}>{t('newMatch.when')}</Text>
+          <Row style={{ flexWrap: 'wrap' }}>
+            <Chip label={t('newMatch.startNow')} active={when === 'now'} onPress={() => setWhen('now')} testID="when-now" />
+            <Chip label={t('newMatch.schedule')} active={when !== 'now'} onPress={() => setWhen(localAt(1, 18, now))} testID="when-schedule" />
+          </Row>
+          {when !== 'now' && (
+            <>
+              <Row style={{ flexWrap: 'wrap' }}>
+                {days.map((d) => (
+                  <Chip
+                    key={d}
+                    label={d === 0 ? t('common.today') : d === 1 ? t('common.tomorrow') : formatDayChipT(localDayStart(d, now))}
+                    active={selDay === d}
+                    disabled={d === 0 && firstFutureHour(hours, 0, now) == null}
+                    onPress={() => pick(d, selHour ?? 18)}
+                    testID={`match-day-${d}`}
+                  />
+                ))}
+              </Row>
+              <Row style={{ flexWrap: 'wrap' }}>
+                {hours.map((h) => (
+                  <Chip key={h} label={hourLabel(h, t)} active={selHour === h} disabled={hourPast(selDay ?? 1, h)} onPress={() => setWhen(localAt(selDay ?? 1, h, now))} testID={`match-hour-${h}`} />
+                ))}
+              </Row>
+            </>
+          )}
+          <Field label={t('newMatch.title')} value={title} onChangeText={setTitle} placeholder={t('newMatch.titlePlaceholder')} maxLength={LIMITS.matchTitle.max} testID="match-title" />
+        </Card>
+        <H2>{t('common.where')}</H2>
+        <LocationPicker value={location} onChange={setLocation} />
+      </View>
+      {/* Step 3 – Start */}
+      <View style={shown(2)} testID="new-match-step-start">
+        <Text style={[type.h2, { color: colors.text, marginBottom: 10 }]}>{t('newMatch.summaryTitle')}</Text>
+        <View style={card}>
+          {sumSection(
+            t('newMatch.stepTeams'),
+            0,
+            <>
+              {teamCard('A')}
+              <Text style={st.vs}>vs</Text>
+              {teamCard('B')}
+            </>,
+            'summary-teams',
+          )}
+          {sumSection(
+            t('newMatch.summaryRules'),
+            1,
+            <>
+              <Text style={st.sumText}>{describeRulesT(rules, t)}</Text>
+              <Text style={st.sumMuted}>{t('newMatch.firstServeSide', { side: sideLabel(firstServe) })}</Text>
+            </>,
+            'summary-rules',
+          )}
+          {sumSection(t('newMatch.summaryWhen'), 1, <Text style={st.sumText}>{whenText}{title.trim() ? ` · ${title.trim()}` : ''}</Text>, 'summary-when')}
+          {sumSection(t('newMatch.summaryCourt'), 1, <Text style={st.sumText}>{location?.name?.trim() || t('newMatch.noCourt')}</Text>, 'summary-court')}
+          <View style={[st.sumSection, { borderBottomWidth: 0 }]} testID="summary-scorer">
+            <Text style={ui.label}>{t('newMatch.summaryScorer')}</Text>
+            <Text style={st.sumText}>{t('newMatch.scorerYou', { name: me.name })}</Text>
+            <Text style={st.sumMuted}>{t('newMatch.scorerNote')}</Text>
+          </View>
+        </View>
+        {error && <Text style={{ color: colors.danger, fontWeight: '700', marginTop: 8 }} accessibilityRole="alert" testID="new-match-error">{error}</Text>}
+      </View>
     </KeyboardAwareScreen>
   );
 }
@@ -308,20 +518,40 @@ function CaptainPicker({ side, value, captain, onChange }: { side: 'A' | 'B'; va
   );
 }
 
-/** 3-step progress strip in the navy header (Teams → Rules → Start), design-spec §8 05. */
-function Stepper({ step }: { step: number }) {
+/**
+ * 3-step progress strip in the navy header (Teams → Rules → Start), design-spec §8 05. 1.3.2: the
+ * steps are tabs: any earlier step can be opened, a later one only when the steps before it are done
+ * (disabled tabs say so to screen readers).
+ */
+function Stepper({ step, canOpen, onOpen }: { step: NewMatchStep; canOpen: (i: NewMatchStep) => boolean; onOpen: (i: NewMatchStep) => void }) {
   const { t } = useTranslation();
   const steps = [t('newMatch.stepTeams'), t('newMatch.stepRules'), t('newMatch.stepStart')];
   return (
-    <View style={st.stepper} testID="new-match-stepper" accessible accessibilityLabel={t('newMatch.stepOf', { n: step + 1, total: 3 })}>
-      {steps.map((label, i) => (
-        <View key={label} style={{ flex: 1, marginRight: i < 2 ? 6 : 0 }}>
-          <View style={[st.seg3, { backgroundColor: i <= step ? colors.primary : colors.ink2 }]} />
-          <Text style={{ color: i <= step ? colors.onInk : colors.onInkMuted, fontWeight: '700', fontSize: 12, marginTop: 6 }} numberOfLines={1}>
-            {label}
-          </Text>
-        </View>
-      ))}
+    <View style={st.stepper} testID="new-match-stepper" accessibilityRole="tablist" accessibilityLabel={t('newMatch.stepOf', { n: step + 1, total: 3 })}>
+      {steps.map((label, idx) => {
+        const i = idx as NewMatchStep;
+        const enabled = canOpen(i);
+        const done = i <= step;
+        return (
+          <Pressable
+            key={label}
+            onPress={() => enabled && onOpen(i)}
+            disabled={!enabled}
+            accessibilityRole="tab"
+            accessibilityLabel={t('newMatch.stepTab', { n: i + 1, total: 3, label })}
+            accessibilityState={{ selected: i === step, disabled: !enabled }}
+            accessibilityHint={enabled ? undefined : t('newMatch.stepLocked')}
+            hitSlop={{ top: 8, bottom: 8 }}
+            style={{ flex: 1, marginRight: i < 2 ? 6 : 0, minHeight: 36, justifyContent: 'flex-end' }}
+            testID={`step-tab-${i}`}
+          >
+            <View style={[st.seg3, { backgroundColor: done ? colors.primary : colors.ink2 }]} />
+            <Text style={{ color: i === step ? colors.onInk : colors.onInkMuted, fontWeight: i === step ? '800' : '700', fontSize: 12, marginTop: 6 }} numberOfLines={1}>
+              {label}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -333,4 +563,10 @@ const st = StyleSheet.create({
   seg: { flexDirection: 'row', backgroundColor: colors.bg, borderRadius: 12, padding: 4, marginBottom: 10 },
   segItem: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 40, borderRadius: 10, paddingHorizontal: 6 },
   segOn: { backgroundColor: colors.white, ...elevation.e1 },
+  hidden: { display: 'none' },
+  sumSection: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  sumRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+  sumText: { color: colors.text, fontWeight: '700', fontSize: 15 },
+  sumMuted: { color: colors.muted, fontWeight: '600', marginTop: 2 },
+  vs: { color: colors.muted, fontWeight: '800', marginLeft: 38, marginVertical: 2 },
 });

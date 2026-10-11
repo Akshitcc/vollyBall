@@ -10,6 +10,9 @@
  *   presses the button instead of only closing the keyboard.
  * - When the keyboard opens (or another input gets focus while it is open) the focused input is
  *   scrolled into view with room below it for the button that follows (`keyboardOffset`).
+ * - 1.3.2: an optional sticky `footer` (SafeFooter) under the scroll area, inside the
+ *   KeyboardAvoidingView so it rises with the keyboard; without a footer the scroll content gets the
+ *   bottom safe-area inset so its last button never sits under the Android nav bar.
  */
 import React, { useCallback, useEffect, useRef } from 'react';
 import {
@@ -25,6 +28,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { styles as ui } from './ui';
+import { useInsets } from './SafeFooter';
 import { space } from '../theme';
 
 export const KEYBOARD_BEHAVIOR: 'padding' | 'height' | undefined = Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined;
@@ -40,6 +44,8 @@ export function KeyboardAwareScreen({
   center = false,
   keyboardOffset = DEFAULT_KEYBOARD_OFFSET,
   header,
+  footer,
+  scrollKey,
   testID = 'keyboard-aware-screen',
 }: {
   children: React.ReactNode;
@@ -52,6 +58,10 @@ export function KeyboardAwareScreen({
   keyboardOffset?: number;
   /** Fixed content above the scrolling area (e.g. the login language switch). */
   header?: React.ReactNode;
+  /** Sticky content below the scrolling area (a SafeFooter with the step buttons). */
+  footer?: React.ReactNode;
+  /** Scroll back to the top whenever this changes (e.g. the step of a multi-step form). */
+  scrollKey?: string | number;
   testID?: string;
 }) {
   const scroll = useRef<ScrollView>(null);
@@ -95,7 +105,13 @@ export function KeyboardAwareScreen({
     if (keyboardUp.current) revealFocused();
   };
 
-  const inner = padded ? { padding: space(4), paddingBottom: space(10) } : undefined;
+  const insets = useInsets();
+  useEffect(() => {
+    if (scrollKey !== undefined) scroll.current?.scrollTo?.({ y: 0, animated: false });
+  }, [scrollKey]);
+  // No footer and no bottom edge: the content itself clears the nav bar.
+  const navPad = !footer && !edges.includes('bottom') ? insets.bottom : 0;
+  const inner = padded ? { padding: space(4), paddingBottom: space(10) + navPad } : navPad ? { paddingBottom: navPad } : undefined;
   return (
     <SafeAreaView style={[ui.screen, style]} edges={edges} testID={testID}>
       {header}
@@ -114,6 +130,7 @@ export function KeyboardAwareScreen({
         >
           <View>{children}</View>
         </ScrollView>
+        {footer}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
