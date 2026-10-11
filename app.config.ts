@@ -1,5 +1,5 @@
 import type { ExpoConfig, ConfigContext } from 'expo/config';
-import { resolveBackendMode } from './src/core/backendMode.js';
+import { assertProductionBuild, resolveBackendMode } from './src/core/backendMode.js';
 
 /**
  * App config. Secrets / project-specific values come from environment variables
@@ -11,21 +11,29 @@ import { resolveBackendMode } from './src/core/backendMode.js';
  */
 // 1.3.4 sign-up hardening (a): fail the build loudly when API mode is requested without
 // EXPO_PUBLIC_API_URL (same check as src/services/config.ts at start-up). Throws BackendConfigError.
-const backendMode = () =>
-  resolveBackendMode({
+// Launch prep: EAS sets EAS_BUILD_PROFILE; a production build must be a real API build – no demo
+// backend, no demo admin list, no dev sign-in – or the build stops here.
+const isProductionBuild = process.env.EAS_BUILD_PROFILE === 'production' || process.env.APP_VARIANT === 'production';
+const backendMode = () => {
+  const mode = resolveBackendMode({
     EXPO_PUBLIC_BACKEND: process.env.EXPO_PUBLIC_BACKEND,
     EXPO_PUBLIC_DEMO_MODE: process.env.EXPO_PUBLIC_DEMO_MODE,
     EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL,
     EXPO_PUBLIC_API_DEV_AUTH: process.env.EXPO_PUBLIC_API_DEV_AUTH,
+    EXPO_PUBLIC_API_AUTH: process.env.EXPO_PUBLIC_API_AUTH,
+    production: isProductionBuild,
     hasFirebase: !!process.env.EXPO_PUBLIC_FIREBASE_API_KEY && !!process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID && !!process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
   });
+  if (isProductionBuild) assertProductionBuild(mode, process.env);
+  return mode;
+};
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'VolleyLive',
   slug: 'volleylive',
   scheme: 'volleylive',
-  version: '1.3.5',
+  version: '1.3.6',
   orientation: 'portrait',
   icon: './assets/icon.png',
   userInterfaceStyle: 'light',
@@ -40,7 +48,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
   },
   android: {
-    versionCode: 11,
+    // EAS production builds use the remote versionCode (eas.json appVersionSource=remote + autoIncrement);
+    // this value is only for local gradle builds. ANDROID_VERSION_CODE overrides it (e.g. for a local release AAB).
+    versionCode: Number(process.env.ANDROID_VERSION_CODE) || 12,
     package: process.env.ANDROID_PACKAGE ?? 'com.volleylive.app',
     adaptiveIcon: {
       backgroundColor: '#002E6E', // theme palette.navy (checked in src/theme/__tests__/contrast.test.ts)

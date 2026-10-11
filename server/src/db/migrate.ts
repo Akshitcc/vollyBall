@@ -34,6 +34,28 @@ export async function migrate(db: Db, dir = MIGRATIONS_DIR): Promise<string[]> {
   return applied;
 }
 
+/**
+ * Launch prep: migrations run on deploy (start step) and several instances may start at once, so the
+ * runner takes a MySQL named lock first (GET_LOCK, held on one connection); the others wait, then find
+ * nothing left to apply. Migrations stay additive (new tables/columns only), so an older instance
+ * still serving traffic during a rolling deploy keeps working.
+ */
+export async function migrateLocked(db: Db, dir = MIGRATIONS_DIR, timeoutSeconds = 120): Promise<string[]> {
+  const client = db.client as { acquireConnection(): Promise<unknown>; releaseConnection(c: unknown): Promise<void> };
+  const conn = await client.acquireConnection();
+  try {
+    const [rows] = await db.raw('SELECT GET_LOCK(?, ?) AS l', ['volleylive_migrate', timeoutSeconds]).connection(conn as never);
+    if (Number((rows as { l: number | null }[])[0]?.l) !== 1) throw new Error('Could not get the migration lock (another instance is migrating?)');
+    try {
+      return await migrate(db, dir);
+    } finally {
+      await db.raw('SELECT RELEASE_LOCK(?)', ['volleylive_migrate']).connection(conn as never);
+    }
+  } finally {
+    await client.releaseConnection(conn);
+  }
+}
+
 /** Drops every table (tests and `npm run db:reset` only). */
 export async function dropAll(db: Db): Promise<void> {
   // One connection (a transaction) so the session-level FOREIGN_KEY_CHECKS switch applies to every DROP.

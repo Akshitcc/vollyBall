@@ -1,4 +1,5 @@
 import type { UserProfile } from '../../../src/core/types';
+import { checkRegistration, DEFAULT_MIN_AGE, fullName } from '../../../src/core/registration';
 import { publicFileUrl, storedFileUrl, type Services } from '../context';
 import { conflict, forbidden, HttpError, invalidInput, notFound } from '../errors';
 import { INVALID_PHONE_CODE, INVALID_PHONE_MESSAGE, isValidE164 } from '../../../src/core/phone';
@@ -14,6 +15,13 @@ interface UserRow {
   photo_url: string | null;
   position: UserProfile['position'];
   city: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  dob?: Date | string | null;
+  email?: string | null;
+  pincode?: string | null;
+  district?: string | null;
+  state?: string | null;
   /** 1.3.4: 0 = sign-up row created by GET /me, profile not saved yet. */
   profile_complete: number;
   created_at: Date;
@@ -31,8 +39,27 @@ export function profileFromRow(s: Services, r: UserRow, viewer: Identity, reveal
     photoURL: publicFileUrl(s, r.photo_url),
     position: r.position,
     city: r.city ?? undefined,
+    ...(r.first_name ? { firstName: r.first_name } : {}),
+    ...(r.last_name ? { lastName: r.last_name } : {}),
+    // 1.3.6: date of birth, email and pincode are private – only the owner gets them.
+    ...(viewer.uid === r.id
+      ? {
+          ...(r.dob ? { dob: dobString(r.dob) } : {}),
+          email: r.email ?? null,
+          ...(r.pincode ? { pincode: r.pincode } : {}),
+          district: r.district ?? null,
+          state: r.state ?? null,
+        }
+      : {}),
     createdAt: toMs(r.created_at)!,
   };
+}
+
+/** DATE column → YYYY-MM-DD (mysql2 returns a local-midnight Date for DATE unless dateStrings is set). */
+function dobString(d: Date | string): string {
+  if (typeof d === 'string') return d.slice(0, 10);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /** Placeholder name of a sign-up row (users.name is NOT NULL, 1–60 characters); never shown. */
@@ -86,7 +113,10 @@ export async function uidForPhone(db: Trx, phone: string): Promise<string | null
 export async function saveProfile(
   s: Services,
   viewer: Identity,
-  p: { id: string; name: string; phone: string; photoURL?: string | null; position: UserProfile['position']; city?: string | null },
+  p: {
+    id: string; name: string; phone: string; photoURL?: string | null; position: UserProfile['position']; city?: string | null;
+    firstName?: string; lastName?: string; dob?: string; email?: string | null; pincode?: string; district?: string | null; state?: string | null;
+  },
 ) {
   if (viewer.uid !== p.id) throw forbidden('users.write', 'You can only edit your own profile');
   if (!viewer.phone || viewer.phone !== p.phone) throw forbidden('users.write', 'Profile phone must match your verified number');
@@ -99,6 +129,30 @@ export async function saveProfile(
   const photo = storedFileUrl(s, p.photoURL);
   if (photo && photo !== (existing?.photo_url ?? null) && !photo.startsWith(`storage:avatars/${p.id}/`))
     throw invalidInput(PHOTO_ERROR_CODES.badUrl, 'Invalid request: photoURL – must be a photo uploaded to VolleyLive', { field: 'photoURL' });
+  // 1.3.6 registration: a client that sends the new fields must send all of them, valid.
+  let reg: Record<string, unknown> = {};
+  if (p.firstName !== undefined || p.lastName !== undefined || p.dob !== undefined || p.pincode !== undefined) {
+    let f: ReturnType<typeof checkRegistration>;
+    try {
+      f = checkRegistration(p, s.minAge ?? DEFAULT_MIN_AGE);
+    } catch (e) {
+      const err = e as { code: string; field: string; message: string; min?: number; max?: number };
+      throw new HttpError(400, err.code, `Invalid request: ${err.field} – ${err.message}`, { field: err.field, min: err.min, max: err.max });
+    }
+    const found = s.pincode ? await s.pincode.lookup(f.pincode) : { status: 'unknown' as const };
+    if (found.status === 'invalid') throw new HttpError(400, 'pincode_unknown', 'Invalid request: pincode – no post office has this pincode', { field: 'pincode' });
+    const clip = (x: unknown) => (typeof x === 'string' && x.trim() ? x.trim().replace(/[\u0000-\u001f]/g, '').slice(0, 60) : null);
+    reg = {
+      first_name: f.firstName,
+      last_name: f.lastName,
+      dob: f.dob,
+      email: f.email,
+      pincode: f.pincode,
+      district: found.status === 'ok' ? found.district : clip(p.district),
+      state: found.status === 'ok' ? found.state : clip(p.state),
+      name: fullName(f.firstName, f.lastName),
+    };
+  }
   const taken = await s.db('users').where({ phone: p.phone }).whereNot({ id: p.id }).first('id');
   if (taken) throw conflict('This number already belongs to another account');
   const now = nowDate();
@@ -110,12 +164,13 @@ export async function saveProfile(
       photo_url: photo,
       position: p.position,
       city: p.city ?? null,
+      ...reg,
       profile_complete: 1,
       created_at: now,
       updated_at: now,
     })
     .onConflict('id')
-    .merge(['name', 'phone', 'photo_url', 'position', 'city', 'profile_complete', 'updated_at']);
+    .merge(['name', 'phone', 'photo_url', 'position', 'city', 'profile_complete', 'updated_at', ...Object.keys(reg).filter((k) => k !== 'name')]);
   s.bus.publish({ topic: topics.profile(p.id), type: 'invalidate' });
   const r = await s.db<UserRow>('users').where({ id: p.id }).first();
   return profileFromRow(s, r!, viewer);

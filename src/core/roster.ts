@@ -15,6 +15,17 @@ import { MAX_SUBS, TEAM_SIZE, type Team } from './types';
 export const MIN_PLAYERS = 6;
 export const MAX_PLAYERS = TEAM_SIZE + MAX_SUBS; // 6 starters + 6 subs
 
+/**
+ * 1.3.6 team size: 'exact' = exactly 6 per side (default for new matches); 'custom' = 6–12 per side
+ * (6 on court, the rest on the bench). Matches saved before 1.3.6 have no mode and behave as 'custom'.
+ */
+export type TeamSizeMode = 'exact' | 'custom';
+export const TEAM_SIZE_MODES: readonly TeamSizeMode[] = ['exact', 'custom'];
+export const DEFAULT_TEAM_SIZE_MODE: TeamSizeMode = 'exact';
+export const maxPlayersFor = (mode: TeamSizeMode | null | undefined) => (mode === 'exact' ? MIN_PLAYERS : MAX_PLAYERS);
+/** Is `n` players per side allowed to start in this mode? (5/13 never; 7–12 only custom.) */
+export const sideSizeOk = (n: number, mode: TeamSizeMode | null | undefined) => n >= MIN_PLAYERS && n <= maxPlayersFor(mode);
+
 /** User ids look like Firebase uids / seed ids. Typed names ("Rahul K") and old "guest:" ids don't. */
 export const USER_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 export const isUserId = (id: string) => USER_ID_RE.test(id);
@@ -22,17 +33,19 @@ export const isUserId = (id: string) => USER_ID_RE.test(id);
 export type RosterProblem =
   | { code: 'notUser'; side: 'A' | 'B'; playerId: string }
   | { code: 'tooMany'; side: 'A' | 'B' }
+  | { code: 'tooManyExact'; side: 'A' | 'B' }
   | { code: 'duplicate'; side: 'A' | 'B'; playerId: string }
   | { code: 'bothTeams'; playerId: string }
   | { code: 'needPlayers'; side: 'A' | 'B'; count: number };
 
 /** Problems that make a roster invalid at any time (create, edit). */
-export function rosterErrors(a: Pick<MatchTeam, 'players'>, b: Pick<MatchTeam, 'players'>): RosterProblem[] {
+export function rosterErrors(a: Pick<MatchTeam, 'players'>, b: Pick<MatchTeam, 'players'>, mode?: TeamSizeMode | null): RosterProblem[] {
   const out: RosterProblem[] = [];
+  const max = maxPlayersFor(mode);
   const sides = { A: a.players.map((p) => p.id), B: b.players.map((p) => p.id) };
   for (const side of ['A', 'B'] as const) {
     const ids = sides[side];
-    if (ids.length > MAX_PLAYERS) out.push({ code: 'tooMany', side });
+    if (ids.length > max) out.push({ code: max === MAX_PLAYERS ? 'tooMany' : 'tooManyExact', side });
     const seen = new Set<string>();
     for (const id of ids) {
       if (!isUserId(id)) out.push({ code: 'notUser', side, playerId: id });
@@ -53,21 +66,22 @@ export function missingPlayers(a: Pick<MatchTeam, 'players'>, b: Pick<MatchTeam,
   return out;
 }
 
-export const canStartScoring = (m: { teamA: Pick<MatchTeam, 'players'>; teamB: Pick<MatchTeam, 'players'> }) =>
-  rosterErrors(m.teamA, m.teamB).length === 0 && missingPlayers(m.teamA, m.teamB).length === 0;
+export const canStartScoring = (m: { teamA: Pick<MatchTeam, 'players'>; teamB: Pick<MatchTeam, 'players'>; teamSizeMode?: TeamSizeMode | null }) =>
+  rosterErrors(m.teamA, m.teamB, m.teamSizeMode).length === 0 && missingPlayers(m.teamA, m.teamB).length === 0;
 
 /** Messages used by every backend (the app translates them in i18n/format.ts). */
 export const ROSTER_MESSAGES = {
   notUser: 'Every player must be a registered VolleyLive user',
   tooMany: `A team can have at most ${MAX_PLAYERS} players`,
+  tooManyExact: `Exact 6: each team must have exactly ${MIN_PLAYERS} players`,
   duplicate: 'A player can only appear once in a match',
   bothTeams: 'A player can only appear once in a match',
   needPlayers: `Each team needs at least ${MIN_PLAYERS} players before scoring can start`,
 } as const;
 
 /** Throws the first problem as an Error with the shared message (demo backend). */
-export function assertRoster(m: { teamA: Pick<MatchTeam, 'players'>; teamB: Pick<MatchTeam, 'players'> }, scoring: boolean) {
-  const p = [...rosterErrors(m.teamA, m.teamB), ...(scoring ? missingPlayers(m.teamA, m.teamB) : [])][0];
+export function assertRoster(m: { teamA: Pick<MatchTeam, 'players'>; teamB: Pick<MatchTeam, 'players'>; teamSizeMode?: TeamSizeMode | null }, scoring: boolean) {
+  const p = [...rosterErrors(m.teamA, m.teamB, m.teamSizeMode), ...(scoring ? missingPlayers(m.teamA, m.teamB) : [])][0];
   if (p) throw new Error(ROSTER_MESSAGES[p.code]);
 }
 

@@ -3,6 +3,8 @@
  * AsyncStorage. Lets you try every screen without a Firebase project.
  * OTP code is always 123456.
  */
+import { checkRegistration, demoPincodeLookup, fullName } from '../../core/registration';
+import { MIN_AGE } from '../config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEMO_ADMIN_UIDS, DEMO_MODE, DEMO_OTP } from '../config';
 import { addPoint, computeState, summarize, type Side } from '../../core/scoring';
@@ -280,7 +282,14 @@ export class DemoBackend implements Backend {
     // before build 216 with another number can still be edited (fix-retest N4). No data is rewritten.
     this.requireTerms();
     if (isNew || this.db.users[p0.id].phone !== p0.phone) assertPhone(p0.phone);
-    const p = checkProfileFields(p0);
+    let p = checkProfileFields(p0);
+    // 1.3.6: same registration checks as the API server (pincode: bundled sample, format otherwise).
+    if (p0.firstName !== undefined || p0.dob !== undefined || p0.pincode !== undefined) {
+      const f = checkRegistration(p0, MIN_AGE);
+      const found = demoPincodeLookup(f.pincode);
+      if (found.status === 'invalid') throw new CodedError('pincode_unknown', 'Unknown pincode');
+      p = { ...p, ...f, name: fullName(f.firstName, f.lastName), district: found.status === 'ok' ? found.district : (p0.district ?? null), state: found.status === 'ok' ? found.state : (p0.state ?? null) };
+    }
     this.db.users[p.id] = { ...this.db.users[p.id], ...p };
     if (isNew) this.seedInviteFor(p.phone, p.id);
     this.changed();
@@ -578,6 +587,10 @@ export class DemoBackend implements Backend {
     if (ownMatchReview(m, me)) throw new CodedError(OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE);
     this.db.matches[matchId] = { ...m, verification: { ...(m.verification ?? { status: 'pending' }), status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: Date.now() }, updatedAt: Date.now() };
     this.changed();
+  }
+  /** 1.3.6: bundled sample only – the demo makes no network calls. */
+  async lookupPincode(pin: string) {
+    return demoPincodeLookup(pin);
   }
   async listFlagged() {
     await this.ready;

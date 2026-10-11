@@ -1,0 +1,50 @@
+# Launch prep: ONE VM (DigitalOcean Droplet or AWS EC2/Lightsail) running the API behind Caddy, which
+# gets and renews the HTTPS certificate for your domain automatically. MySQL is MANAGED (DigitalOcean
+# Managed MySQL / AWS RDS) and reached through DATABASE_URL with TLS; photos go to R2/S3 or the uploads
+# volume. All values come from server/.env.production on the VM (never committed). See docs/DEPLOY.md.
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+      TRUST_PROXY: "1"            # Caddy is the one proxy in front
+    expose:
+      - "4000"
+    volumes:
+      - uploads:/data/uploads     # only used with STORAGE_DRIVER=local
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # Optional shared rate-limit store; set REDIS_URL=redis://redis:6379 in .env.production to use it.
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    restart: unless-stopped
+    profiles: ["redis"]
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN, e.g. api.example.in}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  uploads:
+  caddy-data:
+  caddy-config:

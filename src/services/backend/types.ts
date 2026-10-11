@@ -156,6 +156,8 @@ export interface Backend {
   reviewMatch(matchId: string, decision: ReviewDecision): Promise<void>;
   /** Admin only: completed matches waiting for a review. */
   listFlagged(): Promise<Match[]>;
+  /** 1.3.6: pincode → district/state (API: server lookup with fallback; demo: bundled sample; else format only). */
+  lookupPincode?(pin: string): Promise<import('../../core/registration').PincodeInfo>;
 
   // ---- challenges ----
   createChallenge(c: NewChallenge): Promise<string>;

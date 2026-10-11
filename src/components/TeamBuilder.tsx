@@ -38,7 +38,10 @@ export function TeamBuilder({
   otherPlayerIds,
   otherColor,
   testID = 'team-builder',
+  max = MAX_PLAYERS,
 }: {
+  /** 1.3.6: most players for the chosen team size (Exact 6 → 6, Custom → 12). */
+  max?: number;
   /** The other side's colour: swatches under 3:1 against it are disabled (design-spec §8 05). */
   otherColor?: string | null;
   value: BuiltTeam;
@@ -51,7 +54,7 @@ export function TeamBuilder({
   const [phone, setPhone] = useState('');
   const [lookup, setLookup] = useState<Lookup>({ state: 'idle' });
   const seq = useRef(0);
-  const full = value.players.length >= MAX_PLAYERS;
+  const full = value.players.length >= max;
 
   useEffect(() => {
     const n = toE164(phone);
@@ -79,7 +82,7 @@ export function TeamBuilder({
       : otherPlayerIds.includes(found.id)
         ? t('newMatch.onOtherTeam', { name: found.name })
         : full
-          ? t('newMatch.teamFull', { max: MAX_PLAYERS })
+          ? t('newMatch.teamFull', { max })
           : null;
 
   const add = () => {
@@ -121,7 +124,7 @@ export function TeamBuilder({
       </Row>
 
       <Text style={ui.label}>
-        {t('newMatch.playerCount', { count: value.players.length, max: MAX_PLAYERS })}
+        {t('newMatch.playerCount', { count: value.players.length, max })}
       </Text>
       {value.players.map((p, i) => (
         <Row key={p.id} style={{ paddingVertical: 4 }}>
@@ -143,7 +146,7 @@ export function TeamBuilder({
 
       {full && (
         <Text style={{ color: colors.muted, fontWeight: '700', marginVertical: 4 }} testID={`${testID}-full`}>
-          {t('newMatch.fullHint', { max: MAX_PLAYERS })}
+          {t('newMatch.fullHint', { max })}
         </Text>
       )}
       {!full && (

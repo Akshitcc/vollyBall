@@ -11,6 +11,8 @@
  */
 import type { NextFunction, Request, Response } from 'express';
 import { HttpError } from './errors';
+import { log } from './ops/logger';
+import type { RateStore } from './rateStore';
 
 export type RateBucket = 'terms' | 'verify' | 'matchWrite';
 export interface RateRule {
@@ -41,6 +43,8 @@ export class RateLimiter {
   constructor(
     limits: RateLimits = DEFAULT_RATE_LIMITS,
     private readonly now: () => number = Date.now,
+    /** Launch prep: a shared store (Redis) instead of this process's memory; see rateStore.ts. */
+    readonly store?: RateStore,
   ) {
     this.limits = { terms: { ...limits.terms }, verify: { ...limits.verify }, matchWrite: { ...limits.matchWrite } };
   }
@@ -48,6 +52,7 @@ export class RateLimiter {
   /** Forget every count (tests). */
   reset() {
     this.buckets.clear();
+    this.extra?.clear();
   }
 
   /** Takes one token; returns 0 when allowed, else the seconds until one is available. */
@@ -83,15 +88,52 @@ export class RateLimiter {
     return this.buckets.size;
   }
 
+  /**
+   * Same as take(), through the shared store when there is one. A store that can't be reached does not
+   * take the API down: the request falls back to this process's in-memory bucket (logged as a warning).
+   */
+  async takeShared(id: string, bucket: RateBucket | string, rule?: RateRule): Promise<number> {
+    const r = rule ?? this.limits[bucket as RateBucket];
+    if (this.store) {
+      try {
+        return await this.store.take(`${bucket}:${id}`, r);
+      } catch (e) {
+        log.warn('rate store unavailable, using memory', { store: this.store.kind, err: (e as Error)?.name });
+      }
+    }
+    return this.takeRule(`${bucket}`, id, r);
+  }
+
+  /** Token bucket for any named rule (OTP limits use their own rules). */
+  takeRule(bucket: string, id: string, rule: RateRule): number {
+    const t = this.now();
+    const key = `x:${bucket}\u0000${id}`;
+    const ratePerMs = rule.perMinute / 60_000;
+    const b = this.extra.get(key) ?? { tokens: rule.burst, at: t };
+    b.tokens = Math.min(rule.burst, b.tokens + (t - b.at) * ratePerMs);
+    b.at = t;
+    this.extra.set(key, b);
+    if (this.extra.size > 50_000) this.extra.clear(); // bounded memory under abuse
+    if (b.tokens >= 1) {
+      b.tokens -= 1;
+      return 0;
+    }
+    return Math.max(1, Math.ceil((1 - b.tokens) / ratePerMs / 1000));
+  }
+  private extra = new Map<string, { tokens: number; at: number }>();
+
   /** Express middleware for one bucket (after requireAuth, so the user id is known). */
   middleware(bucket: RateBucket) {
     return (req: Request, res: Response, next: NextFunction) => {
       const uid = req.identity?.uid;
       if (!uid) return next();
-      const wait = this.take(uid, bucket);
-      if (!wait) return next();
-      res.setHeader('Retry-After', String(wait));
-      next(new HttpError(429, RATE_LIMITED, 'Too many requests. Wait a moment and try again.', { retryAfter: wait }));
+      const done = (wait: number) => {
+        if (!wait) return next();
+        res.setHeader('Retry-After', String(wait));
+        next(new HttpError(429, RATE_LIMITED, 'Too many requests. Wait a moment and try again.', { retryAfter: wait }));
+      };
+      if (!this.store) return done(this.take(uid, bucket));
+      this.takeShared(uid, bucket).then(done, next);
     };
   }
 }

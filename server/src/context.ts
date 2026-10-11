@@ -5,6 +5,8 @@ import type { PushSender } from './push/pushSender';
 import type { PhotoStorage } from './storage/photoStorage';
 import type { TokenVerifier } from './auth/verifier';
 import type { RateLimiter } from './rateLimit';
+import type { OtpService } from './auth/otp/otpService';
+import type { SessionSigner } from './auth/otp/sessions';
 
 export interface Services {
   db: Db;
@@ -18,6 +20,15 @@ export interface Services {
   adminUids?: ReadonlySet<string>;
   /** 1.3.1 (QA C130-2): per-user limits; default DEFAULT_RATE_LIMITS when not given. */
   rateLimiter?: RateLimiter;
+  /** Launch prep: AUTH_MODE=otp sign-in (mounted at /auth). */
+  auth?: { otp: OtpService; signer: SessionSigner };
+  /** Express "trust proxy" (default 'loopback'; behind a PaaS load balancer usually 1). */
+  trustProxy?: string | number;
+  /** Shown by /health (no secrets): app version and the pluggable backends in use. */
+  info?: { version: string; storage: string; rateStore: string; auth: string };
+  /** 1.3.6: pincode lookup (absent = format check only) and the minimum age (default 10). */
+  pincode?: import('./pincode').PincodeLookup;
+  minAge?: number;
   /** Pushes are fire-and-forget; tests can await them through this hook. */
   pending?: Set<Promise<unknown>>;
 }

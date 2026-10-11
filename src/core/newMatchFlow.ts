@@ -6,7 +6,7 @@
  * the target is complete. The Rules step is always complete (validateRules clamps every setting), so
  * once the teams are ready both Rules and Start can be opened.
  */
-import { MIN_PLAYERS } from './roster';
+import { maxPlayersFor, MIN_PLAYERS, type TeamSizeMode } from './roster';
 
 export const NEW_MATCH_STEPS = ['teams', 'rules', 'start'] as const;
 export type NewMatchStep = 0 | 1 | 2;
@@ -26,15 +26,17 @@ export type TeamsProblem =
   | { code: 'pickBoth' }
   | { code: 'nameRequired'; side: 'A' | 'B' }
   | { code: 'needPlayers'; side: 'A' | 'B'; missing: number }
+  | { code: 'tooMany'; side: 'A' | 'B'; max: number }
   | { code: 'captainRequired'; side: 'A' | 'B' }
   | { code: 'sameTeams' };
 
 /** The first thing keeping "Next: Rules" disabled (null = both teams are ready). */
-export function teamsProblem(a: SideSummary | null, b: SideSummary | null): TeamsProblem | null {
+export function teamsProblem(a: SideSummary | null, b: SideSummary | null, mode?: TeamSizeMode | null): TeamsProblem | null {
   for (const [v, side] of [[a, 'A'], [b, 'B']] as const) {
     if (!v) return { code: 'pickBoth' };
     if (v.kind === 'build' && !v.name.trim()) return { code: 'nameRequired', side };
     if (v.players < MIN_PLAYERS) return { code: 'needPlayers', side, missing: MIN_PLAYERS - v.players };
+    if (v.players > maxPlayersFor(mode)) return { code: 'tooMany', side, max: maxPlayersFor(mode) };
     if (v.kind === 'build' && !v.captain) return { code: 'captainRequired', side };
   }
   if (a!.kind === 'team' && b!.kind === 'team' && a!.teamId && a!.teamId === b!.teamId) return { code: 'sameTeams' };
@@ -51,3 +53,9 @@ export const maxReachableStep = (teamsReady: boolean, rulesReady = true): NewMat
 export const canOpenStep = (target: NewMatchStep, teamsReady: boolean, rulesReady = true): boolean => target <= maxReachableStep(teamsReady, rulesReady);
 /** Where back (header arrow / Android back) goes: the previous step, or null = leave the screen. */
 export const previousStep = (s: NewMatchStep): NewMatchStep | null => (s > 0 ? ((s - 1) as NewMatchStep) : null);
+
+/**
+ * 1.3.6: players a registered team brings in this team size mode. Exact 6 = its first 6 (starters
+ * first, then subs); Custom = everyone (6–12).
+ */
+export const teamSidePlayers = (members: number, mode: TeamSizeMode) => (mode === 'exact' ? Math.min(members, MIN_PLAYERS) : members);

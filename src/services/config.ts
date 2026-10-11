@@ -28,6 +28,7 @@ export const BACKEND_MODE = resolveBackendMode({
   EXPO_PUBLIC_DEMO_MODE: process.env.EXPO_PUBLIC_DEMO_MODE,
   EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL,
   EXPO_PUBLIC_API_DEV_AUTH: process.env.EXPO_PUBLIC_API_DEV_AUTH,
+  EXPO_PUBLIC_API_AUTH: process.env.EXPO_PUBLIC_API_AUTH,
   hasFirebase,
 });
 
@@ -49,7 +50,10 @@ export const BACKEND_KIND: BackendKind = BACKEND_MODE.kind;
 export const API_HOST = BACKEND_MODE.apiHost;
 
 /** Phone sign-in goes through Firebase (needs the reCAPTCHA verifier) unless demo or API dev auth. */
-export const USES_FIREBASE_AUTH = BACKEND_KIND === 'firebase' || (BACKEND_KIND === 'api' && !API_DEV_AUTH);
+/** Launch prep: API builds whose sign-in SMS is sent by the server (AUTH_MODE=otp on the server). */
+export const API_OTP_AUTH = BACKEND_MODE.kind === 'api' && BACKEND_MODE.apiAuth === 'otp';
+
+export const USES_FIREBASE_AUTH = BACKEND_KIND === 'firebase' || (BACKEND_KIND === 'api' && BACKEND_MODE.apiAuth === 'firebase');
 
 /** Show the "use code 123456" hint on the login screen. */
 export const SHOW_DEMO_OTP = DEMO_MODE || (BACKEND_KIND === 'api' && API_DEV_AUTH);
@@ -61,3 +65,6 @@ export const DEMO_OTP = '123456';
  * `admin` custom claim). No accounts or credentials are created; empty by default.
  */
 export const DEMO_ADMIN_UIDS: string[] = (process.env.EXPO_PUBLIC_DEMO_ADMIN_UIDS ?? '').split(',').map((x: string) => x.trim()).filter(Boolean);
+
+/** 1.3.6: minimum player age (default 10, max age is fixed at 100). The API server reads MIN_AGE; keep them equal. */
+export const MIN_AGE: number = Number(process.env.EXPO_PUBLIC_MIN_AGE) >= 1 ? Math.floor(Number(process.env.EXPO_PUBLIC_MIN_AGE)) : 10;

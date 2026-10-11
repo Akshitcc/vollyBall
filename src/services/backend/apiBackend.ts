@@ -14,7 +14,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import type { Challenge, ChallengeStatus, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
-import { API_DEV_AUTH, API_URL, DEMO_OTP } from '../config';
+import { API_DEV_AUTH, API_OTP_AUTH, API_URL, DEMO_OTP } from '../config';
 import { IDEMPOTENCY_KEY_RE, inviteState, PHOTO_WRONG_ACCOUNT, type InviteState } from './types';
 import type { AuthUser, Backend, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, PhoneVerifier, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
 import type { TermsAcceptance } from '../../core/terms';
@@ -22,6 +22,7 @@ import { CodedError } from '../../core/codedError';
 import { readPhoto } from '../photoFile';
 
 const DEV_AUTH_KEY = 'volleylive-api-dev-auth-v1';
+const OTP_SESSION_KEY = 'volleylive-api-otp-session-v1';
 
 export class ApiError extends Error {
   /** Server error code (JSON `error`), e.g. "text_too_long" or "invalid_phone"; translated by i18n/format. */
@@ -31,7 +32,9 @@ export class ApiError extends Error {
   readonly max?: number;
   /** 429 rate_limited (QA C130-2): seconds until the server accepts the next request. */
   readonly retryAfter?: number;
-  constructor(readonly status: number, message: string, body?: { error?: string; field?: string; min?: number; max?: number; retryAfter?: number }) {
+  /** otp_invalid (launch prep): wrong codes left before the code is burnt. */
+  readonly attemptsLeft?: number;
+  constructor(readonly status: number, message: string, body?: { error?: string; field?: string; min?: number; max?: number; retryAfter?: number; attemptsLeft?: number }) {
     super(message);
     this.name = 'ApiError';
     this.code = body?.error;
@@ -39,6 +42,7 @@ export class ApiError extends Error {
     this.min = body?.min;
     this.max = body?.max;
     this.retryAfter = typeof body?.retryAfter === 'number' ? body.retryAfter : undefined;
+    this.attemptsLeft = typeof body?.attemptsLeft === 'number' ? body.attemptsLeft : undefined;
   }
 }
 
@@ -130,6 +134,89 @@ export class DevTokenSource implements TokenSource {
     this.emit();
   }
   async token() {
+    return this.user?.token ?? null;
+  }
+}
+
+/**
+ * Launch prep (production sign-in): the API server sends the SMS itself (AUTH_MODE=otp, OTP_PROVIDER=msg91)
+ * and answers a correct code with a revocable session token (`vls1.…`, 30 days). Only that token and the
+ * uid/phone are kept on the phone; sign-out revokes it on the server. Error codes (otp_invalid with
+ * attemptsLeft, otp_resend_wait, otp_too_many, otp_expired, …) are translated by i18n/format.
+ */
+type OtpSession = AuthUser & { token: string; expiresAt: number };
+export class ServerOtpTokenSource implements TokenSource {
+  private user: OtpSession | null = null;
+  private loaded = false;
+  private listeners = new Set<(u: AuthUser | null) => void>();
+  constructor(private base: string, private now: () => number = Date.now) {}
+
+  private snapshot(): AuthUser | null {
+    return this.user ? { uid: this.user.uid, phoneNumber: this.user.phoneNumber } : null;
+  }
+  private emit() {
+    const u = this.snapshot();
+    this.listeners.forEach((l) => l(u));
+  }
+  private async post<T>(path: string, body: unknown, token?: string): Promise<T> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${this.base}/auth${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    if (res.status === 204) return undefined as T;
+    const text = await res.text();
+    let data: { message?: string } | undefined;
+    try {
+      data = text ? JSON.parse(text) : undefined;
+    } catch {
+      data = undefined;
+    }
+    if (!res.ok) throw new ApiError(res.status, data?.message || `Request failed (${res.status})`, data as never);
+    return data as T;
+  }
+  onAuthChanged(cb: (u: AuthUser | null) => void) {
+    this.listeners.add(cb);
+    if (this.loaded) cb(this.snapshot());
+    else
+      AsyncStorage.getItem(OTP_SESSION_KEY)
+        .then((raw) => {
+          if (!this.loaded) {
+            const saved = raw ? (JSON.parse(raw) as OtpSession) : null;
+            this.user = saved && saved.expiresAt > this.now() ? saved : null;
+          }
+          this.loaded = true;
+          this.emit();
+        })
+        .catch(() => {
+          this.loaded = true;
+          this.emit();
+        });
+    return () => void this.listeners.delete(cb);
+  }
+  async sendOtp(phone: string) {
+    await this.post('/otp/request', { phone });
+    return {
+      confirm: async (code: string) => {
+        const s = await this.post<{ token: string; uid: string; expiresAt: number }>('/otp/verify', { phone, code });
+        this.user = { uid: s.uid, phoneNumber: phone, token: s.token, expiresAt: s.expiresAt };
+        this.loaded = true;
+        await AsyncStorage.setItem(OTP_SESSION_KEY, JSON.stringify(this.user));
+        this.emit();
+      },
+    };
+  }
+  async signOut() {
+    const token = this.user?.token;
+    this.user = null;
+    await AsyncStorage.removeItem(OTP_SESSION_KEY);
+    this.emit();
+    if (token) await this.post('/logout', {}, token).catch(() => {}); // best effort; it expires anyway
+  }
+  async token() {
+    if (this.user && this.user.expiresAt <= this.now()) {
+      this.user = null;
+      await AsyncStorage.removeItem(OTP_SESSION_KEY);
+      this.emit();
+    }
     return this.user?.token ?? null;
   }
 }
@@ -235,13 +322,15 @@ export class ApiBackend implements Backend {
   /** Latest-wins queue per match so rapid taps are saved in order and retried when offline. */
   private progressQueue = new Map<string, ProgressQueue>();
 
-  constructor(opts: { baseUrl?: string; devAuth?: boolean; tokenSource?: TokenSource } = {}) {
+  constructor(opts: { baseUrl?: string; devAuth?: boolean; otpAuth?: boolean; tokenSource?: TokenSource } = {}) {
     this.base = (opts.baseUrl ?? API_URL).replace(/\/$/, '');
     this.auth =
       opts.tokenSource ??
       ((opts.devAuth ?? API_DEV_AUTH)
         ? new DevTokenSource(async (token) => (await this.request<{ uid: string }>('GET', '/me', undefined, token)).uid)
-        : new FirebaseTokenSource());
+        : (opts.otpAuth ?? API_OTP_AUTH)
+          ? new ServerOtpTokenSource(this.base)
+          : new FirebaseTokenSource());
     this.live = new LiveSocket(this.base.replace(/^http/, 'ws') + '/live', () => this.auth.token());
   }
 
@@ -513,6 +602,13 @@ export class ApiBackend implements Backend {
   }
   listFlagged() {
     return this.get<Match[]>('/admin/matches/flagged');
+  }
+  async lookupPincode(pin: string) {
+    try {
+      return await this.get<import('../../core/registration').PincodeInfo>(`/pincode/${encodeURIComponent(pin)}`);
+    } catch {
+      return { status: 'unknown' as const }; // offline / server error: the format check decides
+    }
   }
 
 

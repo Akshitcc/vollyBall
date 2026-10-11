@@ -128,21 +128,29 @@ const CODED = new Set([
   'terms_not_accepted', 'terms_version_mismatch', 'match_bad_status', 'match_terminal', 'match_status_move', 'server_time', 'server_field', 'match_delete_forbidden', 'captains_required', 'captains_same', 'captain_not_team_captain', 'captain_not_on_side', 'not_completed', 'not_captain', 'scoring_side', 'already_reviewed', 'no_captains', 'admin_only', 'potm_required',
   // 1.3.1 (QA C130-2)
   'rate_limited',
+  // launch prep: server-side SMS OTP
+  'otp_expired', 'otp_too_many_attempts', 'otp_send_failed', 'otp_use_device', 'own_match',
+  // 1.3.6 registration
+  'name_empty', 'name_length', 'name_chars', 'dob_invalid', 'dob_future', 'age_too_young', 'age_too_old', 'email_invalid', 'pincode_invalid', 'pincode_unknown',
 ]);
 /** "teamA.name" -> errors.fields.teamA; unknown fields read "This field". */
 function fieldLabel(field: string | undefined, t: TFunction): string {
   const key = (field ?? '').split('.')[0];
-  const known = ['name', 'city', 'title', 'teamA', 'teamB', 'message', 'location', 'q'];
+  const known = ['name', 'city', 'title', 'teamA', 'teamB', 'message', 'location', 'q', 'firstName', 'lastName'];
   return t(`errors.fields.${known.includes(key) ? key : 'field'}`);
 }
 
 /** Translated text for a coded error (ValidationError, ApiError), or null. */
 export function translateCode(e: unknown, t: TFunction = tr): string | null {
-  const err = (e ?? {}) as { code?: unknown; field?: string; min?: number; max?: number; retryAfter?: number };
+  const err = (e ?? {}) as { code?: unknown; field?: string; min?: number; max?: number; retryAfter?: number; attemptsLeft?: number };
   const code = typeof err.code === 'string' ? err.code : null;
   if (!code) return null;
   if (code === INVALID_PHONE_CODE) return t('errors.invalidPhone');
   if (code === 'rate_limited') return t('errors.codes.rate_limited', { seconds: Math.max(1, Math.ceil(err.retryAfter ?? 1)) });
+  const secs = Math.max(1, Math.ceil(err.retryAfter ?? 1));
+  if (code === 'otp_resend_wait') return t('errors.codes.otp_resend_wait', { seconds: secs });
+  if (code === 'otp_too_many') return t('errors.codes.otp_too_many', { minutes: Math.max(1, Math.ceil(secs / 60)) });
+  if (code === 'otp_invalid') return typeof err.attemptsLeft === 'number' ? t('errors.codes.otp_invalid', { left: err.attemptsLeft }) : t('errors.wrongCode');
   if (CODED.has(code)) return t(`errors.codes.${code}`, { field: fieldLabel(err.field, t), min: err.min, max: err.max ?? (code === 'photo_limit' ? MAX_PHOTOS_PER_MATCH : undefined) });
   return null;
 }
@@ -175,6 +183,7 @@ export function translateError(e: unknown, t: TFunction = tr): string {
     [ROSTER_MESSAGES.notUser]: 'errors.notUser',
     [ROSTER_MESSAGES.needPlayers]: 'errors.needPlayers',
     [ROSTER_MESSAGES.tooMany]: 'errors.tooManyPlayers',
+    [ROSTER_MESSAGES.tooManyExact]: 'errors.tooManyExact',
     [PARTICIPANTS_MESSAGE]: 'errors.participants',
     [TOURNAMENT_ORGANIZER_MESSAGE]: 'errors.organizerOnly',
     [CHALLENGE_CAPTAIN_MESSAGE]: 'errors.challengeCaptain',

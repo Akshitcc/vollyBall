@@ -18,6 +18,9 @@ import { LiveBus } from '../src/live/bus';
 import { attachLive } from '../src/live/ws';
 import { MemoryPushSender } from '../src/push/pushSender';
 import { LocalDiskStorage } from '../src/storage/photoStorage';
+import { Logger, setLogger } from '../src/ops/logger';
+
+setLogger(new Logger('silent')); // launch prep: request logs off in tests
 import { INDOOR_RULES } from '../../src/core/rules';
 import { TERMS_VERSION } from '../../src/core/terms';
 

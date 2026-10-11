@@ -54,7 +54,7 @@ describe('sign-up hardening (a): backend mode', () => {
   });
   it('a complete API config → api, with the host (no path / query) for Profile > About', () => {
     const m = resolveBackendMode(env({ EXPO_PUBLIC_BACKEND: 'api', EXPO_PUBLIC_API_URL: 'http://192.168.1.10:4000/', EXPO_PUBLIC_API_DEV_AUTH: '1' }));
-    expect(m).toEqual({ kind: 'api', apiHost: '192.168.1.10:4000', apiUrl: 'http://192.168.1.10:4000', devAuth: true });
+    expect(m).toEqual({ kind: 'api', apiHost: '192.168.1.10:4000', apiUrl: 'http://192.168.1.10:4000', devAuth: true, apiAuth: 'dev' });
     expect(resolveBackendMode(env({ EXPO_PUBLIC_API_URL: 'https://api.example.in/v1?x=1', hasFirebase: true })).apiHost).toBe('api.example.in');
     expect(apiHostOf('https://user@evil')).toBeNull();
   });
@@ -248,7 +248,7 @@ describe('QA access is demo-only', () => {
     expect('setDemoAdmin' in ApiBackend.prototype).toBe(false);
     const src = require('fs').readFileSync(require('path').join(__dirname, '../backend/firebaseBackend.ts'), 'utf8');
     expect(src).not.toMatch(/setDemoAdmin|qaAdmins/);
-    const tools = require('fs').readFileSync(require('path').join(__dirname, '../../components/AboutCard.tsx'), 'utf8');
+    const tools = require('fs').readFileSync(require('path').join(__dirname, '../../components/DemoQaTools.tsx'), 'utf8'); // launch prep: own module
     expect(tools).toMatch(/if \(!DEMO_MODE \|\| !\(backend instanceof DemoBackend\)\) return null;/);
   });
 });

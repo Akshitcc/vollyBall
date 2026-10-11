@@ -18,7 +18,7 @@ import type { Side } from '../../core/scoring';
 import { TEAM_COLORS, type MatchTeam, type Team } from '../../core/types';
 import { backend } from '../../services/backend';
 import { TeamBuilder, type BuiltTeam } from '../../components/TeamBuilder';
-import { MIN_PLAYERS, missingPlayers, ROSTER_MESSAGES, rosterErrors, teamCanPlay } from '../../core/roster';
+import { DEFAULT_TEAM_SIZE_MODE, maxPlayersFor, MIN_PLAYERS, missingPlayers, ROSTER_MESSAGES, rosterErrors, teamCanPlay, type TeamSizeMode } from '../../core/roster';
 import { buildMatch, matchTeamFromTeam } from '../../services/matchFactory';
 import { useMe } from '../../state/AuthContext';
 import { useWatch } from '../../state/hooks';
@@ -26,7 +26,7 @@ import { describeRulesT, formatDayChipT, hourLabel, translateError } from '../..
 import { colors, elevation, onColor, readableFill, type } from '../../theme';
 import { captainsProblem } from '../../core/antifraud';
 import { SafeFooter } from '../../components/SafeFooter';
-import { canOpenStep, previousStep, teamsProblem, type NewMatchStep, type SideSummary, type TeamsProblem } from '../../core/newMatchFlow';
+import { canOpenStep, previousStep, teamSidePlayers, teamsProblem, type NewMatchStep, type SideSummary, type TeamsProblem } from '../../core/newMatchFlow';
 import { goBackOr } from '../../services/nav';
 
 /** A side is either a registered team or a roster built from registered players by number. */
@@ -49,7 +49,9 @@ function SidePicker({
   open,
   onToggle,
   testID,
+  max,
 }: {
+  max?: number;
   /** 1.3.2: collapsed to its header row (mockup 05: "Team B · Tap to set up"). */
   open: boolean;
   onToggle: () => void;
@@ -146,7 +148,7 @@ function SidePicker({
             ))}
         </>
       ) : (
-        <TeamBuilder value={built} onChange={(v) => { setBuilt(v); onChange(v); }} otherPlayerIds={otherPlayerIds} otherColor={otherColor} testID={testID} />
+        <TeamBuilder value={built} onChange={(v) => { setBuilt(v); onChange(v); }} otherPlayerIds={otherPlayerIds} otherColor={otherColor} testID={testID} max={max} />
       )}
       </>
       )}
@@ -162,6 +164,7 @@ export default function NewMatch() {
   // 1.3.2: one screen, three steps (Teams → Rules → Start). Every step stays mounted (only the current
   // one is shown), so nothing typed or picked is lost when moving between steps.
   const [step, setStep] = useState<NewMatchStep>(0);
+  const [sizeMode, setSizeMode] = useState<TeamSizeMode>(DEFAULT_TEAM_SIZE_MODE);
   const [a, setA] = useState<SideInput>(null);
   const [b, setB] = useState<SideInput>(null);
   const [open, setOpen] = useState<{ A: boolean; B: boolean }>({ A: true, B: false });
@@ -207,10 +210,11 @@ export default function NewMatch() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myTeams.length]);
 
+  const playersIn = (s: 'A' | 'B') => summaryOf(s === 'A' ? a : b, null)?.players ?? 0;
   const sideLabel = (s: 'A' | 'B') => (s === 'A' ? t('common.teamA') : t('common.teamB'));
   const summaryOf = (v: SideInput, cap: string | null): SideSummary | null =>
-    !v ? null : v.kind === 'team' ? { kind: 'team', teamId: v.team.id, name: v.team.name, players: v.team.memberIds.length } : { kind: 'build', name: v.name, players: v.players.length, captain: cap };
-  const problem = teamsProblem(summaryOf(a, capA), summaryOf(b, capB));
+    !v ? null : v.kind === 'team' ? { kind: 'team', teamId: v.team.id, name: v.team.name, players: teamSidePlayers(v.team.memberIds.length, sizeMode) } : { kind: 'build', name: v.name, players: v.players.length, captain: cap };
+  const problem = teamsProblem(summaryOf(a, capA), summaryOf(b, capB), sizeMode);
   const teamsReady = !problem;
   const now = Date.now();
   const rulesProblem = location && !placeReady(location) ? t('location.nameRequired') : when !== 'now' && isPastStart(when, now, 0) ? t('errors.codes.time_in_past') : null;
@@ -218,7 +222,7 @@ export default function NewMatch() {
   /** One side on its own is complete (picked, named, 6+ players, captain): the tick on its card. */
   const sideReady = (s: 'A' | 'B') => {
     const one = summaryOf(s === 'A' ? a : b, s === 'A' ? capA : capB);
-    const own = teamsProblem(one, one);
+    const own = teamsProblem(one, one, sizeMode);
     return !!one && (!own || own.code === 'sameTeams');
   };
   // Team A done and Team B still untouched: open Team B's card (it starts collapsed, mockup 05).
@@ -240,6 +244,8 @@ export default function NewMatch() {
         return t('newMatch.hintCaptain', { side: sideLabel(p.side) });
       case 'sameTeams':
         return t('newMatch.sameTeams');
+      case 'tooMany':
+        return t('newMatch.hintTooMany', { side: sideLabel(p.side), max: p.max });
     }
   };
 
@@ -278,9 +284,11 @@ export default function NewMatch() {
     try {
       const side = async (v: NonNullable<SideInput>): Promise<MatchTeam> =>
         v.kind === 'team' ? (rosters[v.team.id] ?? (await matchTeamFromTeam(v.team))) : { teamId: null, name: v.name.trim(), color: v.color, players: v.players };
-      const [ta, tb] = await Promise.all([side(a), side(b)]);
+      // 1.3.6 Exact 6: a registered team plays its first 6 (starters first); built sides are capped at 6.
+      const sized = (m: MatchTeam): MatchTeam => (m.teamId && sizeMode === 'exact' ? { ...m, players: m.players.slice(0, MIN_PLAYERS) } : m);
+      const [ta, tb] = (await Promise.all([side(a), side(b)])).map(sized);
       // Same checks as every backend: registered players only, 6–12 per team, nobody twice.
-      const problem = [...rosterErrors(ta, tb), ...missingPlayers(ta, tb)][0];
+      const problem = [...rosterErrors(ta, tb, sizeMode), ...missingPlayers(ta, tb)][0];
       if (problem) {
         setBusy(false);
         return setError(problem.code === 'needPlayers' ? t('newMatch.needPlayers', { min: MIN_PLAYERS }) : translateError(new Error(ROSTER_MESSAGES[problem.code])));
@@ -292,8 +300,8 @@ export default function NewMatch() {
         return setError(t(`errors.codes.${capProblem}`));
       }
       const startNow = when === 'now';
-      const id = await backend.createMatch(
-        buildMatch({
+      const id = await backend.createMatch({
+        ...buildMatch({
           teamA: ta,
           teamB: tb,
           rules,
@@ -306,7 +314,8 @@ export default function NewMatch() {
           title: title.trim() || undefined,
           captains,
         }),
-      );
+        teamSizeMode: sizeMode,
+      } as Parameters<typeof backend.createMatch>[0]);
       if (startNow) router.replace(`/match/${id}/score`);
       else router.replace(`/match/${id}`);
     } catch (e) {
@@ -412,9 +421,20 @@ export default function NewMatch() {
       />
       {/* Step 1 – Teams */}
       <View style={shown(0)} testID="new-match-step-teams">
-        <SidePicker label={t('common.teamA')} badge="A" value={a} onChange={setA} myTeams={myTeams} defaultColor={TEAM_COLORS[0]} otherPlayerIds={playerIdsOf(b, rosters)} otherTeamId={b?.kind === 'team' ? b.team.id : null} otherColor={colorOf(b)} ready={sideReady('A')} open={open.A} onToggle={() => setOpen((o) => ({ ...o, A: !o.A }))} testID="side-a" />
+        {/* 1.3.6 team size: Exact 6 (default) or Custom 6–12 per side (6 on court, the rest on the bench). */}
+        <Card>
+          <View testID="team-size">
+          <Text style={ui.label}>{t('newMatch.teamSize')}</Text>
+          <Row>
+            <Chip label={t('newMatch.sizeExact')} active={sizeMode === 'exact'} onPress={() => setSizeMode('exact')} testID="team-size-exact" />
+            <Chip label={t('newMatch.sizeCustom')} active={sizeMode === 'custom'} onPress={() => setSizeMode('custom')} testID="team-size-custom" />
+          </Row>
+          <P muted style={{ fontSize: 12 }} testID="team-size-hint">{sizeMode === 'exact' ? t('newMatch.sizeExactHint') : t('newMatch.sizeCustomHint')}</P>
+          </View>
+        </Card>
+        <SidePicker label={t('common.teamA')} badge="A" value={a} onChange={setA} myTeams={myTeams} defaultColor={TEAM_COLORS[0]} otherPlayerIds={playerIdsOf(b, rosters)} otherTeamId={b?.kind === 'team' ? b.team.id : null} otherColor={colorOf(b)} ready={sideReady('A')} max={maxPlayersFor(sizeMode)} open={open.A} onToggle={() => setOpen((o) => ({ ...o, A: !o.A }))} testID="side-a" />
         {open.A && <CaptainPicker side="A" value={a} captain={capA} onChange={setCapA} />}
-        <SidePicker label={t('common.teamB')} badge="B" value={b} onChange={setB} myTeams={myTeams} defaultColor={TEAM_COLORS[1]} otherPlayerIds={playerIdsOf(a, rosters)} otherTeamId={a?.kind === 'team' ? a.team.id : null} otherColor={colorOf(a)} ready={sideReady('B')} open={open.B} onToggle={() => setOpen((o) => ({ ...o, B: !o.B }))} testID="side-b" />
+        <SidePicker label={t('common.teamB')} badge="B" value={b} onChange={setB} myTeams={myTeams} defaultColor={TEAM_COLORS[1]} otherPlayerIds={playerIdsOf(a, rosters)} otherTeamId={a?.kind === 'team' ? a.team.id : null} otherColor={colorOf(a)} ready={sideReady('B')} max={maxPlayersFor(sizeMode)} open={open.B} onToggle={() => setOpen((o) => ({ ...o, B: !o.B }))} testID="side-b" />
         {open.B && <CaptainPicker side="B" value={b} captain={capB} onChange={setCapB} />}
       </View>
       {/* Step 2 – Rules */}
@@ -473,6 +493,7 @@ export default function NewMatch() {
             </>,
             'summary-teams',
           )}
+          {sumSection(t('newMatch.teamSize'), 0, <Text style={st.sumText} testID="summary-team-size-text">{sizeMode === 'exact' ? t('newMatch.sizeExact') : t('newMatch.sizeCustomSummary', { a: playersIn('A'), b: playersIn('B') })}</Text>, 'summary-team-size')}
           {sumSection(
             t('newMatch.summaryRules'),
             1,

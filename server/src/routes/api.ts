@@ -114,6 +114,11 @@ export function apiRouter(s: Services): Router {
     if (!p) throw notFound('No user with that number');
     res.json(p);
   }));
+  // 1.3.6: pincode → district/state for the registration form ({ status: ok | invalid | unknown }).
+  r.get('/pincode/:pin', h(async (req, res) => {
+    const pin = String(req.params.pin);
+    res.json(s.pincode ? await s.pincode.lookup(pin) : /^[1-9][0-9]{5}$/.test(pin) ? { status: 'unknown' } : { status: 'invalid' });
+  }));
   r.get('/users/:id', h(async (req, res) => {
     const p = await users.getProfile(s, me(req), req.params.id);
     if (!p) throw notFound('Profile not found');

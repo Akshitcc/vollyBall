@@ -5,11 +5,19 @@ import { requireAuth } from './auth/middleware';
 import { HttpError } from './errors';
 import { ValidationError } from '../../src/core/validate';
 import { apiRouter } from './routes/api';
+import { authRouter } from './routes/auth';
+import { log, redact, requestLogger } from './ops/logger';
 
 export function createApp(s: Services) {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 'loopback');
+  app.set('trust proxy', s.trustProxy ?? 'loopback');
+  app.use(requestLogger());
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    next();
+  });
 
   // CORS for the web build (native apps don't need it)
   app.use((req, res, next) => {
@@ -25,20 +33,30 @@ export function createApp(s: Services) {
     next();
   });
 
+  // Launch prep: /health = readiness (database ping, 2 s budget) for the platform health check;
+  // /healthz = liveness (the process answers). Neither needs a token or reveals config values.
   app.get('/health', async (_req, res) => {
+    const t0 = Date.now();
     try {
-      await s.db.raw('SELECT 1');
-      res.json({ ok: true });
+      await Promise.race([s.db.raw('SELECT 1'), new Promise((_r, rej) => setTimeout(() => rej(new Error('db timeout')), 2000))]);
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ ok: true, db: 'ok', dbMs: Date.now() - t0, uptimeS: Math.round(process.uptime()), ...(s.info ?? {}) });
     } catch {
-      res.status(503).json({ ok: false });
+      res.status(503).json({ ok: false, db: 'down' });
     }
   });
+  app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
   // Photos: signed, expiring URLs (only handed out to signed-in users) so <Image> can load them without headers.
   app.get(/^\/files\/(.+)$/, async (req, res) => {
     const key = decodeURIComponent((req.params as unknown as string[])[0]);
     if (!s.storage.verify(key, req.query.exp as string | undefined, req.query.sig as string | undefined)) return res.status(403).json({ error: 'permission_denied', message: 'Link expired or invalid' });
     try {
+      const to = s.storage.redirectUrl?.(key);
+      if (to) {
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.redirect(302, to);
+      }
       const f = await s.storage.get(key);
       if (!f) return res.status(404).json({ error: 'not_found', message: 'File not found' });
       res.setHeader('Content-Type', f.contentType);
@@ -51,6 +69,7 @@ export function createApp(s: Services) {
     }
   });
 
+  if (s.auth) app.use('/auth', authRouter(s.auth.otp, s.db, s.auth.signer));
   app.use('/api', express.json({ limit: '1mb' }), requireAuth(s.verifier), apiRouter(s));
 
   app.use((_req, res) => res.status(404).json({ error: 'not_found', message: 'No such route' }));
@@ -64,7 +83,7 @@ export function createApp(s: Services) {
     if (e?.type === 'entity.parse.failed') return res.status(400).json({ error: 'bad_request', message: 'Invalid JSON' });
     if (e?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'conflict', message: 'Already exists' });
     if (e?.code === 'ER_NO_REFERENCED_ROW_2' || e?.code === 'ER_CHECK_CONSTRAINT_VIOLATED') return res.status(400).json({ error: 'bad_request', message: 'Invalid reference or value' });
-    console.error('[api] unexpected error', e?.message ?? err);
+    log.error('unexpected error', { reqId: _req.requestId, code: e?.code, err: redact(e?.message ?? err) });
     res.status(500).json({ error: 'internal', message: 'Something went wrong' });
   });
   return app;

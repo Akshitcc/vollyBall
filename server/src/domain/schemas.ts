@@ -127,6 +127,8 @@ export const matchFields = {
   lineups: lineupsSchema.optional(),
   /** 1.3.0: captains of side A and B (core/antifraud.ts captainsProblem). Fixed at creation. */
   captains: z.object({ A: id, B: id }).strict().nullable().optional(),
+  /** 1.3.6: exact = 6 per side, custom = 6-12 (core/roster.ts maxPlayersFor). */
+  teamSizeMode: z.enum(['exact', 'custom']).nullable().optional(),
 };
 // QA G13: finish on or after start (patches are checked against the stored match in domain/matches.ts).
 export const newMatchSchema = z.object(matchFields).refine((m) => m.startedAt == null || m.finishedAt == null || m.finishedAt >= m.startedAt, {
@@ -160,6 +162,15 @@ export const profileSchema = z.object({
   photoURL: z.string().max(MAX_URL_LENGTH).nullable().optional(),
   position: z.enum(['setter', 'outside', 'middle', 'opposite', 'libero', 'any']).default('any'),
   city: optText('city'),
+  // 1.3.6 registration (checked by core/registration.ts in users.saveProfile; optional so a client
+  // from before 1.3.6 can still save, and the app asks for them).
+  firstName: z.string().max(200).optional(),
+  lastName: z.string().max(200).optional(),
+  dob: z.string().max(20).optional(),
+  email: z.string().max(300).nullable().optional(),
+  pincode: z.string().max(20).optional(),
+  district: z.string().max(200).nullable().optional(),
+  state: z.string().max(200).nullable().optional(),
 });
 
 export const pushTokenSchema = z.object({ token: z.string().min(10).max(255), platform: z.string().max(16).optional() });

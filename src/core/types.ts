@@ -22,6 +22,15 @@ export interface UserProfile {
   photoURL?: string | null;
   position: Position;
   city?: string;
+  /** 1.3.6 registration (private: only the owner sees dob/email/pincode on the API server). */
+  firstName?: string;
+  lastName?: string;
+  /** YYYY-MM-DD */
+  dob?: string;
+  email?: string | null;
+  pincode?: string;
+  district?: string | null;
+  state?: string | null;
   pushToken?: string | null;
   createdAt: number;
 }
@@ -99,6 +108,8 @@ export interface Match {
   stream?: StreamInfo | null;
   /** Players who tapped "I want to play" on a scheduled match. */
   interestedIds?: string[];
+  /** 1.3.6: 'exact' = 6 per side, 'custom' = 6–12 per side; missing (older matches) = custom. */
+  teamSizeMode?: 'exact' | 'custom' | null;
   /** Starting lineup (court positions 1–6) per set, set by the scorer. Missing = default roster order. */
   lineups?: Lineups | null;
   /**

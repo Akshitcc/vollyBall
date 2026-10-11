@@ -51,7 +51,8 @@
     "web": "expo start --web",
     "test": "jest",
     "typecheck": "tsc --noEmit",
-    "test:tz": "for z in UTC Asia/Kolkata America/Los_Angeles Pacific/Kiritimati; do echo \"== TZ=$z\"; TZ=$z jest --silent || exit 1; done"
+    "test:tz": "for z in UTC Asia/Kolkata America/Los_Angeles Pacific/Kiritimati; do echo \"== TZ=$z\"; TZ=$z jest --silent || exit 1; done",
+    "check:strip": "node scripts/check-strip.js"
   },
   "private": true,
   "jest": {

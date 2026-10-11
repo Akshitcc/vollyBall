@@ -1,3 +1,5 @@
+import { profileComplete } from '../core/registration';
+import { BACKEND_KIND, MIN_AGE } from '../services/config';
 import { router, Stack } from 'expo-router';
 import { HeaderBackButton } from 'expo-router/react-navigation';
 import type { NativeStackHeaderBackProps } from 'expo-router/build/react-navigation/native-stack';
@@ -45,6 +47,8 @@ function RootStack() {
   const { user, profile, loading, termsOk } = useAuth();
   const { t } = useTranslation();
   useNotificationRouting(navigate);
+  // 1.3.6: profiles from before the registration fields must be completed first (after the T&C gate).
+  const ready = !!profile && (BACKEND_KIND === 'firebase' || profileComplete(profile, MIN_AGE));
   if (loading) return <Loading />;
   return (
     <Stack
@@ -79,10 +83,10 @@ function RootStack() {
       <Stack.Protected guard={!!user && !termsOk}>
         <Stack.Screen name="terms" options={{ title: t('terms.title'), headerBackVisible: false }} />
       </Stack.Protected>
-      <Stack.Protected guard={!!user && termsOk && !profile}>
+      <Stack.Protected guard={!!user && termsOk && !ready}>
         <Stack.Screen name="setup-profile" options={{ title: t('titles.setupProfile'), headerBackVisible: false }} />
       </Stack.Protected>
-      <Stack.Protected guard={!!user && termsOk && !!profile}>
+      <Stack.Protected guard={!!user && termsOk && ready}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false, title: 'VolleyLive' }} listeners={stripLeakedTabParams} />
         <Stack.Screen name="edit-profile" options={{ title: t('titles.editProfile') }} />
         <Stack.Screen name="team/new" options={{ title: t('titles.newTeam') }} />

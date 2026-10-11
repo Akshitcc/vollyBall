@@ -30,7 +30,7 @@ const HOME = { lat: 28.6139, lng: 77.209 }; // New Delhi
  */
 export const DEMO_QA_ADMIN = { id: 'seed_admin', phone: '+919000000001', name: 'Demo Admin' } as const;
 export function demoQaAdminProfile(now = Date.now()): UserProfile {
-  return { id: DEMO_QA_ADMIN.id, name: DEMO_QA_ADMIN.name, phone: DEMO_QA_ADMIN.phone, position: 'any', city: 'New Delhi', photoURL: null, createdAt: now - 30 * DAY };
+  return { id: DEMO_QA_ADMIN.id, name: DEMO_QA_ADMIN.name, phone: DEMO_QA_ADMIN.phone, position: 'any', city: 'New Delhi', firstName: 'Demo', lastName: 'Admin', dob: '1990-01-01', email: null, pincode: '110001', district: 'New Delhi', state: 'Delhi', photoURL: null, createdAt: now - 30 * DAY };
 }
 const names = [
   'Aarav Sharma', 'Vihaan Gupta', 'Ishaan Verma', 'Kabir Singh', 'Arjun Mehta', 'Rohan Das',
@@ -98,6 +98,14 @@ export function makeSeed(now = Date.now()): DemoDB {
       phone: `+9190000000${String(i + 10).padStart(2, '0')}`,
       position: positions[i % 6],
       city: 'New Delhi',
+      // 1.3.6 registration fields (sample values; pincode from the bundled demo sample)
+      firstName: name.split(' ')[0],
+      lastName: name.split(' ').slice(1).join(' ') || 'Player',
+      dob: `${1990 + (i % 15)}-0${1 + (i % 9)}-1${i % 9}`,
+      email: null,
+      pincode: '110001',
+      district: 'New Delhi',
+      state: 'Delhi',
       photoURL: null,
       createdAt: now - 30 * DAY,
     };

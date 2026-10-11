@@ -1,0 +1,57 @@
+# Render Blueprint for the VolleyLive API (Docker). Values marked `sync: false` are entered by you in the
+# Render dashboard when the Blueprint is applied; none are stored here. See docs/DEPLOY.md.
+services:
+  - type: web
+    name: volleylive-api
+    runtime: docker
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: .
+    region: singapore
+    plan: starter
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: AUTH_MODE
+        value: otp
+      - key: OTP_PROVIDER
+        value: msg91
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_SSL
+        value: "1"
+      - key: DB_SSL_CA
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: FILE_URL_SECRET
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: MSG91_AUTH_KEY
+        sync: false
+      - key: MSG91_TEMPLATE_ID
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: ADMIN_UIDS
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false

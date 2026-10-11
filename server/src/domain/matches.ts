@@ -53,7 +53,7 @@ type ServerOnly = 'verification' | 'startedServerAt' | 'finishedServerAt';
 type Doc = Omit<Match, 'id' | 'summary' | 'createdAt' | 'updatedAt' | ServerOnly>;
 export const MATCH_KEYS: (keyof Doc)[] = [
   'title', 'teamA', 'teamB', 'rules', 'firstServe', 'events', 'status', 'createdBy', 'scorerId', 'participantIds', 'location',
-  'scheduledAt', 'startedAt', 'finishedAt', 'tournamentId', 'fixtureId', 'challengeId', 'stream', 'interestedIds', 'lineups', 'captains',
+  'scheduledAt', 'startedAt', 'finishedAt', 'tournamentId', 'fixtureId', 'challengeId', 'stream', 'interestedIds', 'lineups', 'captains', 'teamSizeMode',
 ];
 
 export const MATCH_TERMINAL = 'match_terminal';
@@ -131,8 +131,8 @@ export function validateLineups(lineups: Lineups | null | undefined, rules: Rule
 }
 
 /** Shape rules shared with the app (core/roster.ts): 12 max, nobody twice, nobody on both teams. */
-function validateTeams(a: MatchTeam, b: MatchTeam) {
-  const p = rosterErrors(a, b)[0];
+function validateTeams(a: MatchTeam, b: MatchTeam, mode?: Match['teamSizeMode']) {
+  const p = rosterErrors(a, b, mode)[0];
   if (p) throw badRequest(ROSTER_MESSAGES[p.code]);
 }
 
@@ -269,6 +269,7 @@ export async function loadMatches(s: Services, db: Trx, ids: string[], viewer: I
       lineups,
       playerOfMatchId: r.player_of_match_id ?? null,
       captains: r.captain_a && r.captain_b ? { A: r.captain_a, B: r.captain_b } : null,
+      ...(r.team_size_mode ? { teamSizeMode: r.team_size_mode } : {}),
       verification: verificationFromRow(r, viewer, parts),
       startedServerAt: toMs(r.started_server_at),
       // finished_at is always the server's clock (QA NB-R3), stamped when the match finished.
@@ -365,7 +366,9 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Doc | null,
   if (changed.has('startedAt') || changed.has('finishedAt')) checkOrder('finishedAt', after.startedAt, after.finishedAt);
   if ((!before || changed.has('scheduledAt')) && after.status === 'scheduled') checkNotPast('scheduledAt', after.scheduledAt);
   const rosterChanged = !before || !sameRoster(before.teamA, after.teamA) || !sameRoster(before.teamB, after.teamB);
-  if (changed.has('teamA') || changed.has('teamB')) validateTeams(after.teamA, after.teamB);
+  if (changed.has('teamA') || changed.has('teamB') || changed.has('teamSizeMode')) validateTeams(after.teamA, after.teamB, after.teamSizeMode);
+  // 1.3.6: the team size mode is part of the roster: fixed once the first rally is played.
+  if (before && changed.has('teamSizeMode') && before.events.length > 0) throw forbidden('matches.roster.locked', ROSTER_LOCKED_MESSAGE);
   // Players can only change before the first rally (the scorer can't rewrite rosters mid-match).
   if (before && rosterChanged && before.events.length > 0) throw forbidden('matches.roster.locked', ROSTER_LOCKED_MESSAGE);
   if (rosterChanged || changed.has('teamA') || changed.has('teamB')) Object.assign(after, await resolveRoster(trx, after));
@@ -437,6 +440,7 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Doc | null,
     stream_live: after.stream ? (after.stream.live ? 1 : 0) : null,
     captain_a: after.captains?.A ?? null,
     captain_b: after.captains?.B ?? null,
+    team_size_mode: after.teamSizeMode ?? null,
     ...(startedServer ? { started_server_at: startedServer } : after.status === 'scheduled' ? { started_server_at: null } : {}),
     event_count: after.events.length,
     summary: JSON.stringify(summary),

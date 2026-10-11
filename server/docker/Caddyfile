@@ -1,0 +1,12 @@
+# HTTPS for the API (certificate from Let's Encrypt, renewed automatically). API_DOMAIN comes from the
+# environment; point its DNS A/AAAA record at the VM first.
+{$API_DOMAIN} {
+	encode gzip
+	reverse_proxy api:4000 {
+		header_up X-Request-Id {http.request.uuid}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+}

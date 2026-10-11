@@ -1,0 +1,25 @@
+# Launch prep: the server image is built from the repo root (server/Dockerfile). Keep it small and free
+# of secrets: no env files, no keystores, no app/native build output.
+**/node_modules
+**/.env
+**/.env.*
+!**/.env.example
+**/*.jks
+**/*.keystore
+**/*.p8
+**/*.p12
+**/*.key
+**/keystore.properties
+**/google-services.json
+android
+ios
+assets
+dist
+web-build
+.expo
+.git
+rules-tests
+functions
+docs
+server/uploads
+server/dist
