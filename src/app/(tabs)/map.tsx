@@ -162,10 +162,11 @@ export default function MapScreen() {
             )}
           </View>
         )}
-        {/* Two rows that each scroll sideways (with a visible scrollbar on web) instead of the last
-            chips being cut off at the screen edge (QA 216 minor). */}
+        {/* Two rows that each scroll sideways instead of the last chips being cut off at the screen
+            edge (QA 216 minor). F135-5: no scrollbar (it covered the chips on web); the edge fade
+            shows there is more, and they still scroll by drag, wheel/trackpad and keyboard. */}
         <View style={{ position: 'relative' }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={Platform.OS === 'web'} contentContainerStyle={{ paddingRight: 36 }} testID="map-radius-chips">
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 36 }} testID="map-radius-chips">
           {RADII.map((r) => (
             <Chip key={r} label={r >= ANYWHERE ? t('map.anywhere') : t('map.km', { n: r })} active={radius === r} onPress={() => setRadius(r)} />
           ))}
@@ -173,7 +174,7 @@ export default function MapScreen() {
         <EdgeFade testID="map-radius-fade" />
         </View>
         <View style={{ position: 'relative' }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={Platform.OS === 'web'} contentContainerStyle={{ paddingRight: 36 }} testID="map-filter-chips">
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 36 }} testID="map-filter-chips">
           {(['all', 'match', 'tournament', 'court'] as const).map((f) => (
             <Chip key={f} label={{ all: t('map.all'), match: t('map.games'), tournament: t('map.tournaments'), court: t('map.courts') }[f]} active={filter === f} onPress={() => setFilter(f)} color={colors.primary} />
           ))}

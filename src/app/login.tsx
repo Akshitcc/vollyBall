@@ -132,7 +132,7 @@ export default function Login() {
             {SHOW_DEMO_OTP && <Banner tone="warn" text={t('login.demoBanner', { code: DEMO_OTP })} />}
             <Text style={[type.display, { color: colors.text }, compact && { fontSize: 24, lineHeight: 30 }]}>{t('login.welcome')}</Text>
             <Text style={[type.body, { color: colors.muted, marginTop: 4, marginBottom: compact ? 10 : 16, fontSize: compact ? 14 : 15, lineHeight: compact ? 20 : 22 }]}>{t('login.welcomeText')}</Text>
-            <PhoneInput label={t('common.mobileNumber')} value={phone} onChangeText={onPhone} onShownInvalid={setShownInvalid} size="lg" testID="phone-input" onSubmitEditing={() => canSend && send()} returnKeyType="send" />
+            <PhoneInput digitsOnly label={t('common.mobileNumber')} value={phone} onChangeText={onPhone} onShownInvalid={setShownInvalid} size="lg" testID="phone-input" onSubmitEditing={() => canSend && send()} returnKeyType="send" />
             <Button title={t('login.sendOtp')} icon="arrow-forward" onPress={send} loading={busy} disabled={!canSend} disabledHint={t('login.sendOtpHint')} big style={{ marginTop: 4 }} testID="send-otp" />
             {error && <ErrorLine text={error} />}
             <View style={{ flexDirection: 'row', marginTop: 22 }}>

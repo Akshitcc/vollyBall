@@ -33,7 +33,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   name: 'VolleyLive',
   slug: 'volleylive',
   scheme: 'volleylive',
-  version: '1.3.6',
+  version: '1.3.8',
   orientation: 'portrait',
   icon: './assets/icon.png',
   userInterfaceStyle: 'light',
@@ -50,7 +50,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   android: {
     // EAS production builds use the remote versionCode (eas.json appVersionSource=remote + autoIncrement);
     // this value is only for local gradle builds. ANDROID_VERSION_CODE overrides it (e.g. for a local release AAB).
-    versionCode: Number(process.env.ANDROID_VERSION_CODE) || 12,
+    versionCode: Number(process.env.ANDROID_VERSION_CODE) || 14,
     package: process.env.ANDROID_PACKAGE ?? 'com.volleylive.app',
     adaptiveIcon: {
       backgroundColor: '#002E6E', // theme palette.navy (checked in src/theme/__tests__/contrast.test.ts)

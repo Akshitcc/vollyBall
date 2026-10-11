@@ -1,3 +1,4 @@
+import type { DailyItem } from '../../core/dailyItems';
 import { isValidE164 } from '../../core/phone';
 import type { Place } from '../../core/geo';
 import type { MatchEvent, MatchSummary } from '../../core/scoring';
@@ -159,6 +160,20 @@ export interface Backend {
   /** 1.3.6: pincode → district/state (API: server lookup with fallback; demo: bundled sample; else format only). */
   lookupPincode?(pin: string): Promise<import('../../core/registration').PincodeInfo>;
 
+  // ---- 1.3.7 feedback + fact of the day ----
+  /** Profile > Send feedback (1–5 stars + text; signed in, rate limited). Never rewarded. */
+  /** 1.3.8 (V137-4): the server's clock (ms) when known (API: from response Date headers), else null. */
+  serverNow?(): number | null;
+  sendFeedback(f: { stars: number; text: string; appVersion?: string }): Promise<void>;
+  /** Admin only: newest feedback first. */
+  listFeedback(): Promise<FeedbackItem[]>;
+  /** Fact / quote of the day items (public read, active only; `all` = admins' manage screen). The app falls back to the bundled list. */
+  listDailyItems(opts?: { all?: boolean }): Promise<DailyItem[]>;
+  /** Admin only: add (no id) or edit an item; returns its id. */
+  saveDailyItem(item: Partial<DailyItem>): Promise<string>;
+  /** Admin only. */
+  deleteDailyItem(id: string): Promise<void>;
+
   // ---- challenges ----
   createChallenge(c: NewChallenge): Promise<string>;
   watchChallenges(teamIds: string[], cb: (c: Challenge[]) => void): Unsubscribe;
@@ -180,3 +195,14 @@ export type { Place };
 export type InviteState = 'ok' | 'invalid_phone';
 /** Invites are only listed for an Indian mobile number (the API returns 400 invalid_phone otherwise). */
 export const inviteState = (phone: string | null | undefined): InviteState => (phone && isValidE164(phone) ? 'ok' : 'invalid_phone');
+
+/** 1.3.7: one piece of user feedback (admin view). */
+export interface FeedbackItem {
+  id: string;
+  userId: string;
+  userName?: string | null;
+  stars: number;
+  text: string;
+  appVersion?: string | null;
+  createdAt: number;
+}

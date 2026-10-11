@@ -151,6 +151,11 @@ export interface MatchVerification {
   reason?: string | null;
   reviewedBy?: string | null;
   reviewedAt?: number | null;
+  /**
+   * 1.3.7 (F135-1): the opposing captain's own verdict, kept when an admin later approves or voids
+   * (status then becomes 'approved' / 'voided'). Missing on older data: derived from status.
+   */
+  captain?: 'confirmed' | 'rejected' | null;
 }
 
 export interface MatchPhoto {

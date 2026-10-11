@@ -43,12 +43,22 @@ afterAll(async () => {
 
 describe('NB-U1: Send OTP while the field shows invalid text', () => {
   const Login = require('../../app/login').default;
-  it('10 valid digits plus a typed letter: the error shows and Send is disabled; fixing it re-enables Send', async () => {
+  it('1.3.8 (V137-10): a typed letter is dropped as you type (digits-only note), Send stays enabled', async () => {
     await render(<Login />);
     const input = screen.getByTestId('phone-input');
     await fireEvent.changeText(input, '9876543210');
     expect(screen.getByTestId('send-otp').props.accessibilityState).toMatchObject({ disabled: false });
     await fireEvent.changeText(input, '9876543210a');
+    expect(input.props.value).toBe('9876543210');
+    expect(screen.getByText(/^Digits only/)).toBeTruthy();
+    expect(screen.getByTestId('send-otp').props.accessibilityState).toMatchObject({ disabled: false });
+    await fireEvent.changeText(input, '98a76');
+    expect(input.props.value).toBe('9876');
+  });
+  it('text that still is not an Indian mobile after filtering (another country code) shows the error and disables Send', async () => {
+    await render(<Login />);
+    const input = screen.getByTestId('phone-input');
+    await fireEvent.changeText(input, '+44 7911 123456');
     expect(screen.getByTestId('send-otp').props.accessibilityState).toMatchObject({ disabled: true });
     await act(async () => {
       fireEvent.press(screen.getByTestId('send-otp'));

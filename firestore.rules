@@ -207,12 +207,52 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/teams/$(teamId)).data.memberIds.size() >= minPlayers();
     }
 
+    // ---------- 1.3.7 registration (src/core/registration.ts) ----------
+    // Latin (incl. accented, no × ÷) and Devanagari letters/marks, space, apostrophe, hyphen; starts with a
+    // letter; no doubled separators; 2–40 characters.
+    function personNameOk(n) {
+      return n is string && n.size() >= 2 && n.size() <= 40
+        && n.matches('^[A-Za-z\\x{C0}-\\x{D6}\\x{D8}-\\x{F6}\\x{F8}-\\x{24F}\\x{904}-\\x{939}\\x{950}\\x{958}-\\x{961}\\x{972}-\\x{97F}][A-Za-z\\x{C0}-\\x{D6}\\x{D8}-\\x{F6}\\x{F8}-\\x{24F}\\x{900}-\\x{963}\\x{971}-\\x{97F}\\x{200C}\\x{200D}\\x{2019}\' -]*$')
+        && !n.matches('.*[\\x{2019}\' -]{2,}.*') && !n.matches('.*[\\x{2019}\' -]$')
+        // 1.3.7 (R136-10): ZWNJ/ZWJ only between Devanagari characters; no doubled virama
+        && !n.matches('.*([^\\x{900}-\\x{97F}][\\x{200C}\\x{200D}]|[\\x{200C}\\x{200D}][^\\x{900}-\\x{97F}]|[\\x{200C}\\x{200D}]$|\\x{94D}\\x{94D}).*');
+    }
+    // Minimum age: MUST equal DEFAULT_MIN_AGE / MIN_AGE (10) used by the app and the API server.
+    function minAge() { return 10; }
+    function pad2(n) { return n < 10 ? '0' + string(n) : string(n); }
+    // YYYY-MM-DD of today in IST, `years` years ago (string compare = date compare).
+    function istYearsAgo(years) {
+      let t = request.time + duration.value(330, 'm');
+      return string(t.year() - years) + '-' + pad2(t.month()) + '-' + pad2(t.day());
+    }
+    function dobOk(d) {
+      return d is string && d.matches('^(19|20)[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
+        && d <= istYearsAgo(minAge()) && d > istYearsAgo(101);
+    }
+    // oldDob = the stored DOB (null on create): re-saving the same DOB only needs a real date
+    // (1.3.7, R136-8: turning 101 or a raised minAge() doesn't lock the owner out of their profile).
+    function registrationOk(d, oldDob) {
+      return d.keys().hasOnly(['dob', 'email', 'pincode', 'district', 'state', 'updatedAt'])
+        && (oldDob != null && d.get('dob', null) == oldDob
+            ? d.dob.matches('^(19|20)[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
+            : dobOk(d.get('dob', null)))
+        // 1.3.8 (V137-5): allocated India Post prefixes only (core/registration.ts PIN_PREFIX_RANGES 11-28,
+        // 30-34, 36-53, 56-85, plus APS 90-99), as the API decides without a lookup
+        && d.get('pincode', '').matches('^(1[1-9]|2[0-8]|3[0-4]|3[6-9]|4[0-9]|5[0-3]|5[6-9]|6[0-9]|7[0-9]|8[0-5]|9[0-9])[0-9]{4}$')
+        && (d.get('email', null) == null || (d.email is string && d.email.size() <= 254 && d.email.matches('^[^\\s@\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}-\\x{2069}\\x{FEFF}A-Z]+@[^\\s@\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}-\\x{2069}\\x{FEFF}A-Z]+[.][^\\s@\\x{0}-\\x{1F}\\x{200B}-\\x{200F}\\x{FEFF}A-Z]{2,}$')))
+        // 1.3.8 (V137-5): like the API, a district/state typed by the client is never stored (the API keeps
+        // only its own India Post lookup; Firebase has no server lookup, so it stores none)
+        && d.get('district', null) == null && d.get('state', null) == null;
+    }
+
     // ---------- users ----------
     match /users/{userId} {
       allow read: if signedIn();
       // Fields as src/core/types.ts UserProfile (pushToken: legacy docs only). No role/admin fields.
       function profileOk(d, ks) {
-        return d.keys().hasOnly(['id', 'name', 'phone', 'photoURL', 'position', 'city', 'pushToken', 'createdAt', 'updatedAt'])
+        return d.keys().hasOnly(['id', 'name', 'phone', 'photoURL', 'position', 'city', 'pushToken', 'createdAt', 'updatedAt', 'firstName', 'lastName'])
+          && (!ks.hasAny(['firstName']) || personNameOk(d.firstName))
+          && (!ks.hasAny(['lastName']) || personNameOk(d.lastName))
           && (!ks.hasAny(['name']) || nameOk(d.name, 2, 60))
           && (!ks.hasAny(['city']) || optTextOk(d.get('city', null), 80))
           && (!ks.hasAny(['position']) || d.get('position', null) == null
@@ -230,6 +270,17 @@ service cloud.firestore {
         && profileOk(request.resource.data, writtenKeys())
         && termsOk();
       allow delete: if false;
+
+      // 1.3.7 (1.3.6 registration): date of birth, email, pincode, district and state are private – only
+      // the owner reads or writes them (the profile doc above is readable by every signed-in user).
+      // Same checks as src/core/registration.ts: real past date, age minAge()..100 in IST, optional
+      // email, pincode ^[1-9][0-9]{5}$ (the India Post lookup happens in the app / API server only).
+      match /private/{docId} {
+        allow read: if signedIn() && uid() == userId;
+        allow create, update: if signedIn() && uid() == userId && docId == 'registration'
+          && registrationOk(request.resource.data, resource == null ? null : resource.data.get('dob', null));
+        allow delete: if false;
+      }
     }
 
     // T&C acceptance (1.3.0): own doc only, exactly the current version, acceptedAt = server time,
@@ -469,11 +520,23 @@ service cloud.firestore {
     // no leading/trailing space, in ONE regex (the roster checks use most of the rules'
     // 1000-expression budget, so match checks are kept to a few expressions each).
     function titleOk(t) { return t == null || (t is string && t.size() <= 120 && t.matches('^([^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]([^\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}]{0,118}[^\\s\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{115F}\\x{1160}\\x{3164}\\x{FFA0}\\x{2800}\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}\\x{2066}-\\x{2069}\\x{FEFF}\\x{61C}\\x{180E}])?)?$')); }
-    function matchKeysOk(d) {
-      return d.keys().hasOnly(['title', 'teamA', 'teamB', 'rules', 'firstServe', 'events', 'summary', 'status', 'createdBy',
+    // ks = the doc's keys (create, extra = 'createdBy'; createdBy == uid() is required there) or the
+    // changed keys (update, extra = 'title'). 1.3.7: createdBy is only allowed on create, so no update can
+    // change it (this replaced the scorer's createdBy comparison: the 12-a-side finishing write and the
+    // 12-a-side create are at the 1000-expression budget).
+    function matchKeysOk(ks, extra) {
+      return ks.hasOnly([extra, 'title', 'teamA', 'teamB', 'rules', 'firstServe', 'events', 'summary', 'status',
             'scorerId', 'participantIds', 'location', 'scheduledAt', 'startedAt', 'finishedAt', 'tournamentId', 'fixtureId',
             'challengeId', 'stream', 'interestedIds', 'lineups', 'playerOfMatchId', 'createdAt', 'updatedAt', 'serverUpdatedAt',
-            'finishedServerAt', 'captains', 'verification', 'startedServerAt']);
+            'finishedServerAt', 'captains', 'verification', 'startedServerAt', 'teamSizeMode']);
+    }
+    // 1.3.7 (1.3.6 team size): 'exact' = at most 6 per side (exactly 6 once scoring starts, with
+    // enoughPlayers), 'custom' or missing (matches before 1.3.6) = up to maxPlayers().
+    // Must match core/roster.ts maxPlayersFor (rules-tests check it).
+    function teamSizeOk(d) {
+      // 1.3.7: kept cheap (the worst-case create sits close to the 1000-expression budget).
+      return d.get('teamSizeMode', 'custom') == 'custom'
+        || (d.teamSizeMode == 'exact' && d.teamA.players.size() <= 6 && d.teamB.players.size() <= 6);
     }
     function timesOk(d) {
       let st = d.get('startedAt', null);
@@ -509,7 +572,7 @@ service cloud.firestore {
     }
     // New match: no events yet, the empty summary, valid metadata.
     function matchCreateOk(d) {
-      return matchKeysOk(d)
+      return matchKeysOk(d.keys(), 'createdBy') && teamSizeOk(d)
         && d.events == []
         && d.status in ['scheduled', 'live']
         && d.get('firstServe', 'A') in ['A', 'B']
@@ -597,29 +660,60 @@ service cloud.firestore {
     function vStatus(r) { return r.get('verification', {'status': 'pending'}).get('status', 'pending'); }
     // The opposing captain: a captain who is not the scorer or the creator, and not on their side.
     // Only from pending, once, writing only verification = {status, by: me, at: request.time, reason}.
+    // 1.3.7 (F135-1): what an admin's approval means. false = it only clears the fraud flag; the match
+    // counts once the opposing captain confirms. MUST equal ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN in
+    // src/core/antifraud.ts (rules-tests check it). Counting itself is computed from these fields.
+    function adminApprovalCounts() { return false; }
+    function captainOf(r) { return r.get('verification', {}).get('captain', null); }
     function confirmOk(r, v) {
-      return completed(r) && vStatus(r) == 'pending' && r.get('captains', null) != null
-        && v.keys().hasOnly(['status', 'by', 'at', 'reason'])
-        && v.status in ['confirmed', 'disputed'] && v.by == uid() && v.at == request.time
-        && (v.status == 'disputed' ? optTextOk(v.get('reason', null), 200) : v.get('reason', null) == null)
+      return completed(r) && r.get('captains', null) != null
+        && (vStatus(r) == 'pending' ? confirmFromPending(v) : confirmAfterApproval(r, v))
+        && v.by == uid() && v.at == request.time
         && uid() != r.scorerId && uid() != r.createdBy
         && (uid() == r.captains.A
             ? !onSide(r, true, r.scorerId) && !onSide(r, true, r.createdBy)
             : (uid() == r.captains.B && !onSide(r, false, r.scorerId) && !onSide(r, false, r.createdBy)));
     }
-    // Admin review: approve (counts) or void (never counts) a completed match not yet reviewed; the
-    // captain's confirmation fields are kept as they were.
+    // verdict 'confirmed'/'rejected' must match the decision; older clients may leave it out
+    function verdictOk(v, decision) {
+      return v.get('captain', null) == null || v.get('captain', null) == (decision == 'confirmed' ? 'confirmed' : 'rejected');
+    }
+    function confirmFromPending(v) {
+      return v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain'])
+        && v.status in ['confirmed', 'disputed'] && verdictOk(v, v.status)
+        && (v.status == 'disputed' ? optTextOk(v.get('reason', null), 200) : v.get('reason', null) == null);
+    }
+    // 1.3.7: an admin cleared the flag before the captain answered: the status stays 'approved' and the
+    // review fields stay as they were; the captain adds the verdict (once).
+    function confirmAfterApproval(r, v) {
+      let old = r.get('verification', {});
+      return !adminApprovalCounts() && vStatus(r) == 'approved' && captainOf(r) == null && old.get('by', null) == null
+        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain', 'reviewedBy', 'reviewedAt'])
+        && v.status == 'approved' && v.get('captain', null) in ['confirmed', 'rejected']
+        && v.get('reviewedBy', null) == old.get('reviewedBy', null) && v.get('reviewedAt', null) == old.get('reviewedAt', null)
+        && (v.captain == 'rejected' ? optTextOk(v.get('reason', null), 200) : v.get('reason', null) == null);
+    }
+    // Admin review: approve (1.3.7: clears the flag; counting still needs the captain's 'confirmed'
+    // unless adminApprovalCounts()) or void (never counts) a completed match not yet reviewed; the
+    // captain's confirmation fields (by, at, reason, captain) are kept as they were.
     // 1.3.5 (QA E134-2): never the admin's own match: not its creator, scorer or a captain, and not in
     // participantIds (every player of both sides; src/core/antifraud.ts ownMatchReview).
+    // 1.3.8 (V137-1): the verdict an admin review may write: the stored one, or (a 1.3.6 client answered
+    // without `captain`) the one the older status records: confirmed -> 'confirmed', disputed -> 'rejected'.
+    function verdictFromOld(old) {
+      let st = old.get('status', 'pending');
+      return old.get('captain', null) != null ? old.captain : (st == 'confirmed' ? 'confirmed' : (st == 'disputed' ? 'rejected' : null));
+    }
     function reviewOk(r, v) {
       let old = r.get('verification', {});
       return completed(r) && !(vStatus(r) in ['approved', 'voided'])
         && uid() != r.createdBy && uid() != r.scorerId && !(uid() in r.participantIds)
         && !(uid() in [r.get('captains', {}).get('A', null), r.get('captains', {}).get('B', null)])
-        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'reviewedBy', 'reviewedAt'])
+        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'reviewedBy', 'reviewedAt', 'captain'])
         && v.status in ['approved', 'voided'] && v.reviewedBy == uid() && v.reviewedAt == request.time
         && v.get('by', null) == old.get('by', null) && v.get('at', null) == old.get('at', null)
-        && v.get('reason', null) == old.get('reason', null);
+        && v.get('reason', null) == old.get('reason', null)
+        && (v.get('captain', null) == old.get('captain', null) || v.get('captain', null) == verdictFromOld(old));
     }
     function verificationWriteOk() {
       return changed().hasOnly(['verification', 'updatedAt'])
@@ -654,8 +748,11 @@ service cloud.firestore {
     }
     // Guards are written `ks.hasAny(..) ? check : true`: the rules engine evaluates both sides of
     // || (so `!changed || check` would always pay for the check); ?: runs only the chosen side.
+    // 1.3.7: on update only the changed keys (ks, already bound) are checked against the key list: the
+    // stored doc passed it on create, and this skips a d.keys() call (the 12-a-side finishing write is
+    // at the 1000-expression budget).
     function matchUpdateOk(d, ks) {
-      return matchKeysOk(d)
+      return matchKeysOk(ks, 'title')
         && (ks.hasAny(['playerOfMatchId']) ? potmOk(d, ks) : true)
         && (ks.hasAny(['events']) ? eventsOk(d) : true)
         && (ks.hasAny(['summary', 'events', 'rules'])
@@ -677,14 +774,19 @@ service cloud.firestore {
       }
 
       allow read: if signedIn();
-      allow create: if signedIn()
-        && request.resource.data.createdBy == uid()
-        && request.resource.data.scorerId is string
-        && uid() in request.resource.data.participantIds
-        && matchCreateOk(request.resource.data)
-        && validRoster(request.resource.data)
-        && captainsOk(request.resource.data)
-        && termsOk();
+      // 1.3.7: request.resource.data bound once (let), like updateAllowed(): this made room for
+      // teamSizeMode on the 12-a-side create, which is at the 1000-expression budget.
+      function createAllowed() {
+        let d = request.resource.data;
+        return d.createdBy == uid()
+          && d.scorerId is string
+          && uid() in d.participantIds
+          && matchCreateOk(d)
+          && validRoster(d)
+          && captainsOk(d)
+          && termsOk();
+      }
+      allow create: if signedIn() && createAllowed();
       // A legacy match left short of players (before minPlayers(), or players removed later) can't be
       // scored, but its scorer may still close it: only the status (to 'abandoned') and finish time change.
       function abandonOnly() {
@@ -694,9 +796,9 @@ service cloud.firestore {
       // The branches are chosen with ?: (both sides of || are always evaluated, and the scorer's
       // finishing write on a big match is close to the 1000-expression budget).
       function scorerWriteOk(ks, d) {
-        return d.createdBy == resource.data.createdBy
-          && (ks.hasAny(['teamA', 'teamB', 'participantIds', 'captains'])
-                ? (resource.data.get('events', []).size() == 0 && validRoster(d) && captainsOk(d))
+        // (createdBy can't change: see matchKeysOk)
+        return (ks.hasAny(['teamA', 'teamB', 'participantIds', 'captains', 'teamSizeMode'])
+                ? (resource.data.get('events', []).size() == 0 && validRoster(d) && captainsOk(d) && teamSizeOk(d))
                 : (enoughPlayers(d) ? true : abandonOnly()));
       }
       // ks / d are bound once (let) and passed down: a function argument is re-evaluated at every
@@ -910,6 +1012,48 @@ service cloud.firestore {
       allow update: if signedIn() && termsOk() && resource.data.addedBy == uid()
         && request.resource.data.addedBy == uid() && courtOk(request.resource.data, writtenKeys());
       allow delete: if signedIn() && resource.data.addedBy == uid();
+    }
+
+    // 1.3.7 Profile > Send feedback: a signed-in user creates their own (1–5 stars, text <= 1000, no
+    // control characters); only admins read it; nobody edits or deletes it. Never rewarded.
+    match /feedback/{feedbackId} {
+      allow read: if signedIn() && isAdmin();
+      // 1.3.8 (V137-5): needs the current T&C (like the API); hidden characters (control, zero-width,
+      // bidi controls, BOM) are refused – the app strips them first (core/reviewPrompt.ts checkFeedback);
+      // newlines and tabs are allowed, as on the API.
+      allow create: if signedIn() && termsOk()
+        && request.resource.data.keys().hasOnly(['userId', 'stars', 'text', 'appVersion', 'createdAt'])
+        && request.resource.data.keys().hasAll(['userId', 'stars', 'text', 'createdAt'])
+        && request.resource.data.userId == uid()
+        && request.resource.data.stars is int && request.resource.data.stars >= 1 && request.resource.data.stars <= 5
+        && request.resource.data.text is string && request.resource.data.text.size() <= 1000
+        && !request.resource.data.text.matches('(?s).*[\\x00-\\x08\\x0B-\\x1F\\x7F\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2066}-\\x{2069}\\x{FEFF}].*')
+        && (request.resource.data.get('appVersion', null) == null || !request.resource.data.appVersion.matches('(?s).*[\\x00-\\x1F\\x7F\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2066}-\\x{2069}\\x{FEFF}].*'))
+        && (request.resource.data.get('appVersion', null) == null || (request.resource.data.appVersion is string && request.resource.data.appVersion.size() <= 40))
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // 1.3.7 "Fact of the day": public read (the app filters inactive items); admins add / edit / delete.
+    // Quotes need an attribution and an https source URL (src/core/dailyItems.ts checkDailyItem).
+    match /dailyItems/{itemId} {
+      allow read: if true;
+      // 1.3.8 (V137-5): no control / zero-width / bidi characters (core/dailyItems.ts CTRL)
+      function cleanText(x) {
+        return !x.matches('(?s).*[\\x00-\\x1F\\x7F-\\x{9F}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2066}-\\x{2069}\\x{FEFF}].*');
+      }
+      function dailyOk(d) {
+        return d.keys().hasOnly(['type', 'textEn', 'textHi', 'attribution', 'sourceUrl', 'active', 'updatedAt'])
+          && d.keys().hasAll(['type', 'textEn', 'textHi', 'active'])
+          && d.type in ['fact', 'quote'] && d.active is bool
+          && d.textEn is string && d.textEn.size() > 0 && d.textEn.size() <= 400 && cleanText(d.textEn)
+          && d.textHi is string && d.textHi.size() > 0 && d.textHi.size() <= 400 && cleanText(d.textHi)
+          && (d.get('attribution', null) == null || (d.attribution is string && d.attribution.size() <= 120 && cleanText(d.attribution)))
+          && (d.get('sourceUrl', null) == null || (d.sourceUrl is string && d.sourceUrl.size() <= 500 && d.sourceUrl.matches('https://[^\\s]+') && cleanText(d.sourceUrl)))
+          && (d.type == 'fact' || (d.get('attribution', null) is string && d.get('sourceUrl', null) is string));
+      }
+      allow create, update: if signedIn() && isAdmin() && dailyOk(request.resource.data);
+      allow delete: if signedIn() && isAdmin();
     }
   }
 }

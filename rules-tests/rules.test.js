@@ -306,6 +306,9 @@ describe('matches: registered players only', () => {
       for (const id of [...big('a').slice(0, 4), ...big('b').slice(0, 4)]) await setDoc(doc(c.firestore(), `users/${id}`), { name: id, phone: '+919800000000' });
     });
     await assertSucceeds(newMatch(matchDoc({ ids: big('a') }, { ids: big('b') })));
+    // 1.3.7: with teamSizeMode (every 1.3.6+ client sends it) and uneven sides (12 v 11 costs the most)
+    for (const n of [12, 11, 10, 9]) await assertSucceeds(newMatch(matchDoc({ ids: big('a') }, { ids: big('b').slice(0, n) }, { teamSizeMode: 'custom' })));
+    await assertSucceeds(newMatch(matchDoc({ ids: big('a') }, { ids: big('b').slice(0, 11) })));
   });
   test('a legacy live match short of players can be abandoned by its scorer only (QA retest #2)', async () => {
     const five = ['cap', 'u2', 'u3', 'u4', 'u5'];
@@ -1077,3 +1080,235 @@ describe('1.3.2: tap a player to score', () => {
     await assertSucceeds(updateDoc(m1('cap'), { events: [] }));
   });
 });
+
+describe('1.3.7: registration fields, team size, admin approval (F135-1)', () => {
+  const now = Date.now();
+  const istYearsAgo = (years, plusDays = 0) => {
+    const t = new Date(Date.now() + 330 * 60000 + plusDays * DAY);
+    return `${t.getUTCFullYear() - years}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
+  };
+  const reg = (uid, d) => setDoc(doc(ctx(uid).firestore(), `users/${uid}/private/registration`), d);
+  // 1.3.8 (V137-5): Firebase stores no district/state (no lookup in rules; parity with the API without a lookup)
+  const okReg = { dob: '2000-05-20', email: null, pincode: '110001', district: null, state: null };
+
+  test('constants agree with the app: minAge(), adminApprovalCounts(), team size', () => {
+    const rules = fs.readFileSync(path.join(__dirname, '../firestore.rules'), 'utf8');
+    const regSrc = fs.readFileSync(path.join(__dirname, '../src/core/registration.ts'), 'utf8');
+    const af = fs.readFileSync(path.join(__dirname, '../src/core/antifraud.ts'), 'utf8');
+    expect(Number(/function minAge\(\) \{ return (\d+); \}/.exec(rules)[1])).toBe(Number(/DEFAULT_MIN_AGE = (\d+)/.exec(regSrc)[1]));
+    expect(/function adminApprovalCounts\(\) \{ return (true|false); \}/.exec(rules)[1]).toBe(/COUNTS_WITHOUT_CAPTAIN: (true|false)/.exec(af)[1]);
+  });
+  test('public profile: first/last name checked like the app (Latin + Devanagari, 2–40)', async () => {
+    const db = ctx('bob').firestore();
+    const put = (over) => setDoc(doc(db, 'users/bob'), { name: 'Bob Kumar', phone: PHONES.bob, ...over });
+    for (const ok of [{ firstName: 'Bob', lastName: 'Kumar' }, { firstName: 'अक्षित', lastName: 'कुमार' }, { firstName: "D'Souza", lastName: 'Jean-Luc' }, { firstName: 'José', lastName: 'Ng' }])
+      await assertSucceeds(put(ok));
+    for (const bad of ['B', '   ', 'R2D2', 'a'.repeat(41), "--", 'Ra--hul', 'Rahul-', 'राहुल१', '😀Bob', 'A×B'])
+      await assertFails(put({ firstName: bad, lastName: 'Kumar' }));
+    // the private fields can not go on the public doc
+    for (const k of ['dob', 'email', 'pincode', 'district', 'state']) await assertFails(put({ [k]: k === 'dob' ? '2000-01-01' : '110001' }));
+  });
+  test('private registration doc: owner only; DOB real past date with age 10..100 (IST); pincode; optional email', async () => {
+    await assertSucceeds(reg('bob', okReg));
+    await assertSucceeds(getDoc(doc(ctx('bob').firestore(), 'users/bob/private/registration')));
+    await assertFails(getDoc(doc(ctx('eve').firestore(), 'users/bob/private/registration')));
+    await assertFails(setDoc(doc(ctx('eve').firestore(), 'users/bob/private/registration'), okReg));
+    await assertFails(setDoc(doc(ctx('bob').firestore(), 'users/bob/private/other'), okReg));
+    await assertSucceeds(reg('bob', { ...okReg, dob: istYearsAgo(10) })); // 10 today
+    await assertFails(reg('bob', { ...okReg, dob: istYearsAgo(10, 1) })); // 10 tomorrow
+    await assertSucceeds(reg('bob', { ...okReg, dob: istYearsAgo(101, 1) })); // 100, 101 tomorrow
+    await assertFails(reg('bob', { ...okReg, dob: istYearsAgo(101) })); // 101 today
+    await assertFails(reg('bob', { ...okReg, dob: istYearsAgo(0) })); // today
+    await assertFails(reg('bob', { ...okReg, dob: '2099-01-01' }));
+    await assertFails(reg('bob', { ...okReg, dob: '2000-13-01' }));
+    for (const pin of ['000000', '012345', '1100011', '11000', 110001]) await assertFails(reg('bob', { ...okReg, pincode: pin }));
+    await assertSucceeds(reg('bob', { ...okReg, email: 'a.k@example.in' }));
+    await assertFails(reg('bob', { ...okReg, email: 'nope' }));
+    await assertFails(reg('bob', { ...okReg, extra: 1 }));
+  });
+  test('1.3.6 retest (R136-8/9/10): ZWJ/ZWNJ inside Devanagari, no trailing separators, clean lower-case email, an out-of-range DOB already saved can be re-saved', async () => {
+    const db = ctx('bob').firestore();
+    const put = (firstName) => setDoc(doc(db, 'users/bob'), { name: 'Bob Kumar', phone: PHONES.bob, firstName, lastName: 'Kumar' });
+    await assertSucceeds(put('क्\u200Dष'));
+    await assertSucceeds(put('श्\u200Cरी'));
+    for (const bad of ['Bob\u200D', '\u200Dक', 'Bo\u200Cb', 'क\u200D', 'क्\u094Dष', "Bob'", 'Bob-']) await assertFails(put(bad));
+    for (const bad of ['A@b.in', 'a\u200B@b.in', 'a\u0000@b.in', 'a@b\uFEFF.in']) await assertFails(reg('bob', { ...okReg, email: bad }));
+    await assertSucceeds(reg('bob', { ...okReg, email: 'a@b.in' }));
+    const old = istYearsAgo(101);
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'users/bob/private/registration'), { ...okReg, dob: old }));
+    await assertSucceeds(reg('bob', { ...okReg, dob: old, pincode: '400001' })); // same DOB: only the format
+    await assertFails(reg('bob', { ...okReg, dob: istYearsAgo(102) })); // a new DOB is range-checked
+  });
+  test('team size: exact = at most 6 per side; custom/missing = up to 12; unknown mode refused (5/6/7/12/13)', async () => {
+    const ids = (p, n) => Array.from({ length: n }, (_, i) => `${p}${i + 1}`);
+    const built = (na, nb, mode) => {
+      const A = ids('u', na);
+      const B = ids('w', nb);
+      return matchDoc({ ids: A }, { ids: B }, { participantIds: ordered(A, B, ['cap']), captains: { A: 'u1', B: 'w1' }, ...(mode === undefined ? {} : { teamSizeMode: mode }) });
+    };
+    await assertSucceeds(newMatch(built(6, 6, 'exact')));
+    await assertSucceeds(newMatch(built(5, 6, 'exact'))); // scheduled: may fill later
+    await assertFails(newMatch(built(7, 6, 'exact')));
+    await assertFails(newMatch(built(6, 12, 'exact')));
+    await assertSucceeds(newMatch(built(7, 6, 'custom')));
+    await assertSucceeds(newMatch(built(12, 12, 'custom')));
+    await assertFails(newMatch(built(13, 6, 'custom')));
+    await assertSucceeds(newMatch(built(12, 6, undefined))); // matches before 1.3.6
+    await assertFails(newMatch(built(6, 6, 'six')));
+    // switching an existing 7-player custom match to exact is refused
+    const id = 'ts1';
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), `matches/${id}`), built(7, 6, 'custom')));
+    await assertFails(updateDoc(doc(ctx('cap').firestore(), `matches/${id}`), { teamSizeMode: 'exact' }));
+  });
+  test('createdBy never changes on update (now enforced by the update key list)', async () => {
+    await assertFails(updateDoc(doc(ctx('cap').firestore(), 'matches/m1'), { createdBy: 'eve' }));
+    await assertFails(updateDoc(doc(ctx('cap').firestore(), 'matches/m1'), { createdBy: 'eve', updatedAt: Date.now() }));
+    await assertSucceeds(updateDoc(doc(ctx('cap').firestore(), 'matches/m1'), { title: 'Friendly', updatedAt: Date.now() }));
+  });
+
+  const won3 = { setsA: 3, setsB: 0, currentA: 25, currentB: 0, setScores: [{ a: 25, b: 0 }, { a: 25, b: 0 }, { a: 25, b: 0 }], winner: 'A', serving: 'A' };
+  const log = (n) => Array.from({ length: n }, (_, i) => ({ type: 'point', side: i % 2 ? 'B' : 'A', at: now + i }));
+  const seedDone = (verification) => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'matches/f1'), matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, {
+    status: 'finished', events: log(75), summary: won3, finishedAt: now - 60000, finishedServerAt: new Date(now - 60000),
+    startedServerAt: new Date(now - 120000), playerOfMatchId: 'p1', createdAt: now, updatedAt: now, ...(verification ? { verification } : {}),
+  })));
+  const admin = () => env.authenticatedContext('adm', { admin: true });
+  const f1 = (who) => doc((typeof who === 'string' ? ctx(who) : who).firestore(), 'matches/f1');
+  beforeEach(() => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'terms/adm'), { version: TERMS_VERSION, acceptedAt: new Date() })));
+
+  test('F135-1: approval keeps the captain verdict; after approval of an unanswered match the opposing captain can still confirm once', async () => {
+    await seedDone(null); // too short → flagged, nobody answered
+    const reviewedAt = new Date(now - 1000);
+    await assertSucceeds(updateDoc(f1(admin()), { verification: { status: 'approved', reviewedBy: 'adm', reviewedAt: serverTimestamp() } }));
+    // a forged verdict by an admin is refused
+    await seedDone(null);
+    await assertFails(updateDoc(f1(admin()), { verification: { status: 'approved', captain: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() } }));
+    // the captain answers after the approval: status stays approved, review fields unchanged
+    await seedDone({ status: 'approved', reviewedBy: 'adm', reviewedAt });
+    const after = (who, v) => updateDoc(f1(who), { verification: { status: 'approved', reviewedBy: 'adm', reviewedAt, by: typeof who === 'string' ? who : 'adm', at: serverTimestamp(), ...v } });
+    await assertFails(after('cap', { captain: 'confirmed' })); // scoring side
+    await assertFails(after('q1', { captain: 'confirmed' })); // not a captain
+    await assertFails(after('eve', { captain: 'confirmed', reviewedBy: 'eve' })); // review fields changed
+    await assertFails(after('eve', { captain: 'confirmed', status: 'confirmed' })); // status must stay
+    await assertFails(after('eve', {})); // verdict required
+    await assertSucceeds(after('eve', { captain: 'confirmed' }));
+    await assertFails(after('eve', { captain: 'rejected' })); // only once
+  });
+  test('F135-1: a rejected match stays rejected through approval; the verdict must match the decision', async () => {
+    await seedDone({ status: 'disputed', by: 'eve', at: new Date(now - 5000), reason: 'wrong', captain: 'rejected' });
+    await assertFails(updateDoc(f1(admin()), { verification: { status: 'approved', by: 'eve', at: new Date(now - 5000), reason: 'wrong', captain: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() } }));
+    await assertSucceeds(updateDoc(f1(admin()), { verification: { status: 'approved', by: 'eve', at: new Date(now - 5000), reason: 'wrong', captain: 'rejected', reviewedBy: 'adm', reviewedAt: serverTimestamp() } }));
+    await seedDone(null);
+    await assertFails(updateDoc(f1('eve'), { verification: { status: 'confirmed', captain: 'rejected', by: 'eve', at: serverTimestamp() } }));
+    await assertSucceeds(updateDoc(f1('eve'), { verification: { status: 'confirmed', captain: 'confirmed', by: 'eve', at: serverTimestamp() } }));
+  });
+});
+
+describe('1.3.7: feedback + fact of the day', () => {
+  const admin = () => env.authenticatedContext('adm', { admin: true });
+  const fb = (c) => collection(c.firestore(), 'feedback');
+  test('feedback: create own only (1-5 stars, <= 1000 chars); only admins read; no edits or deletes', async () => {
+    const good = { userId: 'bob', stars: 4, text: 'Nice', appVersion: '1.3.7 (13)', createdAt: serverTimestamp() };
+    await assertSucceeds(setDoc(doc(fb(ctx('bob')), 'f1'), good));
+    await assertFails(setDoc(doc(fb(ctx('bob')), 'f2'), { ...good, userId: 'eve' }));
+    await assertFails(setDoc(doc(fb(ctx('bob')), 'f2'), { ...good, stars: 0 }));
+    await assertFails(setDoc(doc(fb(ctx('bob')), 'f2'), { ...good, stars: 6 }));
+    await assertFails(setDoc(doc(fb(ctx('bob')), 'f2'), { ...good, stars: 2.5 }));
+    await assertFails(setDoc(doc(fb(ctx('bob')), 'f2'), { ...good, text: 'x'.repeat(1001) }));
+    await assertFails(setDoc(doc(fb(ctx('bob')), 'f2'), { ...good, text: 'a\u0000b' }));
+    await assertFails(setDoc(doc(fb(ctx('bob')), 'f2'), { ...good, reward: 10 }));
+    await assertFails(setDoc(doc(fb(env.unauthenticatedContext()), 'f2'), good));
+    await assertFails(getDoc(doc(fb(ctx('bob')), 'f1'))); // not even their own
+    await assertFails(getDocs(fb(ctx('eve'))));
+    await assertSucceeds(getDocs(fb(admin())));
+    await assertFails(updateDoc(doc(fb(ctx('bob')), 'f1'), { stars: 5 }));
+    await assertFails(deleteDoc(doc(fb(admin()), 'f1')));
+  });
+  test('dailyItems: anyone reads; only admins write; quotes need attribution + https source', async () => {
+    const fact = { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: 'FIVB', sourceUrl: null, active: true };
+    const di = (c, id) => doc(c.firestore(), `dailyItems/${id}`);
+    await assertFails(setDoc(di(ctx('bob'), 'd1'), fact));
+    await assertSucceeds(setDoc(di(admin(), 'd1'), fact));
+    await assertSucceeds(getDoc(di(env.unauthenticatedContext(), 'd1')));
+    await assertSucceeds(getDocs(collection(ctx('bob').firestore(), 'dailyItems')));
+    await assertFails(updateDoc(di(ctx('bob'), 'd1'), { active: false }));
+    await assertSucceeds(updateDoc(di(admin(), 'd1'), { active: false }));
+    const quote = { type: 'quote', textEn: 'Q', textHi: 'क्यू', attribution: 'Someone', sourceUrl: 'https://example.org/q', active: true };
+    await assertSucceeds(setDoc(di(admin(), 'q1'), quote));
+    await assertFails(setDoc(di(admin(), 'q2'), { ...quote, sourceUrl: null }));
+    await assertFails(setDoc(di(admin(), 'q2'), { ...quote, attribution: null }));
+    await assertFails(setDoc(di(admin(), 'q2'), { ...quote, sourceUrl: 'http://example.org' }));
+    await assertFails(setDoc(di(admin(), 'q2'), { ...fact, type: 'joke' }));
+    await assertFails(setDoc(di(admin(), 'q2'), { ...fact, textEn: '' }));
+    await assertFails(setDoc(di(admin(), 'q2'), { ...fact, textHi: 'x'.repeat(401) }));
+    await assertFails(setDoc(di(admin(), 'q2'), { ...fact, extra: 1 }));
+    await assertFails(deleteDoc(di(ctx('bob'), 'd1')));
+    await assertSucceeds(deleteDoc(di(admin(), 'd1')));
+  });
+});
+
+describe('1.3.8: tester findings V137-1 / V137-5', () => {
+  const now = Date.now();
+  const admin = () => env.authenticatedContext('adm', { admin: true });
+  const won3 = { setsA: 3, setsB: 0, currentA: 25, currentB: 0, setScores: [{ a: 25, b: 0 }, { a: 25, b: 0 }, { a: 25, b: 0 }], winner: 'A', serving: 'A' };
+  const log = (n) => Array.from({ length: n }, (_, i) => ({ type: 'point', side: i % 2 ? 'B' : 'A', at: now + i }));
+  const seedDone = (verification) => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'matches/g1'), matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, {
+    status: 'finished', events: log(75), summary: won3, finishedAt: now - 60000, finishedServerAt: new Date(now - 60000),
+    startedServerAt: new Date(now - 120000), playerOfMatchId: 'p1', createdAt: now, updatedAt: now, ...(verification ? { verification } : {}),
+  })));
+  const g1 = (who) => doc((typeof who === 'string' ? ctx(who) : who).firestore(), 'matches/g1');
+  beforeEach(() => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'terms/adm'), { version: TERMS_VERSION, acceptedAt: new Date() })));
+
+  test('V137-1: a 1.3.6 captain confirmation (no `captain` field) is kept when a 1.3.7+ admin approves', async () => {
+    const at = new Date(now - 5000);
+    // the opposing captain confirmed with a 1.3.6 client: status confirmed, by/at, no `captain`
+    await seedDone({ status: 'confirmed', by: 'eve', at });
+    const approve = (v) => updateDoc(g1(admin()), { verification: { status: 'approved', by: 'eve', at, reviewedBy: 'adm', reviewedAt: serverTimestamp(), ...v } });
+    await assertFails(approve({ captain: 'rejected' })); // can't turn a confirmation into a rejection
+    await assertSucceeds(approve({ captain: 'confirmed' })); // the new client stamps the verdict
+    await seedDone({ status: 'confirmed', by: 'eve', at });
+    await assertSucceeds(approve({})); // an older admin client leaves it out; the app reads by/at (captainVerdict)
+    // a 1.3.6 rejection (disputed, no `captain`) can only be stamped as rejected
+    await seedDone({ status: 'disputed', by: 'eve', at, reason: 'wrong' });
+    const approveR = (v) => updateDoc(g1(admin()), { verification: { status: 'approved', by: 'eve', at, reason: 'wrong', reviewedBy: 'adm', reviewedAt: serverTimestamp(), ...v } });
+    await assertFails(approveR({ captain: 'confirmed' }));
+    await assertSucceeds(approveR({ captain: 'rejected' }));
+    // nobody answered: no verdict can be invented
+    await seedDone(null);
+    await assertFails(updateDoc(g1(admin()), { verification: { status: 'approved', captain: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() } }));
+  });
+
+  test('V137-5: feedback needs the current T&C and refuses hidden characters (newline / tab still fine)', async () => {
+    const fb = (uid, id, over = {}) => setDoc(doc(ctx(uid).firestore(), `feedback/${id}`), { userId: uid, stars: 4, text: 'Nice', appVersion: '1.3.8 (14)', createdAt: serverTimestamp(), ...over });
+    await assertSucceeds(fb('bob', 'k1'));
+    await assertSucceeds(fb('bob', 'k2', { text: 'line one\nline two\tend' }));
+    for (const bad of ['a\u200Bb', 'a\u200Fb', 'a\u202Eb', 'a\u2066b', 'a\uFEFFb', 'a\u0007b', 'a\u007Fb'])
+      await assertFails(fb('bob', `x${bad.charCodeAt(1)}`, { text: bad }));
+    await assertFails(fb('bob', 'k3', { appVersion: '1.3.8\u200B' }));
+    // no T&C accepted (or an older version)
+    await assertFails(setDoc(doc(env.authenticatedContext('noterms', { phone_number: '+919000000077' }).firestore(), 'feedback/k4'), { userId: 'noterms', stars: 4, text: 'x', createdAt: serverTimestamp() }));
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'terms/oldterms'), { version: '2020-old', acceptedAt: new Date() }));
+    await assertFails(setDoc(doc(env.authenticatedContext('oldterms', { phone_number: '+919000000078' }).firestore(), 'feedback/k5'), { userId: 'oldterms', stars: 4, text: 'x', createdAt: serverTimestamp() }));
+  });
+
+  test('V137-5: private registration: unallocated pincode prefixes and a client-written district/state are refused', async () => {
+    const reg = (d) => setDoc(doc(ctx('bob').firestore(), 'users/bob/private/registration'), { dob: '2000-05-20', email: null, pincode: '110001', district: null, state: null, ...d });
+    await assertSucceeds(reg({}));
+    for (const pin of ['560001', '400001', '700001', '999999', '682001']) await assertSucceeds(reg({ pincode: pin }));
+    for (const pin of ['100001', '290001', '350001', '540001', '550001', '860001', '000001']) await assertFails(reg({ pincode: pin }));
+    await assertFails(reg({ district: 'New Delhi' }));
+    await assertFails(reg({ state: 'Delhi' }));
+    await assertSucceeds(setDoc(doc(ctx('bob').firestore(), 'users/bob/private/registration'), { dob: '2000-05-20', email: null, pincode: '110001' })); // keys may be absent
+  });
+
+  test('V137-5: daily items refuse control / zero-width / bidi characters in every text field', async () => {
+    const di = (id, over) => setDoc(doc(admin().firestore(), `dailyItems/${id}`), { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: 'FIVB', sourceUrl: null, active: true, ...over });
+    await assertSucceeds(di('c0', {}));
+    for (const [k, v] of [['textEn', 'a\nb'], ['textEn', 'a\u0000b'], ['textHi', 'क\u200Bख'], ['attribution', 'FI\u202EVB'], ['textEn', 'x\uFEFF']]) await assertFails(di(`c-${k}`, { [k]: v }));
+    const quote = { type: 'quote', textEn: 'Q', textHi: 'क्यू', attribution: 'Someone', sourceUrl: 'https://example.org/q' };
+    await assertSucceeds(di('q0', quote));
+    await assertFails(di('q1', { ...quote, sourceUrl: 'https://exa\u200Bmple.org' }));
+    await assertFails(di('q2', { ...quote, sourceUrl: 'https://example.org/a b' }));
+  });
+});
+

@@ -5,7 +5,7 @@ import { ScrollView, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { EmptyCard } from '../components/Hero';
 import { Button, Card } from '../components/ui';
-import { matchFlags, ownMatchReview } from '../core/antifraud';
+import { ADMIN_APPROVAL, captainVerdict, matchFlags, ownMatchReview } from '../core/antifraud';
 import type { Match } from '../core/types';
 import { formatWhenT, translateError } from '../i18n/format';
 import { backend } from '../services/backend';
@@ -33,7 +33,13 @@ export default function AdminReviewScreen() {
   if (!isAdmin) return <EmptyCard icon="lock-closed-outline" title={t('errors.codes.admin_only')} />;
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.bg }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }} testID="admin-review">
+      {/* 1.3.7: the other admin tools */}
+      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+        <Button title={t('feedback.adminTitle')} icon="chatbox-outline" variant="secondary" onPress={() => router.push('/admin-feedback')} style={{ flex: 1 }} testID="open-admin-feedback" />
+        <Button title={t('daily.adminTitle')} icon="bulb-outline" variant="secondary" onPress={() => router.push('/admin-daily')} style={{ flex: 1 }} testID="open-admin-daily" />
+      </View>
       {error ? <Text style={[type.body, { color: colors.danger }]} accessibilityRole="alert">{error}</Text> : null}
+      {!ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN ? <Text style={[type.caption, { color: colors.muted, marginBottom: 10 }]} testID="approve-note">{t('verify.approveNote')}</Text> : null}
       {list && list.length === 0 ? <EmptyCard icon="checkmark-done-outline" title={t('verify.noFlagged')} /> : null}
       {(list ?? []).map((m) => {
         // 1.3.5 (QA E134-4): the card says what is being approved: score, when, how long, why.
@@ -52,11 +58,17 @@ export default function AdminReviewScreen() {
               {[formatWhenT(m.finishedAt ?? m.updatedAt), mins != null ? t('verify.reviewMinutes', { count: mins }) : null].filter(Boolean).join(' · ')}
             </Text>
             <Text style={[type.caption, { color: colors.danger, marginTop: 2, fontWeight: '700' }]} testID={`flagged-why-${m.id}`}>{flagText(matchFlags(m), t)}</Text>
+            {/* 1.3.7 (F135-1): approval clears the flag; the opposing captain's confirmation still decides */}
+            {!ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN ? (
+              <Text style={[type.caption, { color: colors.text, marginTop: 2, fontWeight: '700' }]} testID={`flagged-captain-${m.id}`}>
+                {captainVerdict(m) === 'confirmed' ? t('verify.opponentConfirmed') : captainVerdict(m) === 'rejected' ? t('verify.opponentRejected') : t('verify.waitingOpponent')}
+              </Text>
+            ) : null}
             {own ? (
               <Text style={[type.caption, { color: colors.muted, marginTop: 10 }]} testID={`own-${m.id}`}>{t('errors.codes.own_match')}</Text>
             ) : (
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                <Button title={t('verify.approve')} onPress={() => void review(m.id, 'approve')} style={{ flex: 1 }} testID={`approve-${m.id}`} />
+                <Button title={t(ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN ? 'verify.approve' : 'verify.approveClears')} onPress={() => void review(m.id, 'approve')} style={{ flex: 1 }} testID={`approve-${m.id}`} />
                 <Button title={t('verify.void')} variant="danger" onPress={() => void review(m.id, 'void')} style={{ flex: 1 }} testID={`void-${m.id}`} />
               </View>
             )}

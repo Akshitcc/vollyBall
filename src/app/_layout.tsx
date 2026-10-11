@@ -1,5 +1,5 @@
 import { profileComplete } from '../core/registration';
-import { BACKEND_KIND, MIN_AGE } from '../services/config';
+import { MIN_AGE } from '../services/config';
 import { router, Stack } from 'expo-router';
 import { HeaderBackButton } from 'expo-router/react-navigation';
 import type { NativeStackHeaderBackProps } from 'expo-router/build/react-navigation/native-stack';
@@ -48,7 +48,7 @@ function RootStack() {
   const { t } = useTranslation();
   useNotificationRouting(navigate);
   // 1.3.6: profiles from before the registration fields must be completed first (after the T&C gate).
-  const ready = !!profile && (BACKEND_KIND === 'firebase' || profileComplete(profile, MIN_AGE));
+  const ready = !!profile && profileComplete(profile, MIN_AGE);
   if (loading) return <Loading />;
   return (
     <Stack
@@ -104,6 +104,14 @@ function RootStack() {
         <Stack.Screen name="memories" options={{ title: t('memoriesScreen.title') }} />
         <Stack.Screen name="wallet" options={{ title: t('wallet.title') }} />
         <Stack.Screen name="admin-review" options={{ title: t('verify.adminTitle') }} />
+        <Stack.Screen name="admin-feedback" options={{ title: t('feedback.adminTitle') }} />
+        <Stack.Screen name="admin-daily" options={{ title: t('daily.adminTitle') }} />
+        <Stack.Screen name="feedback" options={{ title: t('feedback.title') }} />
+        <Stack.Screen name="about" options={{ title: t('aboutPage.title') }} />
+        <Stack.Screen name="licenses" options={{ title: t('aboutPage.licensesTitle') }} />
+        <Stack.Screen name="terms-view" options={{ title: t('terms.title') }} />
+        <Stack.Screen name="privacy" options={{ title: t('privacy.title') }} />
+        <Stack.Screen name="courts" options={{ headerShown: false }} />
       </Stack.Protected>
     </Stack>
   );

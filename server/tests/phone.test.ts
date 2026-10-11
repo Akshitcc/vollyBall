@@ -1,7 +1,7 @@
 /** Indian mobile numbers only: ^\+91[6-9]\d{9}$ on every write and lookup, 400 invalid_phone otherwise (QA G6). */
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { acceptTermsFor, makeTeam, PEOPLE, register, startHarness, type Harness } from './helpers';
+import { acceptTermsFor, makeTeam, PEOPLE, register, startHarness, type Harness, regFor } from './helpers';
 
 let h: Harness;
 before(async () => (h = await startHarness()));
@@ -33,7 +33,7 @@ describe('phone validation', () => {
       isInvalidPhone(await h.as(who).put(`/api/users/${who.uid}`).send({ name: 'Probe', phone }));
     }
     const good = { uid: 'good', phone: '+916000000001' };
-    assert.equal((await h.as(good).put('/api/users/good').send({ name: 'Good', phone: good.phone })).status, 200);
+    assert.equal((await h.as(good).put('/api/users/good').send({ name: 'Good', phone: good.phone, ...regFor('Good Phone') })).status, 200);
   });
 
   it('lookups: 400 (not 404) for a malformed number; 404 / 200 for valid ones', async () => {

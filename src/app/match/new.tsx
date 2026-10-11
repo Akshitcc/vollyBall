@@ -26,7 +26,7 @@ import { describeRulesT, formatDayChipT, hourLabel, translateError } from '../..
 import { colors, elevation, onColor, readableFill, type } from '../../theme';
 import { captainsProblem } from '../../core/antifraud';
 import { SafeFooter } from '../../components/SafeFooter';
-import { canOpenStep, previousStep, teamSidePlayers, teamsProblem, type NewMatchStep, type SideSummary, type TeamsProblem } from '../../core/newMatchFlow';
+import { canOpenStep, exactDefaultPick, previousStep, teamSidePlayers, teamsProblem, toggleExactPick, type NewMatchStep, type SideSummary, type TeamsProblem } from '../../core/newMatchFlow';
 import { goBackOr } from '../../services/nav';
 
 /** A side is either a registered team or a roster built from registered players by number. */
@@ -177,6 +177,15 @@ export default function NewMatch() {
           .then((mt) => setRosters((r) => ({ ...r, [v.team.id]: mt })))
           .catch(() => {});
   }, [a, b, rosters]);
+  // 1.3.7 (R136-11): Exact 6 with a registered team of 7+: the 6 who play, per team id (captain always in)
+  const [exactPicks, setExactPicks] = useState<Record<string, string[]>>({});
+  const needsPick = (v: SideInput) => sizeMode === 'exact' && v?.kind === 'team' && (rosters[v.team.id]?.players.length ?? 0) > MIN_PLAYERS;
+  const pickOf = (v: SideInput): string[] => {
+    if (v?.kind !== 'team') return [];
+    const ids = rosters[v.team.id]?.players.map((p) => p.id) ?? [];
+    return exactPicks[v.team.id] ?? exactDefaultPick(ids, v.team.captainId, MIN_PLAYERS);
+  };
+  const pickProblem = [a, b].some((v) => needsPick(v) && pickOf(v).length !== MIN_PLAYERS);
   const [rules, setRules] = useState<RuleSet>({ ...INDOOR_RULES });
   const [firstServe, setFirstServe] = useState<Side>('A');
   const [location, setLocation] = useState<Place | null>(null);
@@ -215,7 +224,7 @@ export default function NewMatch() {
   const summaryOf = (v: SideInput, cap: string | null): SideSummary | null =>
     !v ? null : v.kind === 'team' ? { kind: 'team', teamId: v.team.id, name: v.team.name, players: teamSidePlayers(v.team.memberIds.length, sizeMode) } : { kind: 'build', name: v.name, players: v.players.length, captain: cap };
   const problem = teamsProblem(summaryOf(a, capA), summaryOf(b, capB), sizeMode);
-  const teamsReady = !problem;
+  const teamsReady = !problem && !pickProblem;
   const now = Date.now();
   const rulesProblem = location && !placeReady(location) ? t('location.nameRequired') : when !== 'now' && isPastStart(when, now, 0) ? t('errors.codes.time_in_past') : null;
   const rulesReady = !rulesProblem;
@@ -284,9 +293,18 @@ export default function NewMatch() {
     try {
       const side = async (v: NonNullable<SideInput>): Promise<MatchTeam> =>
         v.kind === 'team' ? (rosters[v.team.id] ?? (await matchTeamFromTeam(v.team))) : { teamId: null, name: v.name.trim(), color: v.color, players: v.players };
-      // 1.3.6 Exact 6: a registered team plays its first 6 (starters first); built sides are capped at 6.
-      const sized = (m: MatchTeam): MatchTeam => (m.teamId && sizeMode === 'exact' ? { ...m, players: m.players.slice(0, MIN_PLAYERS) } : m);
-      const [ta, tb] = (await Promise.all([side(a), side(b)])).map(sized);
+      // 1.3.7 (R136-11) Exact 6: a registered team of 7+ plays the 6 picked below (the captain always);
+      // built sides are capped at 6 by the picker.
+      if (pickProblem) {
+        setBusy(false);
+        return setError(t('newMatch.pickSix', { count: MIN_PLAYERS }));
+      }
+      const sized = (m: MatchTeam, v: NonNullable<SideInput>): MatchTeam => {
+        if (!m.teamId || sizeMode !== 'exact' || m.players.length <= MIN_PLAYERS) return m;
+        const keep = new Set(v.kind === 'team' ? (exactPicks[v.team.id] ?? exactDefaultPick(m.players.map((p) => p.id), v.team.captainId, MIN_PLAYERS)) : []);
+        return { ...m, players: m.players.filter((p) => keep.has(p.id)) };
+      };
+      const [ta, tb] = [sized(await side(a), a), sized(await side(b), b)];
       // Same checks as every backend: registered players only, 6–12 per team, nobody twice.
       const problem = [...rosterErrors(ta, tb, sizeMode), ...missingPlayers(ta, tb)][0];
       if (problem) {
@@ -325,6 +343,36 @@ export default function NewMatch() {
     }
   };
 
+  /** 1.3.7 (R136-11): pick the 6 who play for a registered team of 7+ in Exact 6. */
+  const renderPick = (s: 'A' | 'B', v: SideInput) => {
+    if (v?.kind !== 'team') return null;
+    const roster = rosters[v.team.id]?.players ?? [];
+    const ids = roster.map((p) => p.id);
+    const pick = pickOf(v);
+    return (
+      <Card>
+        <View testID={`exact-pick-${s}`}>
+          <Text style={ui.label}>{t('newMatch.pickSixTitle', { team: v.team.name, count: MIN_PLAYERS })}</Text>
+          <P muted style={{ fontSize: 12 }}>{t('newMatch.pickSixHint', { count: MIN_PLAYERS })}</P>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+            {roster.map((p) => (
+              <Chip
+                key={p.id}
+                label={p.id === v.team.captainId ? `${p.name} (${t('newMatch.captainShort')})` : p.name}
+                active={pick.includes(p.id)}
+                onPress={() => setExactPicks((x) => ({ ...x, [v.team.id]: toggleExactPick(pick, p.id, v.team.captainId, ids, MIN_PLAYERS) }))}
+                testID={`exact-pick-${s}-${p.id}`}
+              />
+            ))}
+          </View>
+          <P muted style={{ fontSize: 12, fontWeight: '700', color: pick.length === MIN_PLAYERS ? colors.muted : colors.danger }} testID={`exact-pick-${s}-count`}>
+            {t('newMatch.pickSixCount', { picked: pick.length, count: MIN_PLAYERS })}
+          </P>
+        </View>
+      </Card>
+    );
+  };
+
   const days = [0, 1, 2, 3, 4, 5, 6];
   const hours = [6, 7, 8, 16, 17, 18, 19, 20];
   // Local calendar days on this device (src/core/dates.ts), never UTC (QA B2).
@@ -343,9 +391,10 @@ export default function NewMatch() {
     step === 0 ? (
       <SafeFooter testID="new-match-footer">
         <Button
-          title={`${teamsReady ? t('newMatch.nextRules') : t('newMatch.nextRulesNeeds', { min: MIN_PLAYERS })} →`}
+          // R136-20: the label states the rule of the chosen mode (exactly 6 / 6–12 / pick 6)
+          title={`${teamsReady ? t('newMatch.nextRules') : pickProblem && !problem ? t('newMatch.nextRulesPick', { count: MIN_PLAYERS }) : sizeMode === 'exact' ? t('newMatch.nextRulesNeedsExact', { count: MIN_PLAYERS }) : t('newMatch.nextRulesNeedsCustom', { min: MIN_PLAYERS, max: maxPlayersFor('custom') })} →`}
           disabled={!teamsReady}
-          disabledHint={hint(problem)}
+          disabledHint={hint(problem) ?? (pickProblem ? t('newMatch.pickSix', { count: MIN_PLAYERS }) : undefined)}
           onPress={() => goTo(1)}
           testID="next-rules"
         />
@@ -434,8 +483,10 @@ export default function NewMatch() {
         </Card>
         <SidePicker label={t('common.teamA')} badge="A" value={a} onChange={setA} myTeams={myTeams} defaultColor={TEAM_COLORS[0]} otherPlayerIds={playerIdsOf(b, rosters)} otherTeamId={b?.kind === 'team' ? b.team.id : null} otherColor={colorOf(b)} ready={sideReady('A')} max={maxPlayersFor(sizeMode)} open={open.A} onToggle={() => setOpen((o) => ({ ...o, A: !o.A }))} testID="side-a" />
         {open.A && <CaptainPicker side="A" value={a} captain={capA} onChange={setCapA} />}
+        {needsPick(a) && renderPick('A', a)}
         <SidePicker label={t('common.teamB')} badge="B" value={b} onChange={setB} myTeams={myTeams} defaultColor={TEAM_COLORS[1]} otherPlayerIds={playerIdsOf(a, rosters)} otherTeamId={a?.kind === 'team' ? a.team.id : null} otherColor={colorOf(a)} ready={sideReady('B')} max={maxPlayersFor(sizeMode)} open={open.B} onToggle={() => setOpen((o) => ({ ...o, B: !o.B }))} testID="side-b" />
         {open.B && <CaptainPicker side="B" value={b} captain={capB} onChange={setCapB} />}
+        {needsPick(b) && renderPick('B', b)}
       </View>
       {/* Step 2 – Rules */}
       <View style={shown(1)} testID="new-match-step-rules">

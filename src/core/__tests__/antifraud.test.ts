@@ -136,7 +136,10 @@ describe('what counts', () => {
     expect(countMatches([short]).excluded.get(short.id)).toBe('flagged');
     const approved = { ...short, verification: { status: 'approved' as const, reviewedBy: 'admin1', reviewedAt: MON_10_IST } };
     expect(needsReview(approved)).toBe(false);
-    expect(countMatches([approved]).counted.has(approved.id)).toBe(true);
+    // 1.3.7 (F135-1): approval clears the flag; the opposing captain's confirmation still decides
+    expect(countMatches([approved]).counted.has(approved.id)).toBe(false);
+    const approvedConfirmed = { ...short, verification: { ...approved.verification, captain: 'confirmed' as const, by: 'capB', at: MON_10_IST } };
+    expect(countMatches([approvedConfirmed]).counted.has(approved.id)).toBe(true);
     const voided = { ...short, verification: { status: 'voided' as const } };
     expect(countMatches([voided]).excluded.get(voided.id)).toBe('voided');
   });

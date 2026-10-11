@@ -56,7 +56,10 @@ export function Screen({
 }
 
 export function H1({ children, style }: { children: React.ReactNode; style?: StyleProp<TextStyle> }) {
-  return <Text style={[font.h1, { color: colors.text }, style]}>{children}</Text>;
+  // F135-5: Devanagari headings need room above the letters (the Hindi "टूर्नामेंट" title was cut / cramped)
+  const { i18n } = useTranslation();
+  const hi = i18n.language === 'hi';
+  return <Text style={[font.h1, { color: colors.text }, hi && { lineHeight: 44, paddingTop: 6 }, style]} accessibilityRole="header">{children}</Text>;
 }
 export function H2({ children, style }: { children: React.ReactNode; style?: StyleProp<TextStyle> }) {
   return <Text style={[font.h2, { color: colors.text, marginTop: space(5), marginBottom: space(2) }, style]}>{children}</Text>;
@@ -151,12 +154,30 @@ export function Card({ children, style, onPress }: { children: React.ReactNode; 
   return <View style={[styles.card, style]}>{children}</View>;
 }
 
-export function Field({ label, hint, ...props }: TextInputProps & { label: string; hint?: string }) {
+/**
+ * 1.3.7 (R136-15): `error` shows a message under the field, a red border and marks the input invalid
+ * for screen readers (aria-invalid on web, the message joined to the label on native).
+ */
+export function Field({ label, hint, error, inputRef, ...props }: TextInputProps & { label: string; hint?: string; error?: string | null; inputRef?: React.Ref<TextInput> }) {
+  const tid = props.testID;
   return (
     <View style={{ marginBottom: space(4) }}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput placeholderTextColor={colors.placeholder} {...props} style={[styles.input, props.style]} />
-      {hint ? <Text style={styles.hint}>{hint}</Text> : null}
+      <TextInput
+        ref={inputRef}
+        placeholderTextColor={colors.placeholder}
+        accessibilityLabel={error ? `${label.replace(/\s*\*$/, '')}, ${error}` : props.accessibilityLabel}
+        aria-invalid={!!error}
+        {...props}
+        style={[styles.input, props.style, error ? { borderColor: colors.danger, borderWidth: 2, outlineColor: colors.danger } : null]}
+      />
+      {error ? (
+        <Text style={[styles.hint, { color: colors.danger, fontWeight: '700' }]} accessibilityLiveRegion="polite" testID={tid ? `${tid}-error` : undefined}>
+          {error}
+        </Text>
+      ) : hint ? (
+        <Text style={styles.hint} testID={tid ? `${tid}-hint` : undefined}>{hint}</Text>
+      ) : null}
     </View>
   );
 }
@@ -236,8 +257,8 @@ export function Chip({
   );
 }
 
-export function Row({ children, style }: { children: React.ReactNode; style?: StyleProp<ViewStyle> }) {
-  return <View style={[styles.row, style]}>{children}</View>;
+export function Row({ children, style, testID }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; testID?: string }) {
+  return <View style={[styles.row, style]} testID={testID}>{children}</View>;
 }
 
 export function Avatar({ name, uri, size = 40, color = colors.ink2, ring = false }: { name: string; uri?: string | null; size?: number; color?: string; /** B121-6: contrast ring when the fill is near navy */ ring?: boolean }) {

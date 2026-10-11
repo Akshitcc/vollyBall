@@ -3,8 +3,10 @@
  * (fraud-api-baseline-1.2.0.txt). Points/bonus/wallet are derived (src/core/antifraud.ts).
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { ADMIN, EVERYONE, SQUAD_A, SQUAD_B, createMatch, makeTeam, newMatchBody, playersOf, pt, register, startHarness, team, type Harness } from './helpers';
+import { ADMIN, EVERYONE, SQUAD_A, SQUAD_B, createMatch, makeTeam, newMatchBody, playersOf, pt, register, startHarness, team, type Harness, regFor } from './helpers';
 import { TERMS_VERSION } from '../../src/core/terms';
 import { ANTI_FRAUD } from '../../src/core/antifraud';
 import { RANKING_POINTS_PER_POTM, RANKING_POINTS_PER_WIN } from '../../src/core/ranking';
@@ -77,7 +79,7 @@ describe('T&C gate (TC-02, TC-06, TC-08..TC-11, TC-22)', () => {
     const again = await Promise.all(Array.from({ length: 10 }, () => h.as(fresh).post('/api/me/terms/accept').send({ version: TERMS_VERSION })));
     for (const a of again) assert.equal(a.body.acceptedAt, r.body.acceptedAt);
     assert.equal((await h.db('terms_acceptances').where({ user_id: 'fresh' })).length, 1);
-    code(await h.as(fresh).put('/api/users/fresh').send({ name: 'Fresh', phone: fresh.phone }), 200);
+    code(await h.as(fresh).put('/api/users/fresh').send({ name: 'Fresh', phone: fresh.phone, ...regFor('Fresh Start') }), 200);
     assert.equal((await h.as(fresh).get('/api/me')).body.termsAccepted, true);
     } finally {
       lim.terms = saved;
@@ -310,6 +312,50 @@ describe('flags, admin review, caps, wallet and bonus', () => {
     const w = (await h.as('bob').get('/api/me/wallet')).body;
     assert.equal(w.balance, 3 + RANKING_POINTS_PER_WIN + RANKING_POINTS_PER_POTM);
     assert.equal(w.flagged, 0);
+  });
+  // 1.3.7 (F135-1): approval only clears the flag; the opposing captain's confirmation is still needed
+  it('F135-1: approving an unanswered flagged match does not count it until the opposing captain confirms', async () => {
+    const id = await completed();
+    code(await h.as(ADMIN).post(`/api/admin/matches/${id}/review`).send({ decision: 'approve' }), 200);
+    let w = (await h.as('bob').get('/api/me/wallet')).body;
+    assert.deepEqual([w.balance, w.flagged], [0, 0]);
+    const m1 = (await h.as('bob').get(`/api/matches/${id}`)).body;
+    assert.deepEqual([m1.verification.status, m1.verification.captain ?? null], ['approved', null]);
+    code(await h.as('cap').post(`/api/matches/${id}/confirm`), 403, 'scoring_side');
+    const ok = await h.as('aarav').post(`/api/matches/${id}/confirm`);
+    code(ok, 200);
+    assert.deepEqual([ok.body.verification.status, ok.body.verification.captain, ok.body.verification.reviewedBy], ['approved', 'confirmed', ADMIN.uid]);
+    w = (await h.as('bob').get('/api/me/wallet')).body;
+    assert.equal(w.balance, 3 + RANKING_POINTS_PER_WIN + RANKING_POINTS_PER_POTM);
+    code(await h.as('aarav').post(`/api/matches/${id}/reject`).send({}), 409, 'already_reviewed');
+  });
+  it('F135-1: a rejected match never counts through admin approval; a rejection after approval keeps it out', async () => {
+    const a = await completed();
+    code(await h.as('aarav').post(`/api/matches/${a}/reject`).send({ reason: 'wrong score' }), 200);
+    code(await h.as(ADMIN).post(`/api/admin/matches/${a}/review`).send({ decision: 'approve' }), 200);
+    const ma = (await h.as('bob').get(`/api/matches/${a}`)).body;
+    assert.deepEqual([ma.verification.status, ma.verification.captain], ['approved', 'rejected']);
+    code(await h.as('aarav').post(`/api/matches/${a}/confirm`), 409, 'already_reviewed');
+    assert.equal((await h.as('bob').get('/api/me/wallet')).body.balance, 0);
+    const b = await completed();
+    code(await h.as(ADMIN).post(`/api/admin/matches/${b}/review`).send({ decision: 'approve' }), 200);
+    code(await h.as('aarav').post(`/api/matches/${b}/reject`).send({}), 200);
+    assert.equal((await h.as('bob').get('/api/me/wallet')).body.balance, 0);
+    assert.equal((await h.db('matches').where({ id: b }).first()).verification_status, 'approved');
+  });
+  it('F135-1: legacy rows (before 0010) are backfilled from the status; approved without a verdict waits', async () => {
+    const c = await completed();
+    code(await h.as('aarav').post(`/api/matches/${c}/confirm`), 200);
+    await h.db('matches').where({ id: c }).update({ captain_verdict: null });
+    const sql = fs.readFileSync(path.join(__dirname, '../migrations/0010_captain_verdict.sql'), 'utf8').split('-- ;;').filter((x) => /^\s*UPDATE/m.test(x));
+    for (const q of sql) await h.db.raw(q.replace(/^--.*$/gm, ''));
+    assert.equal((await h.db('matches').where({ id: c }).first()).captain_verdict, 'confirmed');
+    // 1.3.8 (V137-1): approved after the captain confirmed (verified_by set, no reason) counts even with
+    // captain_verdict NULL; approved with no captain answer at all still waits.
+    await h.db('matches').where({ id: c }).update({ verification_status: 'approved', captain_verdict: null, reviewed_by: ADMIN, reviewed_at: new Date() });
+    assert.ok((await h.as('bob').get('/api/me/wallet')).body.balance > 0);
+    await h.db('matches').where({ id: c }).update({ verified_by: null, verified_at: null });
+    assert.equal((await h.as('bob').get('/api/me/wallet')).body.balance, 0);
   });
   it('void never counts', async () => {
     const id = await completed();

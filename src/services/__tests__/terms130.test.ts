@@ -120,8 +120,15 @@ describe('flagged until an admin reviews it (item 5)', () => {
     await admin.reviewMatch('match_flagged', 'approve');
     const after = await b.getWallet('seed1');
     expect(after.flagged).toBe(before.flagged - 1);
-    expect(after.countedMatches).toBe(before.countedMatches + 1);
+    // 1.3.7 (F135-1): approval only clears the flag; it counts once the opposing captain confirms
+    expect(after.countedMatches).toBe(before.countedMatches);
     expect(await codeOf(admin.reviewMatch('match_flagged', 'void'))).toBe('already_reviewed');
+    const oppCaptain = await signedIn(7);
+    (oppCaptain as unknown as { db: unknown }).db = db(b);
+    await oppCaptain.acceptTerms('seed7', TERMS_VERSION); // the shared db keeps its own T&C records
+    await oppCaptain.confirmResult('match_flagged');
+    const counted = await b.getWallet('seed1');
+    expect(counted.countedMatches).toBe(before.countedMatches + 1);
   });
 });
 

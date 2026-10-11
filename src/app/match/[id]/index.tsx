@@ -5,7 +5,7 @@ import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Linking, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { formatWhen } from '../../../components/MatchCard';
 import { CourtCard, RallyTicker } from '../../../components/LiveScoring';
 import { LiveScoreboard, PulsingLive } from '../../../components/ViewerParts';
@@ -13,7 +13,7 @@ import { AddPhotoButtons } from '../../../components/PhotoSheet';
 import { PhotoGrid, PhotoViewer } from '../../../components/PhotoGallery';
 import { PotmBadge, PotmPicker } from '../../../components/Potm';
 import { ResultPanel } from '../../../components/ResultBadge';
-import { Avatar, Banner, Button, Card, Chip, Empty, H2, Loading, LiveBadge, P, Row, Screen } from '../../../components/ui';
+import { Avatar, Banner, breakWords, Button, Card, Chip, Empty, H2, Loading, LiveBadge, P, Row, Screen } from '../../../components/ui';
 import { rotationState } from '../../../core/rotation';
 import { computeState, timeline, type MatchEvent, type Side } from '../../../core/scoring';
 import { acceptedEvents, creditLabel, KIND_EMOJI, longestRun, playerStats, teamTotals } from '../../../core/stats';
@@ -23,10 +23,12 @@ import { useOnline } from '../../../services/connectivity';
 import { usePhotoQueue } from '../../../state/usePhotoQueue';
 import { useAuth, useMe } from '../../../state/AuthContext';
 import { useWatch } from '../../../state/hooks';
+import { useReviewPrompt } from '../../../state/useReviewPrompt';
 import { useProfiles } from '../../../state/profiles';
 import { canAddMatchPhoto } from '../../../core/photos';
 import { dataLabel, describeRulesT, letterSpacing, matchStatusLabel, shareTextT as shareText } from '../../../i18n/format';
 import { colors, font, gradients, teamText } from '../../../theme';
+import { shareOrCopy } from '../../../services/share';
 
 type Tab = 'stats' | 'timeline' | 'photos';
 
@@ -36,6 +38,7 @@ export default function MatchPage() {
   const me = useMe();
   const { isAdmin } = useAuth();
   const m = useWatch<Match | null>((cb) => backend.watchMatch(id, cb), [id]);
+  const review = useReviewPrompt(m, me.id); // Play review right after a happy moment (won / POTM), see core/reviewPrompt.ts
   const photos = useWatch<MatchPhoto[]>((cb) => backend.watchPhotos(id, cb), [id]) ?? [];
   const [tab, setTab] = useState<Tab>('stats');
   const [viewer, setViewer] = useState<number | null>(null);
@@ -89,8 +92,7 @@ export default function MatchPage() {
   const deletePhoto = (p: MatchPhoto) => backend.deleteMatchPhoto(p);
   const nameOfUser = (uid: string) => allPlayers.find((p) => p.id === uid)?.name ?? uploaders[uid]?.name;
 
-  const share = () =>
-    Share.share({ message: shareText(m.teamA.name, m.teamB.name, m.rules, m.events, m.firstServe, { location: m.location?.name }) });
+  const share = () => void shareOrCopy(shareText(m.teamA.name, m.teamB.name, m.rules, m.events, m.firstServe, { location: m.location?.name }));
 
   const wantToPlay = async () => {
     const ids = new Set(m.interestedIds ?? []);
@@ -163,21 +165,22 @@ export default function MatchPage() {
       )}
       {live && recent.length > 0 && (
         <Card style={{ marginTop: 10 }}>
-          <Row style={{ justifyContent: 'space-between' }}>
-            <Text style={hs.recentHead}>{tr('liveV2.recentRallies')}</Text>
-            <Text style={{ color: colors.muted, fontSize: 12, fontWeight: '600' }}>{tr('liveV2.autoUpdating')}</Text>
+          {/* F135-4: header and rows wrap at 360 dp (long Hindi / player names) instead of overflowing */}
+          <Row style={{ justifyContent: 'space-between', flexWrap: 'wrap', columnGap: 8 }}>
+            <Text style={[hs.recentHead, { flexShrink: 1 }]}>{tr('liveV2.recentRallies')}</Text>
+            <Text style={{ color: colors.muted, fontSize: 12, fontWeight: '600', flexShrink: 1 }}>{tr('liveV2.autoUpdating')}</Text>
           </Row>
           <View testID="recent-rallies">
             {recent.map((e, k) => (
-              <Row key={k} style={{ paddingVertical: 6, borderTopWidth: k ? 1 : 0, borderTopColor: colors.divider }}>
-                <View style={[hs.dot, { backgroundColor: e.event.side === 'A' ? m.teamA.color : m.teamB.color, marginRight: 8 }]} />
-                <Text style={{ flex: 1, fontWeight: '700', color: colors.text }} numberOfLines={1}>
+              <Row key={k} style={{ paddingVertical: 6, borderTopWidth: k ? 1 : 0, borderTopColor: colors.divider, alignItems: 'flex-start' }} testID={`recent-row-${k}`}>
+                <View style={[hs.dot, { backgroundColor: e.event.side === 'A' ? m.teamA.color : m.teamB.color, marginRight: 8, marginTop: 6 }]} />
+                <Text style={[{ flex: 1, minWidth: 0, fontWeight: '700', color: colors.text }, breakWords]} numberOfLines={2}>
                   {rallyText(e.event)}
                 </Text>
-                <Text style={{ fontWeight: '900', color: colors.text, fontVariant: ['tabular-nums'], marginRight: 10 }}>
+                <Text style={{ fontWeight: '900', color: colors.text, fontVariant: ['tabular-nums'], marginLeft: 6, marginRight: 8, flexShrink: 0 }}>
                   {e.a}–{e.b}
                 </Text>
-                <Text style={{ color: colors.muted, fontSize: 12, width: 44, textAlign: 'right' }}>{ago(e.event.at)}</Text>
+                <Text style={{ color: colors.muted, fontSize: 12, minWidth: 40, textAlign: 'right', flexShrink: 0 }}>{ago(e.event.at)}</Text>
               </Row>
             ))}
           </View>
@@ -216,7 +219,7 @@ export default function MatchPage() {
       )}
       {m.status === 'finished' && (m.playerOfMatchId ? <PotmBadge match={m} /> : isScorer && <PotmPicker match={m} uid={me.id} />)}
       {/* 1.3.0: result state, the opposing captain's confirmation and admin review */}
-      {m.status === 'finished' && <ResultPanel match={m} meId={me.id} isAdmin={isAdmin} nameOf={(uid) => (uid === me.id ? me.name : allPlayers.find((p) => p.id === uid)?.name)} />}
+      {m.status === 'finished' && <ResultPanel match={m} meId={me.id} isAdmin={isAdmin} nameOf={(uid) => (uid === me.id ? me.name : allPlayers.find((p) => p.id === uid)?.name)} onConfirmed={review.onConfirmed} />}
       <Row style={{ gap: 10 }}>
         <Button title={tr('common.share')} icon="share-social" variant="secondary" onPress={share} style={{ flex: 1 }} />
         {m.status === 'scheduled' && !isParticipant && (

@@ -2,9 +2,12 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import type { Services } from './context';
 import { requireAuth } from './auth/middleware';
+import crypto from 'node:crypto';
+import { RateLimiter } from './rateLimit';
+import { listDailyItems } from './domain/feedback';
 import { HttpError } from './errors';
 import { ValidationError } from '../../src/core/validate';
-import { apiRouter } from './routes/api';
+import { apiRouter, DAILY_PUBLIC_RATE } from './routes/api';
 import { authRouter } from './routes/auth';
 import { log, redact, requestLogger } from './ops/logger';
 
@@ -28,6 +31,7 @@ export function createApp(s: Services) {
       res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
       res.setHeader('Access-Control-Max-Age', '600');
+      res.setHeader('Access-Control-Expose-Headers', 'Date'); // 1.3.8: the web app reads the server clock (review cooldown)
     }
     if (req.method === 'OPTIONS') return res.status(204).end();
     next();
@@ -70,6 +74,23 @@ export function createApp(s: Services) {
   });
 
   if (s.auth) app.use('/auth', authRouter(s.auth.otp, s.db, s.auth.signer));
+  // 1.3.7: "Fact of the day" items are public (read only, active items, per-IP rate limit); everything
+  // else under /api needs a signed-in user. Admin writes live in apiRouter (/api/admin/daily-items).
+  app.get('/api/daily-items', async (req, res, next) => {
+    try {
+      const limiter = (s.rateLimiter ??= new RateLimiter());
+      const ipKey = crypto.createHash('sha256').update(String(req.ip ?? '')).digest('hex').slice(0, 32);
+      const wait = await limiter.takeShared(ipKey, 'dailyPublic', DAILY_PUBLIC_RATE);
+      if (wait) {
+        res.setHeader('Retry-After', String(wait));
+        return res.status(429).json({ error: 'rate_limited', message: 'Too many requests. Wait a moment and try again.', retryAfter: wait });
+      }
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.json(await listDailyItems(s, null));
+    } catch (e) {
+      next(e);
+    }
+  });
   app.use('/api', express.json({ limit: '1mb' }), requireAuth(s.verifier), apiRouter(s));
 
   app.use((_req, res) => res.status(404).json({ error: 'not_found', message: 'No such route' }));

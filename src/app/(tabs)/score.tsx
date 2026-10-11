@@ -8,12 +8,14 @@ import type { Match } from '../../core/types';
 import { backend } from '../../services/backend';
 import { useMe } from '../../state/AuthContext';
 import { useWatch } from '../../state/hooks';
+import { useLocalScores } from '../../services/localScore';
 import { colors, font } from '../../theme';
 
 export default function ScoreHub() {
   const { t } = useTranslation();
   const me = useMe();
-  const mine = useWatch<Match[]>((cb) => backend.watchMyMatches(me.id, cb), [me.id]) ?? [];
+  // F135-2: offline, show this phone's unsynced score (not the last synced one)
+  const mine = useLocalScores(useWatch<Match[]>((cb) => backend.watchMyMatches(me.id, cb), [me.id])) ?? [];
   const toScore = mine.filter((m) => m.scorerId === me.id && (m.status === 'live' || m.status === 'scheduled'));
   return (
     <Screen>

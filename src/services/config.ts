@@ -68,3 +68,6 @@ export const DEMO_ADMIN_UIDS: string[] = (process.env.EXPO_PUBLIC_DEMO_ADMIN_UID
 
 /** 1.3.6: minimum player age (default 10, max age is fixed at 100). The API server reads MIN_AGE; keep them equal. */
 export const MIN_AGE: number = Number(process.env.EXPO_PUBLIC_MIN_AGE) >= 1 ? Math.floor(Number(process.env.EXPO_PUBLIC_MIN_AGE)) : 10;
+
+/** 1.3.7 (R136-8): support address shown when a user can't complete their profile (placeholder in .env.example). */
+export const SUPPORT_EMAIL: string = (process.env.EXPO_PUBLIC_SUPPORT_EMAIL ?? '').trim();

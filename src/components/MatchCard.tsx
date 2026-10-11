@@ -92,8 +92,8 @@ export function LiveMatchCard({ m, width = 272 }: { m: Match; width?: number }) 
       <Row style={{ marginBottom: 6 }}>
         <LiveBadge />
         <Text style={[font.small, { color: colors.muted, marginLeft: 8, flex: 1 }]} numberOfLines={1}>
-          {dataLabel(m.title, t)}
-          {` · ${t('home.setN', { n: s.setScores.length + 1 })}`}
+          {/* R136-20: an untitled match reads "Team A vs Team B · Set 1", not "· Set 1" */}
+          {`${dataLabel(m.title, t) || `${m.teamA.name} ${t('common.vs')} ${m.teamB.name}`} · ${t('home.setN', { n: s.setScores.length + 1 })}`}
         </Text>
       </Row>
       {row('A')}

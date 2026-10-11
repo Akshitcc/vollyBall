@@ -1,21 +1,23 @@
+import { checkFeedback } from '../../core/reviewPrompt';
+import { BUNDLED_DAILY_ITEMS, checkDailyItem, type DailyItem } from '../../core/dailyItems';
 /**
  * Demo backend: an in-memory database with sample data, persisted to
  * AsyncStorage. Lets you try every screen without a Firebase project.
  * OTP code is always 123456.
  */
-import { checkRegistration, demoPincodeLookup, fullName } from '../../core/registration';
+import { checkRegistrationUpdate, demoPincodeLookup, fullName, hasStoredRegistration, sentRegistration } from '../../core/registration';
 import { MIN_AGE } from '../config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEMO_ADMIN_UIDS, DEMO_MODE, DEMO_OTP } from '../config';
 import { addPoint, computeState, summarize, type Side } from '../../core/scoring';
-import { assertRoster, canonicalParticipants, challengeProblem, isAbandonOnly, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, teamCanPlay, TEAM_TOO_SMALL_MESSAGE, TOURNAMENT_ORGANIZER_MESSAGE, tournamentTeamsProblem } from '../../core/roster';
+import { assertRoster, ROSTER_LOCKED_MESSAGE, TEAM_SIZE_MODES, canonicalParticipants, challengeProblem, isAbandonOnly, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, teamCanPlay, TEAM_TOO_SMALL_MESSAGE, TOURNAMENT_ORGANIZER_MESSAGE, tournamentTeamsProblem } from '../../core/roster';
 import type { Challenge, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
 import { DEMO_QA_ADMIN, DemoDB, demoPhotoUrl, demoQaAdminProfile, makeSeed, refreshSeedColours, SEED_PHOTO_SCENES } from './demoSeed';
 import i18next from 'i18next';
 import type { AuthUser, Backend, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
-import { CONFIRM_MESSAGES, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
+import { CONFIRM_MESSAGES, captainVerdict, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
 import { guardCreate, guardProgress, guardUpdate, stampTimes } from '../../core/matchGuards';
 import { TERMS_NOT_ACCEPTED, TERMS_NOT_ACCEPTED_MESSAGE, TERMS_VERSION, TERMS_VERSION_MISMATCH, termsAccepted, type TermsAcceptance } from '../../core/terms';
 import { checkText } from '../../core/validate';
@@ -273,8 +275,19 @@ export class DemoBackend implements Backend {
   }
 
   // ---------- profiles ----------
+  /**
+   * 1.3.7 privacy: date of birth, email, pincode, district and state are the owner's only (as the API
+   * returns them). The demo's sample users are synthetic, and nothing hands their private fields to
+   * another signed-in account.
+   */
+  private visible(u: UserProfile | undefined | null): UserProfile | null {
+    if (!u) return null;
+    if (u.id === this.authUser?.uid) return u;
+    const { dob: _d, email: _e, pincode: _p, district: _di, state: _s, ...pub } = u;
+    return pub;
+  }
   watchProfile(id: string, cb: (p: UserProfile | null) => void) {
-    return this.watch(() => this.db.users[id] ?? null, cb);
+    return this.watch(() => this.visible(this.db.users[id]), cb);
   }
   async saveProfile(p0: UserProfile) {
     const isNew = !this.db.users[p0.id];
@@ -282,13 +295,20 @@ export class DemoBackend implements Backend {
     // before build 216 with another number can still be edited (fix-retest N4). No data is rewritten.
     this.requireTerms();
     if (isNew || this.db.users[p0.id].phone !== p0.phone) assertPhone(p0.phone);
-    let p = checkProfileFields(p0);
-    // 1.3.6: same registration checks as the API server (pincode: bundled sample, format otherwise).
-    if (p0.firstName !== undefined || p0.dob !== undefined || p0.pincode !== undefined) {
-      const f = checkRegistration(p0, MIN_AGE);
+    const stored = this.db.users[p0.id];
+    // 1.3.6/1.3.7: same registration checks as the API server (pincode: bundled sample, format otherwise).
+    // Every field sent is checked together with the stored ones (R136-3); `name` is always first + last
+    // once they exist (R136-12); district/state only come from the pincode lookup (R136-13).
+    let p: UserProfile;
+    if (sentRegistration(p0)) {
+      const f = checkRegistrationUpdate(p0, stored, MIN_AGE);
       const found = demoPincodeLookup(f.pincode);
       if (found.status === 'invalid') throw new CodedError('pincode_unknown', 'Unknown pincode');
-      p = { ...p, ...f, name: fullName(f.firstName, f.lastName), district: found.status === 'ok' ? found.district : (p0.district ?? null), state: found.status === 'ok' ? found.state : (p0.state ?? null) };
+      p = checkProfileFields({ ...p0, ...f, name: fullName(f.firstName, f.lastName), district: found.status === 'ok' ? found.district : null, state: found.status === 'ok' ? found.state : null });
+    } else if (hasStoredRegistration(stored)) {
+      p = checkProfileFields({ ...p0, name: fullName(stored.firstName!, stored.lastName!) });
+    } else {
+      p = checkProfileFields(p0);
     }
     this.db.users[p.id] = { ...this.db.users[p.id], ...p };
     if (isNew) this.seedInviteFor(p.phone, p.id);
@@ -296,12 +316,12 @@ export class DemoBackend implements Backend {
   }
   async getProfiles(ids: string[]) {
     await this.ready;
-    return ids.map((i) => this.db.users[i]).filter(Boolean);
+    return ids.map((i) => this.visible(this.db.users[i])).filter((u): u is UserProfile => !!u);
   }
   async findUserByPhone(phone: string) {
     assertPhone(phone);
     await delay();
-    return Object.values(this.db.users).find((u) => u.phone === phone) ?? null;
+    return this.visible(Object.values(this.db.users).find((u) => u.phone === phone));
   }
   async uploadAvatar(_uid: string, localUri: string) {
     return localUri; // demo: keep local uri
@@ -375,7 +395,9 @@ export class DemoBackend implements Backend {
 
   // ---------- matches ----------
   /** Same roster rules as the API server and Firestore rules (core/roster.ts). */
-  private checkRoster(m: Pick<Match, 'teamA' | 'teamB' | 'status' | 'events'>, scoring = m.status === 'live' || m.events.length > 0) {
+  private checkRoster(m: Pick<Match, 'teamA' | 'teamB' | 'status' | 'events' | 'teamSizeMode'>, scoring = m.status === 'live' || m.events.length > 0) {
+    // 1.3.7 (R136-4): like the API's zod enum, only 'exact' / 'custom' (or none = custom, before 1.3.6)
+    if (m.teamSizeMode != null && !TEAM_SIZE_MODES.includes(m.teamSizeMode)) throw new CodedError('bad_request', 'Invalid team size mode');
     assertRoster(m, scoring);
     if ([...m.teamA.players, ...m.teamB.players].some((p) => !this.db.users[p.id])) throw new Error(ROSTER_MESSAGES.notUser);
   }
@@ -385,6 +407,10 @@ export class DemoBackend implements Backend {
   }
   async createMatch(m0: NewMatch) {
     this.requireTerms();
+    // 1.3.8 (QA V137-2): like the API, only a complete profile (name, date of birth, pincode) creates a match
+    const meProfile = this.db.users[this.authUser?.uid ?? ''];
+    if (!meProfile || !hasStoredRegistration({ firstName: meProfile.firstName ?? null, lastName: meProfile.lastName ?? null, dob: meProfile.dob ?? null, pincode: meProfile.pincode ?? null }))
+      throw new CodedError('profile_incomplete', 'Complete your profile (name, date of birth and pincode) to create a match');
     // 1.3.0: scheduled/live only, captains, no POTM / finish / server fields (core/matchGuards.ts).
     const cap = (t: Match['teamA']) => (t.teamId ? this.db.teams[t.teamId]?.captainId ?? null : null);
     const { startedAt: _s, startedServerAt: _ss, ...rest } = m0;
@@ -450,9 +476,14 @@ export class DemoBackend implements Backend {
     patch = checkMatchFields(patch, { scheduleChanged: patch.scheduledAt !== undefined && patch.scheduledAt !== m.scheduledAt });
     checkOrder('finishedAt', patch.startedAt ?? m.startedAt, patch.finishedAt ?? m.finishedAt);
     const next = { ...m, ...patch };
+    // 1.3.7 (R136-4/5, API parity): players and the team size mode are fixed after the first rally.
+    const ids = (t: Match['teamA']) => JSON.stringify(t.players.map((x) => x.id));
+    const rosterChanged = (patch.teamA && ids(patch.teamA) !== ids(m.teamA)) || (patch.teamB && ids(patch.teamB) !== ids(m.teamB));
+    const modeChanged = patch.teamSizeMode !== undefined && (patch.teamSizeMode ?? null) !== (m.teamSizeMode ?? null);
+    if ((rosterChanged || modeChanged) && m.events.length > 0) throw new CodedError('roster_locked', ROSTER_LOCKED_MESSAGE);
     // A legacy match short of players may still be abandoned (only the status changes).
     const abandoning = isAbandonOnly(Object.keys(patch), next.status);
-    if (patch.teamA || patch.teamB || patch.status) this.checkRoster(next, !abandoning && (next.status === 'live' || next.events.length > 0));
+    if (patch.teamA || patch.teamB || patch.status || patch.teamSizeMode !== undefined) this.checkRoster(next, !abandoning && (next.status === 'live' || next.events.length > 0));
     if (patch.teamA || patch.teamB || patch.participantIds) this.checkParticipants(next);
     const now = Date.now();
     const times = patch.status && patch.status !== m.status ? { ...stampTimes(m, patch.status, now), ...(patch.status === 'abandoned' ? { finishedAt: now } : {}) } : {};
@@ -563,7 +594,14 @@ export class DemoBackend implements Backend {
     this.requireTerms();
     const problem = confirmProblem(m, me);
     if (problem) throw new CodedError(problem, CONFIRM_MESSAGES[problem]);
-    this.db.matches[matchId] = { ...m, verification: { status, by: me, at: Date.now(), ...(reason ? { reason } : {}) }, updatedAt: Date.now() };
+    // 1.3.7 (F135-1): after an admin cleared the flag the status stays 'approved'; the captain's verdict decides.
+    const prev = m.verification;
+    const captain = status === 'confirmed' ? ('confirmed' as const) : ('rejected' as const);
+    const verification =
+      prev?.status === 'approved'
+        ? { ...prev, captain, by: me, at: Date.now(), ...(reason ? { reason } : {}) }
+        : { status, captain, by: me, at: Date.now(), ...(reason ? { reason } : {}) };
+    this.db.matches[matchId] = { ...m, verification, updatedAt: Date.now() };
     this.changed();
   }
   async confirmResult(matchId: string) {
@@ -585,7 +623,51 @@ export class DemoBackend implements Backend {
     if (!isCompleted(m)) throw new CodedError('not_completed', CONFIRM_MESSAGES.not_completed);
     if (v === 'approved' || v === 'voided') throw new CodedError('already_reviewed', CONFIRM_MESSAGES.already_reviewed);
     if (ownMatchReview(m, me)) throw new CodedError(OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE);
-    this.db.matches[matchId] = { ...m, verification: { ...(m.verification ?? { status: 'pending' }), status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: Date.now() }, updatedAt: Date.now() };
+    // 1.3.8 (V137-1): keep the captain's verdict explicitly (also one only recorded in the older fields)
+    this.db.matches[matchId] = { ...m, verification: { ...(m.verification ?? { status: 'pending' }), captain: captainVerdict(m), status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: Date.now() }, updatedAt: Date.now() };
+    this.changed();
+  }
+  // ---------- 1.3.7 feedback + fact of the day (local) ----------
+  async sendFeedback(f: { stars: number; text: string; appVersion?: string }) {
+    await this.ready;
+    const me = this.authUser?.uid;
+    if (!me) throw new Error('Not signed in yet');
+    this.requireTerms(); // 1.3.8 (V137-5): like the API and firestore.rules
+    const c = checkFeedback(f);
+    const list = (this.db.feedback ??= []);
+    // same limit as the API: 5 per hour per user
+    if (list.filter((x) => x.userId === me && Date.now() - x.createdAt < 3_600_000).length >= 5) throw new CodedError('rate_limited', 'Too many requests. Wait a moment and try again.');
+    list.unshift({ id: 'fb_' + uid(), userId: me, userName: this.db.users[me]?.name ?? null, ...c, appVersion: f.appVersion ?? null, createdAt: Date.now() });
+    this.changed();
+  }
+  async listFeedback() {
+    await this.ready;
+    if (!(await this.isAdmin(this.authUser?.uid ?? ''))) throw new CodedError('admin_only', 'Admins only');
+    return [...(this.db.feedback ?? [])];
+  }
+  private get dailyItems(): DailyItem[] {
+    return (this.db.dailyItems ??= BUNDLED_DAILY_ITEMS.map((x) => ({ ...x })));
+  }
+  async listDailyItems(opts?: { all?: boolean }) {
+    await this.ready;
+    return this.dailyItems.filter((x) => opts?.all || x.active).map((x) => ({ ...x }));
+  }
+  async saveDailyItem(item: Partial<DailyItem>) {
+    await this.ready;
+    if (!(await this.isAdmin(this.authUser?.uid ?? ''))) throw new CodedError('admin_only', 'Admins only');
+    const c = checkDailyItem(item);
+    const id = item.id ?? 'd_' + uid();
+    const i = this.dailyItems.findIndex((x) => x.id === id);
+    if (item.id && i < 0) throw new Error('Item not found');
+    if (i >= 0) this.dailyItems[i] = { ...c, id };
+    else this.dailyItems.push({ ...c, id });
+    this.changed();
+    return id;
+  }
+  async deleteDailyItem(id: string) {
+    await this.ready;
+    if (!(await this.isAdmin(this.authUser?.uid ?? ''))) throw new CodedError('admin_only', 'Admins only');
+    this.db.dailyItems = this.dailyItems.filter((x) => x.id !== id);
     this.changed();
   }
   /** 1.3.6: bundled sample only – the demo makes no network calls. */

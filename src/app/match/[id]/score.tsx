@@ -20,7 +20,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import Animated, { SlideInDown } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CourtCard, RallyTicker, TeamHalf, type ChipOrigin } from '../../../components/LiveScoring';
@@ -31,6 +31,8 @@ import { firstName } from '../../../components/MiniCourt';
 import { useReduceMotion } from '../../../hooks/useReduceMotion';
 import { haptic } from '../../../services/haptics';
 import LineupPicker from '../../../components/LineupPicker';
+import { SubSheet } from '../../../components/SubSheet';
+import { scoreCacheKey } from '../../../services/localScore';
 import { LiveCameraButton, UploadChip } from '../../../components/MatchCamera';
 import { PotmPicker } from '../../../components/Potm';
 import { Avatar, Button, Loading, P } from '../../../components/ui';
@@ -60,8 +62,9 @@ import { usePhotoQueue } from '../../../state/usePhotoQueue';
 import { useMe } from '../../../state/AuthContext';
 import { letterSpacing, shareTextT as shareText, translateError } from '../../../i18n/format';
 import { colors, elevation, palette } from '../../../theme';
+import { shareOrCopy } from '../../../services/share';
 
-const cacheKey = (id: string) => `score-cache-${id}`;
+const cacheKey = scoreCacheKey; // shared with the lists (services/localScore.ts, F135-2)
 
 type SyncState = 'synced' | 'saving' | 'offline' | 'error';
 /** Shortest time "Syncing N…" is shown while writes saved offline are sent (1.3.5, QA E134-1). */
@@ -90,6 +93,7 @@ export default function ScoreScreen() {
   const [menu, setMenu] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [lineupOpen, setLineupOpen] = useState(false);
+  const [subOpen, setSubOpen] = useState(false); // R136-20: substitution sheet
   const [abandoning, setAbandoning] = useState(false);
   const pushSeq = useRef(0);
   const insets = useSafeAreaInsets();
@@ -239,6 +243,7 @@ export default function ScoreScreen() {
     const lineups = { ...(match.lineups ?? {}), [String(rot.setIndex + 1)]: l };
     setMatch({ ...match, lineups });
     setLineupOpen(false);
+    setSubOpen(false);
     backend.updateMatch(match.id, { lineups }).catch((e) => setError(e instanceof Error ? e.message : String(e)));
   };
 
@@ -524,7 +529,7 @@ export default function ScoreScreen() {
               points={playerPointCounts(match.rules, ev, match.firstServe, match)}
               onPlayer={tapPlayer}
               disabled={st.finished}
-              onSub={() => (canSetLineup ? setLineupOpen(true) : flash(tr('rotation.onlyAtSetStart')))}
+              onSub={() => (canSetLineup ? setSubOpen(true) : flash(tr('sub.onlyAtSetStart')))}
             />
             {LEGACY_HALVES && <Text style={s.oppHint} testID="opp-error-hint">{tr('score.oppErrorHint')}</Text>}
           </>
@@ -609,7 +614,7 @@ export default function ScoreScreen() {
             <Button
               title={tr('score.shareResult')}
               icon="share-social"
-              onPress={() => Share.share({ message: shareText(match.teamA.name, match.teamB.name, match.rules, ev, match.firstServe, { location: match.location?.name }) })}
+              onPress={() => void shareOrCopy(shareText(match.teamA.name, match.teamB.name, match.rules, ev, match.firstServe, { location: match.location?.name }))}
             />
             <Button title={tr('score.summaryPhotos')} variant="dark" icon="images" onPress={() => router.replace(`/match/${match.id}`)} />
             {closed ? null : <Button title={tr('score.undoLast')} variant="ghost" icon="arrow-undo" onPress={doUndo} testID="undo-last" />}
@@ -631,12 +636,24 @@ export default function ScoreScreen() {
         onClose={() => setLineupOpen(false)}
       />
 
+      <SubSheet
+        visible={subOpen}
+        match={match}
+        setNumber={rot.setIndex + 1}
+        initial={{
+          A: startingLineup(match.lineups, rot.setIndex + 1, 'A', rosterIds.A),
+          B: startingLineup(match.lineups, rot.setIndex + 1, 'B', rosterIds.B),
+        }}
+        onSave={saveLineup}
+        onClose={() => setSubOpen(false)}
+      />
+
       {/* menu */}
       <Modal visible={menu} transparent animationType="slide" onRequestClose={() => setMenu(false)}>
         <Pressable style={s.modalBg} onPress={() => setMenu(false)}>
           <View style={[s.modal, { marginTop: 'auto', borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
             <Text style={[s.winner, { fontSize: 20 }]}>{tr('score.options')}</Text>
-            <Button title={tr('score.shareLive')} icon="share-social" onPress={() => { setMenu(false); Share.share({ message: shareText(match.teamA.name, match.teamB.name, match.rules, ev, match.firstServe) }); }} />
+            <Button title={tr('score.shareLive')} icon="share-social" onPress={() => { setMenu(false); void shareOrCopy(shareText(match.teamA.name, match.teamB.name, match.rules, ev, match.firstServe)); }} />
             <Button title={tr('score.pointByPoint')} icon="list" variant="secondary" onPress={() => { setMenu(false); router.replace(`/match/${match.id}`); }} />
             {hasPlayers && (
               <Button

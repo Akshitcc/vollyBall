@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { acceptTermsFor, PEOPLE, register, startHarness, type Harness } from './helpers';
+import { acceptTermsFor, PEOPLE, register, startHarness, type Harness, regFor } from './helpers';
 
 let h: Harness;
 before(async () => (h = await startHarness()));
@@ -31,11 +31,16 @@ describe('users (rules: users/{userId}, phoneIndex, pushTokens)', () => {
     assert.equal((await h.as('bob').put('/api/users/cap').send({ name: 'Hacker', phone: PEOPLE.bob.phone })).status, 403);
     assert.equal((await h.as('bob').put('/api/users/bob').send({ name: 'Bob', phone: PEOPLE.eve.phone })).status, 403);
     assert.equal((await h.as('nophone').put('/api/users/nophone').send({ name: 'Xavier', phone: '+919999999999' })).status, 403);
-    assert.equal((await h.as('bob').put('/api/users/bob').send({ name: '', phone: PEOPLE.bob.phone })).status, 400);
-    assert.equal((await h.as('bob').put('/api/users/bob').send({ name: 'x'.repeat(61), phone: PEOPLE.bob.phone })).status, 400);
+    // 1.3.7 (R136-2/12): no profile without the registration fields; `name` is first + last
+    assert.equal((await h.as('bob').put('/api/users/bob').send({ name: 'Bob', phone: PEOPLE.bob.phone })).body.error, 'profile_incomplete');
+    assert.equal((await h.as('bob').put('/api/users/bob').send({ phone: PEOPLE.bob.phone, ...regFor('B'), })).status, 400);
     const ok = await h.as('cap').put('/api/users/cap').send({ name: 'Cap Renamed', phone: PEOPLE.cap.phone, position: 'setter', city: 'Delhi' });
     assert.equal(ok.status, 200);
-    assert.equal(ok.body.name, 'Cap Renamed');
+    assert.equal(ok.body.name, 'Captain Cool'); // an old-shape save keeps first + last
+    assert.equal(ok.body.position, 'setter');
+    const renamed = await h.as('cap').put('/api/users/cap').send({ name: 'x', phone: PEOPLE.cap.phone, firstName: 'Cap', lastName: 'Renamed' });
+    assert.equal(renamed.status, 200, JSON.stringify(renamed.body)); // a stray `name` doesn't block a valid save
+    assert.equal(renamed.body.name, 'Cap Renamed');
     assert.equal((await h.as('cap').del('/api/users/cap')).status, 403);
   });
 
@@ -143,7 +148,7 @@ describe('teams (rules: teams/{teamId})', () => {
     for (let i = 0; i < 11; i++) {
       const who = { uid: `p${i}`, phone: `+9191000000${String(i).padStart(2, '0')}` };
       phones.push(who.phone);
-      await h.as(who).put(`/api/users/${who.uid}`).send({ name: `Player ${i}`, phone: who.phone });
+      await h.as(who).put(`/api/users/${who.uid}`).send({ name: `Player ${i}`, phone: who.phone, ...regFor(`Player Num${String.fromCharCode(97 + i)}`) });
       const inv = await h.as('cap').patch(`/api/teams/${id}`).send({ pendingPhones: [who.phone] });
       assert.equal(inv.status, 200, JSON.stringify(inv.body));
       const acc = await h.as(who).post(`/api/teams/${id}/accept`);
@@ -154,7 +159,7 @@ describe('teams (rules: teams/{teamId})', () => {
     assert.equal(t.subIds.length, 6); // players 6..11 joined as subs automatically
     assert.ok(t.subIds.includes('p5') && !t.subIds.includes('p4'));
     const extra = { uid: 'late', phone: '+919100000099' };
-    await h.as(extra).put('/api/users/late').send({ name: 'Late', phone: extra.phone });
+    await h.as(extra).put('/api/users/late').send({ name: 'Late', phone: extra.phone, ...regFor('Late Comer') });
     assert.equal((await h.as('cap').patch(`/api/teams/${id}`).send({ pendingPhones: [extra.phone] })).status, 403);
     assert.equal((await h.as('cap').patch(`/api/teams/${id}`).send({ subIds: [...t.subIds, 'p0'] })).status, 403);
   });

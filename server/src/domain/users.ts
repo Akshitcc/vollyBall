@@ -1,5 +1,5 @@
 import type { UserProfile } from '../../../src/core/types';
-import { checkRegistration, DEFAULT_MIN_AGE, fullName } from '../../../src/core/registration';
+import { checkRegistrationUpdate, DEFAULT_MIN_AGE, fullName, hasStoredRegistration, isApsPincode, pincodePrefixOk, sentRegistration } from '../../../src/core/registration';
 import { publicFileUrl, storedFileUrl, type Services } from '../context';
 import { conflict, forbidden, HttpError, invalidInput, notFound } from '../errors';
 import { INVALID_PHONE_CODE, INVALID_PHONE_MESSAGE, isValidE164 } from '../../../src/core/phone';
@@ -55,11 +55,15 @@ export function profileFromRow(s: Services, r: UserRow, viewer: Identity, reveal
   };
 }
 
-/** DATE column → YYYY-MM-DD (mysql2 returns a local-midnight Date for DATE unless dateStrings is set). */
-function dobString(d: Date | string): string {
+/**
+ * DATE column → YYYY-MM-DD. 1.3.7 (R136-1): the pool reads DATE columns as strings (db/knex.ts
+ * dateStrings: ['DATE']), so no time zone is involved. A Date (another driver config) was built with
+ * timezone 'Z', so its UTC fields are the calendar date (local getters moved it a day back west of UTC).
+ */
+export function dobString(d: Date | string): string {
   if (typeof d === 'string') return d.slice(0, 10);
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
 /** Placeholder name of a sign-up row (users.name is NOT NULL, 1–60 characters); never shown. */
@@ -114,13 +118,14 @@ export async function saveProfile(
   s: Services,
   viewer: Identity,
   p: {
-    id: string; name: string; phone: string; photoURL?: string | null; position: UserProfile['position']; city?: string | null;
+    id: string; phone: string; photoURL?: string | null; position: UserProfile['position']; city?: string | null;
     firstName?: string; lastName?: string; dob?: string; email?: string | null; pincode?: string; district?: string | null; state?: string | null;
+    name?: string;
   },
 ) {
   if (viewer.uid !== p.id) throw forbidden('users.write', 'You can only edit your own profile');
   if (!viewer.phone || viewer.phone !== p.phone) throw forbidden('users.write', 'Profile phone must match your verified number');
-  const existing = await s.db<UserRow>('users').where({ id: p.id }).first('phone', 'photo_url');
+  const existing = await s.db<UserRow>('users').where({ id: p.id }).first('phone', 'photo_url', 'first_name', 'last_name', 'dob', 'email', 'pincode', 'district', 'state');
   // Indian mobile format when the number is being set or changed. A profile saved before build 216
   // with another format keeps working while the number stays the same (no data is rewritten; N4).
   if ((!existing || existing.phone !== p.phone) && !isValidE164(p.phone))
@@ -129,37 +134,53 @@ export async function saveProfile(
   const photo = storedFileUrl(s, p.photoURL);
   if (photo && photo !== (existing?.photo_url ?? null) && !photo.startsWith(`storage:avatars/${p.id}/`))
     throw invalidInput(PHOTO_ERROR_CODES.badUrl, 'Invalid request: photoURL – must be a photo uploaded to VolleyLive', { field: 'photoURL' });
-  // 1.3.6 registration: a client that sends the new fields must send all of them, valid.
-  let reg: Record<string, unknown> = {};
-  if (p.firstName !== undefined || p.lastName !== undefined || p.dob !== undefined || p.pincode !== undefined) {
-    let f: ReturnType<typeof checkRegistration>;
-    try {
-      f = checkRegistration(p, s.minAge ?? DEFAULT_MIN_AGE);
-    } catch (e) {
-      const err = e as { code: string; field: string; message: string; min?: number; max?: number };
-      throw new HttpError(400, err.code, `Invalid request: ${err.field} – ${err.message}`, { field: err.field, min: err.min, max: err.max });
-    }
-    const found = s.pincode ? await s.pincode.lookup(f.pincode) : { status: 'unknown' as const };
-    if (found.status === 'invalid') throw new HttpError(400, 'pincode_unknown', 'Invalid request: pincode – no post office has this pincode', { field: 'pincode' });
-    const clip = (x: unknown) => (typeof x === 'string' && x.trim() ? x.trim().replace(/[\u0000-\u001f]/g, '').slice(0, 60) : null);
-    reg = {
-      first_name: f.firstName,
-      last_name: f.lastName,
-      dob: f.dob,
-      email: f.email,
-      pincode: f.pincode,
-      district: found.status === 'ok' ? found.district : clip(p.district),
-      state: found.status === 'ok' ? found.state : clip(p.state),
-      name: fullName(f.firstName, f.lastName),
-    };
+  // 1.3.6 registration, 1.3.7 (R136-2): a profile is only complete with valid first/last name, date of
+  // birth (age MIN_AGE..100 when it is new or changed) and pincode. The fields sent replace the stored
+  // ones and the whole set is checked (an email-only save is validated, not dropped). A save without
+  // registration fields (a client from before 1.3.6) works only for a user who already has them.
+  const stored = existing && hasStoredRegistration({ firstName: existing.first_name, lastName: existing.last_name, dob: existing.dob ? dobString(existing.dob) : null, pincode: existing.pincode })
+    ? { firstName: existing.first_name!, lastName: existing.last_name!, dob: dobString(existing.dob!), email: existing.email ?? null, pincode: existing.pincode! }
+    : null;
+  if (!sentRegistration(p) && !stored)
+    throw new HttpError(400, 'profile_incomplete', 'Invalid request: firstName – name, date of birth and pincode are required (update the app)', { field: 'firstName' });
+  let f: ReturnType<typeof checkRegistrationUpdate>;
+  try {
+    f = checkRegistrationUpdate(p, stored, s.minAge ?? DEFAULT_MIN_AGE);
+  } catch (e) {
+    const err = e as { code: string; field: string; message: string; min?: number; max?: number };
+    throw new HttpError(400, err.code, `Invalid request: ${err.field} – ${err.message}`, { field: err.field, min: err.min, max: err.max });
   }
+  // 1.3.7 (R136-9): one email address per account (case-insensitive: emails are stored lower-case)
+  // (same expression as the 0013 unique index, so MySQL can use it)
+  if (f.email && (await s.db('users').whereRaw("NULLIF(LOWER(TRIM(email)), '') = ?", [f.email]).whereNot({ id: p.id }).first('id')))
+    throw new HttpError(409, 'email_taken', 'Invalid request: email – this email belongs to another account', { field: 'email' });
+  // Unchanged pincode: keep the stored district/state (no new lookup); otherwise look it up. Only a
+  // lookup result is stored (1.3.7, R136-13: a client-sent district is never trusted).
+  let place: { district: string | null; state: string | null };
+  if (stored && existing?.pincode === f.pincode) place = { district: existing.district ?? null, state: existing.state ?? null };
+  else {
+    const found = s.pincode ? await s.pincode.lookup(f.pincode) : { status: pincodePrefixOk(f.pincode) || isApsPincode(f.pincode) ? ('unknown' as const) : ('invalid' as const) };
+    if (found.status === 'invalid') throw new HttpError(400, 'pincode_unknown', 'Invalid request: pincode – no post office has this pincode', { field: 'pincode' });
+    place = found.status === 'ok' ? { district: found.district, state: found.state } : { district: null, state: null };
+  }
+  const reg = {
+    first_name: f.firstName,
+    last_name: f.lastName,
+    dob: f.dob,
+    email: f.email,
+    pincode: f.pincode,
+    ...place,
+  };
+  // 1.3.7 (R136-12): the display name is always first + last (a sent `name` is ignored)
+  const name = fullName(f.firstName, f.lastName);
   const taken = await s.db('users').where({ phone: p.phone }).whereNot({ id: p.id }).first('id');
   if (taken) throw conflict('This number already belongs to another account');
   const now = nowDate();
+  const emailTaken = () => new HttpError(409, 'email_taken', 'Invalid request: email – this email belongs to another account', { field: 'email' });
   await s.db('users')
     .insert({
       id: p.id,
-      name: p.name,
+      name,
       phone: p.phone,
       photo_url: photo,
       position: p.position,
@@ -170,7 +191,12 @@ export async function saveProfile(
       updated_at: now,
     })
     .onConflict('id')
-    .merge(['name', 'phone', 'photo_url', 'position', 'city', 'profile_complete', 'updated_at', ...Object.keys(reg).filter((k) => k !== 'name')]);
+    .merge(['name', 'phone', 'photo_url', 'position', 'city', 'profile_complete', 'updated_at', ...Object.keys(reg)])
+    .catch((e: { code?: string; message?: string }) => {
+      // 1.3.8 (V137-8): the unique index (0013) closes the race between two saves with the same email
+      if (e?.code === 'ER_DUP_ENTRY' && /ux_users_email_norm/.test(String(e.message))) throw emailTaken();
+      throw e;
+    });
   s.bus.publish({ topic: topics.profile(p.id), type: 'invalidate' });
   const r = await s.db<UserRow>('users').where({ id: p.id }).first();
   return profileFromRow(s, r!, viewer);

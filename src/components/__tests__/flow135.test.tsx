@@ -187,3 +187,26 @@ describe('web tab bar (the cause of E134-1): a tab press stays inside the app', 
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 });
+
+test('1.3.8 (V137-14): Profile header has Edit beside the title; the pincode line has a translated label (EN/HI)', async () => {
+  await signedIn();
+  const r = app();
+  await (r as unknown as Promise<unknown>);
+  await settle(1500);
+  const pin = await screen.findByTestId('profile-pin-district');
+  const text = () => {
+    const c = pin.props.children;
+    return (Array.isArray(c) ? c : [c]).filter((x: unknown) => typeof x === 'string').join('');
+  };
+  expect(text()).toMatch(/^Pincode: 110001( · |$)/);
+  expect(screen.getByTestId('profile-edit')).toBeTruthy();
+  const i18n = require('../../i18n').default;
+  await act(async () => {
+    await i18n.changeLanguage('hi');
+  });
+  await settle(100);
+  expect(text()).toMatch(/^पिनकोड: 110001/);
+  await act(async () => {
+    await i18n.changeLanguage('en');
+  });
+});

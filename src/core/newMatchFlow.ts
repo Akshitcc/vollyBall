@@ -59,3 +59,20 @@ export const previousStep = (s: NewMatchStep): NewMatchStep | null => (s > 0 ? (
  * first, then subs); Custom = everyone (6–12).
  */
 export const teamSidePlayers = (members: number, mode: TeamSizeMode) => (mode === 'exact' ? Math.min(members, MIN_PLAYERS) : members);
+
+/**
+ * 1.3.7 (R136-11): Exact 6 with a registered team of 7+ — the creator picks the 6 who play. The
+ * captain always plays (can't be unticked); the starting suggestion is the captain plus the first
+ * others in roster order (starters first). Returns ids in roster order.
+ */
+export function exactDefaultPick(playerIds: readonly string[], captainId: string | null | undefined, size = 6): string[] {
+  const out = captainId && playerIds.includes(captainId) ? [captainId] : [];
+  for (const id of playerIds) if (out.length < size && !out.includes(id)) out.push(id);
+  return playerIds.filter((id) => out.includes(id));
+}
+/** Toggle one player in an Exact 6 pick (the captain stays; at most `size`). */
+export function toggleExactPick(pick: readonly string[], id: string, captainId: string | null | undefined, playerIds: readonly string[], size = 6): string[] {
+  if (id === captainId) return [...pick];
+  const next = pick.includes(id) ? pick.filter((x) => x !== id) : pick.length < size ? [...pick, id] : [...pick];
+  return playerIds.filter((x) => next.includes(x));
+}

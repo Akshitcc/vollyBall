@@ -7,6 +7,9 @@ import { generateKnockout } from '../../core/tournament';
 import type { Court, Match, MatchPlayer, Team, Tournament, UserProfile } from '../../core/types';
 
 export interface DemoDB {
+  /** 1.3.7: feedback sent from this device (admin view) and the fact-of-the-day items. */
+  feedback?: import('./types').FeedbackItem[];
+  dailyItems?: import('../../core/dailyItems').DailyItem[];
   users: Record<string, UserProfile>;
   teams: Record<string, Team>;
   matches: Record<string, Match>;
@@ -37,6 +40,8 @@ const names = [
   'Priya Nair', 'Ananya Iyer', 'Sneha Reddy', 'Meera Joshi', 'Kavya Rao', 'Diya Patel',
   'Aditya Kapoor', 'Siddharth Bose', 'Nikhil Jain', 'Rahul Yadav', 'Varun Malhotra', 'Karan Chopra',
   'Pooja Saxena', 'Neha Kulkarni', 'Riya Banerjee', 'Tanvi Shah', 'Isha Menon', 'Simran Kaur',
+  // 1.3.7 (R136-20): two bench players so Gurgaon Giants has 8 (Exact-6 pick and substitutions can be tried)
+  'Aman Thakur', 'Zoya Khan',
 ];
 const positions = ['setter', 'outside', 'middle', 'opposite', 'libero', 'outside'] as const;
 
@@ -153,7 +158,7 @@ export function makeSeed(now = Date.now()): DemoDB {
     nameLower: 'gurgaon giants',
     color: '#6A1B9A',
     captainId: 'seed19',
-    memberIds: ids.slice(18, 24),
+    memberIds: ids.slice(18, 26), // 8 players (R136-20)
     subIds: [],
     pendingPhones: [],
     city: 'Gurugram',
@@ -220,7 +225,7 @@ export function makeSeed(now = Date.now()): DemoDB {
   });
   // A pick-up match: both sides built from registered players by number (not saved as teams).
   const pC = toPlayers(teamC);
-  const pD = toPlayers(teamD);
+  const pD = toPlayers(teamD).slice(0, 6); // the seeded beach match keeps its original six
   const beach = mk('match_beach', BEACH_RULES, genEvents(BEACH_RULES, 11, 300, pC, pD), {
     teamA: { teamId: null, name: 'Sand Kings', color: '#FF6B00', players: pC },
     teamB: { teamId: null, name: 'Wave Riders', color: '#001F4D', players: pD },
@@ -228,7 +233,7 @@ export function makeSeed(now = Date.now()): DemoDB {
     captains: { A: pC[0].id, B: pD[0].id },
     createdBy: 'seed13',
     scorerId: 'seed13',
-    participantIds: [...teamC.memberIds, ...teamD.memberIds],
+    participantIds: [...pC, ...pD].map((p) => p.id),
     finishedAt: now - 6 * DAY,
     updatedAt: now - 6 * DAY,
     location: { lat: 15.5527, lng: 73.7517, name: 'Calangute Beach, Goa' },
@@ -265,7 +270,7 @@ export function makeSeed(now = Date.now()): DemoDB {
     m.finishedServerAt = m.finishedAt;
     m.startedAt = m.finishedAt - minutes * 60000;
     m.startedServerAt = m.startedAt;
-    m.verification = confirmedBy ? { status: 'confirmed', by: confirmedBy, at: m.finishedAt + 3600000 } : { status: 'pending' };
+    m.verification = confirmedBy ? { status: 'confirmed', captain: 'confirmed', by: confirmedBy, at: m.finishedAt + 3600000 } : { status: 'pending' };
   };
   finishedSample(old1, 75, teamB.captainId);
   finishedSample(old2, 60, teamB.captainId);

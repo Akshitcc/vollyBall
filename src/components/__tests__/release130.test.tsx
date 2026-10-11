@@ -145,6 +145,24 @@ describe('item 5: result confirmation panel', () => {
     await act(async () => fireEvent.press(screen.getByTestId('reject-send')));
     expect(mockBackend.rejectResult).toHaveBeenCalledWith('m1', 'Wrong score');
   });
+  it('1.3.8 (V137-13): confirming shows an inline notice under the badge (no toast over the stats) and fires onConfirmed', async () => {
+    const onConfirmed = jest.fn();
+    await render(<ResultPanel match={mkMatch()} meId="b1" isAdmin={false} nameOf={nameOf} onConfirmed={onConfirmed} />);
+    await act(async () => fireEvent.press(screen.getByTestId('confirm-result')));
+    expect(screen.getByTestId('result-notice')).toHaveTextContent(i18n.t('verify.confirmedToast'));
+    expect(onConfirmed).toHaveBeenCalledTimes(1);
+    mockBackend.confirmResult.mockRejectedValueOnce(new Error('offline'));
+    const onConfirmed2 = jest.fn();
+    await render(<ResultPanel match={mkMatch()} meId="b1" isAdmin={false} nameOf={nameOf} onConfirmed={onConfirmed2} />);
+    await act(async () => fireEvent.press(screen.getByTestId('confirm-result')));
+    expect(onConfirmed2).not.toHaveBeenCalled();
+  });
+  it('1.3.8 (V137-13): approved + captain confirmed shows "confirmed", and no admin buttons once approved', async () => {
+    const m = mkMatch({ finishedAt: 8 * 60_000, finishedServerAt: 8 * 60_000, verification: { status: 'approved', captain: 'confirmed', by: 'b1', reviewedBy: 'adm' } } as Partial<Match>);
+    await render(<ResultPanel match={m} meId="x" isAdmin nameOf={nameOf} />);
+    expect(screen.getByTestId('result-confirmed')).toBeTruthy();
+    expect(screen.queryByTestId('admin-approve')).toBeNull();
+  });
   it('a flagged (short) match shows the flagged state; an admin gets approve / void', async () => {
     const short = mkMatch({ finishedAt: 8 * 60_000, finishedServerAt: 8 * 60_000 } as Partial<Match>);
     await render(<ResultPanel match={short} meId="x" isAdmin nameOf={nameOf} />);

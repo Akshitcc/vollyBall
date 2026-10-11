@@ -4,15 +4,14 @@
  * admin's approve/void buttons. All decisions use src/core/antifraud.ts, like every backend.
  */
 import { Ionicons } from '@expo/vector-icons';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
-import { ANTI_FRAUD, confirmProblem, expectedConfirmer, matchFlags, resultState, type FraudFlag, type ResultState } from '../core/antifraud';
+import { ADMIN_APPROVAL, ANTI_FRAUD, confirmProblem, expectedConfirmer, matchFlags, resultState, verificationStatus, type FraudFlag, type ResultState } from '../core/antifraud';
 import type { Match } from '../core/types';
 import { translateError } from '../i18n/format';
 import { backend } from '../services/backend';
-import { showToast } from '../state/toast';
 import { colors, radius, type } from '../theme';
 import { Button } from './ui';
 
@@ -27,6 +26,9 @@ const LOOK: Record<Exclude<ResultState, 'not_finished' | 'abandoned'>, { icon: k
   approved: { icon: 'shield-checkmark', bg: colors.successBg, fg: colors.successStrong },
   flagged: { icon: 'flag', bg: colors.lossBg, fg: colors.lossText },
   voided: { icon: 'close-circle', bg: colors.lossBg, fg: colors.lossText },
+  // 1.3.7 (F135-1): flag cleared by an admin, still waiting for / rejected by the opposing captain
+  approved_awaiting_confirmation: { icon: 'hourglass-outline', bg: colors.tint, fg: colors.text },
+  approved_rejected: { icon: 'close-circle', bg: colors.lossBg, fg: colors.lossText },
 };
 
 export function ResultBadge({ match }: { match: Match }) {
@@ -47,12 +49,20 @@ export function ResultBadge({ match }: { match: Match }) {
 }
 
 /** Badge + (for the opposing captain) confirm / reject + (for an admin) approve / void. */
-export function ResultPanel({ match, meId, isAdmin, nameOf }: { match: Match; meId: string; isAdmin: boolean; nameOf: (uid: string) => string | undefined }) {
+export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { match: Match; meId: string; isAdmin: boolean; nameOf: (uid: string) => string | undefined; onConfirmed?: () => void }) {
   const { t } = useTranslation();
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 1.3.8 (V137-13): the "Result confirmed" message is shown here, under the badge, instead of a floating
+  // toast that covered the stats below.
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(id);
+  }, [notice]);
   const state = resultState(match);
   if (state === 'not_finished' || state === 'abandoned') return null;
   const canConfirm = confirmProblem(match, meId) === null;
@@ -62,24 +72,33 @@ export function ResultPanel({ match, meId, isAdmin, nameOf }: { match: Match; me
     setError(null);
     try {
       await f();
-      showToast(ok);
+      setNotice(ok);
       setRejecting(false);
+      return true;
     } catch (e) {
       setError(translateError(e, t));
+      return false;
     } finally {
       setBusy(false);
     }
   };
-  const reviewable = isAdmin && match.playerOfMatchId && state !== 'approved' && state !== 'voided';
+  // 1.3.8: from the stored status (an approved match can now show as 'confirmed')
+  const reviewable = isAdmin && match.playerOfMatchId && !['approved', 'voided'].includes(verificationStatus(match));
   return (
     <View style={{ marginBottom: 10 }} testID="result-panel">
       <ResultBadge match={match} />
+      {notice ? (
+        <View style={s.notice} accessibilityRole="alert" accessibilityLiveRegion="polite" testID="result-notice">
+          <Ionicons name="checkmark-circle" size={16} color={colors.successStrong} />
+          <Text style={[type.body, { color: colors.successStrong, fontWeight: '700', flex: 1 }]}>{notice}</Text>
+        </View>
+      ) : null}
       {match.captains ? (
         <Text style={[type.caption, { color: colors.muted, marginTop: 6 }]} testID="result-captains">
           {t('verify.captains')}: {nameOf(match.captains.A) ?? '—'} · {nameOf(match.captains.B) ?? '—'}
         </Text>
       ) : null}
-      {state === 'awaiting_confirmation' && !canConfirm && confirmer ? (
+      {(state === 'awaiting_confirmation' || state === 'approved_awaiting_confirmation') && !canConfirm && confirmer ? (
         <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]}>{t('verify.waitingFor', { name: nameOf(confirmer) ?? '—' })}</Text>
       ) : null}
       {canConfirm ? (
@@ -108,7 +127,7 @@ export function ResultPanel({ match, meId, isAdmin, nameOf }: { match: Match; me
             </>
           ) : (
             <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Button title={t('verify.confirm')} icon="checkmark" loading={busy} onPress={() => void run(() => backend.confirmResult(match.id), t('verify.confirmedToast'))} style={{ flex: 1 }} testID="confirm-result" />
+              <Button title={t('verify.confirm')} icon="checkmark" loading={busy} onPress={() => void run(() => backend.confirmResult(match.id), t('verify.confirmedToast')).then((ok) => ok && onConfirmed?.())} style={{ flex: 1 }} testID="confirm-result" />
               <Button title={t('verify.reject')} icon="flag-outline" variant="secondary" onPress={() => setRejecting(true)} style={{ flex: 1 }} testID="reject-result" />
             </View>
           )}
@@ -118,7 +137,7 @@ export function ResultPanel({ match, meId, isAdmin, nameOf }: { match: Match; me
         <View style={s.panel} testID="admin-panel">
           <Text style={[type.h3, { color: colors.text, marginBottom: 8 }]}>{t('verify.adminTitle')}</Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Button title={t('verify.approve')} loading={busy} onPress={() => void run(() => backend.reviewMatch(match.id, 'approve'), t('verify.reviewedToast'))} style={{ flex: 1 }} testID="admin-approve" />
+            <Button title={t(ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN ? 'verify.approve' : 'verify.approveClears')} loading={busy} onPress={() => void run(() => backend.reviewMatch(match.id, 'approve'), t('verify.reviewedToast'))} style={{ flex: 1 }} testID="admin-approve" />
             <Button title={t('verify.void')} variant="danger" loading={busy} onPress={() => void run(() => backend.reviewMatch(match.id, 'void'), t('verify.reviewedToast'))} style={{ flex: 1 }} testID="admin-void" />
           </View>
         </View>
@@ -129,6 +148,7 @@ export function ResultPanel({ match, meId, isAdmin, nameOf }: { match: Match; me
 }
 
 const s = StyleSheet.create({
+  notice: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
   badge: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: radius.md, padding: 12 },
   panel: { backgroundColor: colors.white, borderRadius: radius.md, padding: 14, marginTop: 10, borderWidth: 1, borderColor: colors.border },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, minHeight: 72, padding: 10, color: colors.text, backgroundColor: colors.white, textAlignVertical: 'top', marginTop: 4 },

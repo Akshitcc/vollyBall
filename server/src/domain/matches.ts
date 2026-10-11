@@ -12,6 +12,7 @@ import type { Match, MatchPlayer, MatchTeam, StreamInfo } from '../../../src/cor
 import { notify, publicFileUrl, storedFileUrl, type Services } from '../context';
 import { badRequest, forbidden, HttpError, notFound } from '../errors';
 import { POTM_MESSAGES, potmProblem } from '../../../src/core/potm';
+import { hasStoredRegistration } from '../../../src/core/registration';
 import type { Identity } from '../auth/verifier';
 import { topics } from '../live/bus';
 import { checkNotPast, checkOrder } from '../../../src/core/validate';
@@ -19,6 +20,7 @@ import {
   CAPTAIN_MESSAGES,
   CONFIRM_MESSAGES,
   captainsProblem,
+  captainVerdict,
   confirmProblem,
   expectedConfirmer,
   isCompleted,
@@ -290,7 +292,7 @@ export async function loadMatches(s: Services, db: Trx, ids: string[], viewer: I
  * scorer, creator, captains); everyone sees the coarse status (QA AF-53).
  */
 function verificationFromRow(
-  r: { id: string; verification_status?: VerificationStatus; verified_by?: string | null; verified_at?: Date | null; dispute_reason?: string | null; reviewed_by?: string | null; reviewed_at?: Date | null; scorer_id: string; created_by: string; captain_a?: string | null; captain_b?: string | null },
+  r: { id: string; verification_status?: VerificationStatus; verified_by?: string | null; verified_at?: Date | null; dispute_reason?: string | null; captain_verdict?: 'confirmed' | 'rejected' | null; reviewed_by?: string | null; reviewed_at?: Date | null; scorer_id: string; created_by: string; captain_a?: string | null; captain_b?: string | null },
   viewer: Identity | null,
   parts: { match_id: string; user_id: string }[],
 ): MatchVerification {
@@ -302,6 +304,7 @@ function verificationFromRow(
     reason: involved ? (r.dispute_reason ?? null) : null,
     reviewedBy: r.reviewed_by ?? null,
     reviewedAt: toMs(r.reviewed_at ?? null),
+    captain: r.captain_verdict ?? null,
   };
 }
 
@@ -573,6 +576,13 @@ export async function createMatch(s: Services, viewer: Identity, input: Doc, fix
   const rule = 'matches.create';
   if (input.createdBy !== viewer.uid) throw forbidden(rule, 'createdBy must be you');
   if (!input.participantIds.includes(viewer.uid)) throw forbidden(rule, 'You must be a participant of a match you create');
+  // 1.3.8 (QA V137-2): only a complete profile (first/last name, date of birth, pincode) can create a
+  // match – also a legacy row marked complete before 1.3.6 that has no registration fields.
+  if (!fixedId) {
+    const u = await s.db('users').where({ id: viewer.uid }).first('first_name', 'last_name', 'dob', 'pincode');
+    if (!u || !hasStoredRegistration({ firstName: u.first_name, lastName: u.last_name, dob: u.dob ? 'set' : null, pincode: u.pincode }))
+      throw new HttpError(403, 'profile_incomplete', 'Complete your profile (name, date of birth and pincode) to create a match', { field: 'profile' });
+  }
   const id = fixedId ?? newId(); // fixedId: seeds only
   const doc: Doc = { ...input, interestedIds: input.interestedIds ?? [], lineups: input.lineups ?? null, captains: input.captains ?? null };
   delete (doc as Partial<Match>).playerOfMatchId; // set only through PUT /player-of-match
@@ -696,11 +706,14 @@ export async function verifyResult(s: Services, viewer: Identity, id: string, de
     const [m] = await loadMatches(s, trx, [id], { uid: '\u0000internal', phone: null });
     const v = m.verification;
     // Idempotent replay of the same decision by the same captain (QA AF-45).
-    if (v?.status === decision && v.by === viewer.uid) return;
+    const verdict = decision === 'confirmed' ? 'confirmed' : 'rejected';
+    if (v?.by === viewer.uid && (v.status === decision || (v.status === 'approved' && captainVerdict(m) === verdict))) return;
     const problem = confirmProblem(m, viewer.uid);
     if (problem) throw new HttpError(CONFIRM_STATUS[problem] ?? 403, problem, CONFIRM_MESSAGES[problem]);
     await trx('matches').where({ id }).update({
-      verification_status: decision,
+      // 1.3.7 (F135-1): after an admin cleared the flag the status stays 'approved'; the verdict decides.
+      verification_status: v?.status === 'approved' ? 'approved' : decision,
+      captain_verdict: verdict,
       verified_by: viewer.uid,
       verified_at: nowDate(),
       dispute_reason: decision === 'disputed' ? (reason ?? null) : null,
@@ -712,7 +725,11 @@ export async function verifyResult(s: Services, viewer: Identity, id: string, de
   return m!;
 }
 
-/** Admin review of a completed match: approve (counts) or void (never counts). ADMIN_UIDS only. */
+/**
+ * Admin review of a completed match: approve or void (never counts). ADMIN_UIDS only. 1.3.7 (F135-1):
+ * approve clears the fraud flag; whether it counts still depends on the opposing captain
+ * (core/antifraud ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN).
+ */
 export async function reviewMatch(s: Services, viewer: Identity, id: string, decision: 'approve' | 'void') {
   if (!isAdmin(s, viewer.uid)) throw forbidden('admin.review', 'Only an admin can review a match');
   await s.db.transaction(async (trx) => {
@@ -723,7 +740,8 @@ export async function reviewMatch(s: Services, viewer: Identity, id: string, dec
     if (st === 'approved' || st === 'voided') throw new HttpError(409, 'already_reviewed', 'This match was already reviewed');
     // 1.3.5 (QA E134-2): never your own match (creator, scorer, captain or player).
     if (ownMatchReview(m, viewer.uid)) throw new HttpError(403, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE);
-    await trx('matches').where({ id }).update({ verification_status: decision === 'approve' ? 'approved' : 'voided', reviewed_by: viewer.uid, reviewed_at: nowDate(), updated_at: nowDate() });
+    // 1.3.8 (V137-1): keep the captain's verdict explicitly (also one only recorded in the older fields)
+    await trx('matches').where({ id }).update({ verification_status: decision === 'approve' ? 'approved' : 'voided', captain_verdict: captainVerdict(m), reviewed_by: viewer.uid, reviewed_at: nowDate(), updated_at: nowDate() });
   });
   const m = await getMatch(s, id, viewer);
   publishMatch(s, m, id);

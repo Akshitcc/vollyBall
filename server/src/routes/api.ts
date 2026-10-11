@@ -17,9 +17,22 @@ import * as tournaments from '../domain/tournaments';
 import * as courts from '../domain/courts';
 import * as rankings from '../domain/rankings';
 import * as terms from '../domain/terms';
+import * as feedback from '../domain/feedback';
 import { isAdmin } from '../context';
-import { RateLimiter } from '../rateLimit';
+import { RATE_LIMITED, RateLimiter } from '../rateLimit';
+import crypto from 'node:crypto';
+/** 1.3.7 (R136-6): pincode lookups – a person types a few pins; an IP may front several users (NAT). */
+/** 1.3.7: feedback (5 per user at once, refilling 1 per 12 min) and admin daily-item writes. */
+export const FEEDBACK_RATE = { burst: 5, perMinute: 1 / 12 };
+export const DAILY_ADMIN_RATE = { burst: 30, perMinute: 30 };
+/** Public GET /api/daily-items, per IP (it is cached by the app; one call per launch is normal). */
+export const DAILY_PUBLIC_RATE = { burst: 30, perMinute: 30 };
+/** Lookup turned off: format + allocated prefix only (R136-16). */
+const demoLikeFormatOnly = (pin: string) =>
+  !PINCODE_RE.test(pin) || (!pincodePrefixOk(pin) && !isApsPincode(pin)) ? { status: 'invalid' as const } : { status: 'unknown' as const };
+export const PINCODE_RATE = Object.freeze({ user: { burst: 10, perMinute: 6 }, ip: { burst: 40, perMinute: 30 } });
 import { TERMS_VERSION } from '../../../src/core/terms';
+import { isApsPincode, pincodePrefixOk, PINCODE_RE } from '../../../src/core/registration';
 import {
   challengePatchSchema,
   courtPatchSchema,
@@ -115,9 +128,20 @@ export function apiRouter(s: Services): Router {
     res.json(p);
   }));
   // 1.3.6: pincode → district/state for the registration form ({ status: ok | invalid | unknown }).
+  // 1.3.7 (R136-6): signed-in only (requireAuth on /api; allowed before T&C, the form comes first) and
+  // rate limited per user and per IP, so it can't be used to hammer India Post through this server.
   r.get('/pincode/:pin', h(async (req, res) => {
+    const ipKey = crypto.createHash('sha256').update(String(req.ip ?? '')).digest('hex').slice(0, 32);
+    const wait = Math.max(
+      await limiter.takeShared(me(req).uid, 'pincodeUser', PINCODE_RATE.user),
+      await limiter.takeShared(ipKey, 'pincodeIp', PINCODE_RATE.ip),
+    );
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
+      throw new HttpError(429, RATE_LIMITED, 'Too many requests. Wait a moment and try again.', { retryAfter: wait });
+    }
     const pin = String(req.params.pin);
-    res.json(s.pincode ? await s.pincode.lookup(pin) : /^[1-9][0-9]{5}$/.test(pin) ? { status: 'unknown' } : { status: 'invalid' });
+    res.json(s.pincode ? await s.pincode.lookup(pin) : demoLikeFormatOnly(pin));
   }));
   r.get('/users/:id', h(async (req, res) => {
     const p = await users.getProfile(s, me(req), req.params.id);
@@ -237,6 +261,34 @@ export function apiRouter(s: Services): Router {
   r.post('/matches/:id/reject', lim.verify, h(async (req, res) => {
     const b = parse(rejectSchema, req.body ?? {});
     res.json(await matches.verifyResult(s, me(req), req.params.id, 'disputed', b.reason));
+  }));
+  // 1.3.7: Profile > Send feedback (signed in, T&C accepted, rate limited; never rewarded) + admin view.
+  const limited = async (key: string, bucket: string, rule: { burst: number; perMinute: number }) => {
+    const wait = await limiter.takeShared(key, bucket, rule);
+    if (wait) throw new HttpError(429, RATE_LIMITED, 'Too many requests. Wait a moment and try again.', { retryAfter: wait });
+  };
+  r.post('/feedback', h(async (req, res) => {
+    await limited(me(req).uid, 'feedback', FEEDBACK_RATE);
+    res.status(201).json(await feedback.sendFeedback(s, me(req), req.body ?? {}));
+  }));
+  r.get('/admin/feedback', h(async (req, res) => res.json(await feedback.listFeedback(s, me(req)))));
+  // 1.3.7: "Fact of the day" admin CRUD (server-side ADMIN_UIDS check in the domain); public read is in app.ts.
+  r.get('/admin/daily-items', h(async (req, res) => {
+    if (!isAdmin(s, me(req).uid)) throw forbidden('admin_only', 'Admins only');
+    res.json(await feedback.listDailyItems(s, me(req).uid));
+  }));
+  r.post('/admin/daily-items', h(async (req, res) => {
+    await limited(me(req).uid, 'dailyAdmin', DAILY_ADMIN_RATE);
+    res.status(201).json(await feedback.createDailyItem(s, me(req), req.body ?? {}));
+  }));
+  r.patch('/admin/daily-items/:id', h(async (req, res) => {
+    await limited(me(req).uid, 'dailyAdmin', DAILY_ADMIN_RATE);
+    res.json(await feedback.updateDailyItem(s, me(req), req.params.id, req.body ?? {}));
+  }));
+  r.delete('/admin/daily-items/:id', h(async (req, res) => {
+    await limited(me(req).uid, 'dailyAdmin', DAILY_ADMIN_RATE);
+    await feedback.deleteDailyItem(s, me(req), req.params.id);
+    res.status(204).end();
   }));
   // Admin review (ADMIN_UIDS allow-list).
   r.get('/admin/matches/flagged', h(async (req, res) => res.json(await matches.listFlagged(s, me(req)))));

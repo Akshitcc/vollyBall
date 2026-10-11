@@ -190,3 +190,12 @@ describe('429 rate limiting (QA C130-2)', () => {
     }
   });
 });
+
+it('1.3.8 (V137-4): serverNow() follows the server clock from the HTTP Date header (phone clock is only the fallback)', async () => {
+  const b = await signedIn();
+  expect(b.serverNow()).toBeNull(); // the fake server sends no Date header
+  const serverAt = Date.now() + 3 * 86_400_000; // phone clock 3 days behind
+  global.fetch = jest.fn(async () => ({ ok: true, status: 200, headers: { get: (h: string) => (h.toLowerCase() === 'date' ? new Date(serverAt).toUTCString() : null) }, text: async () => '[]' })) as unknown as typeof fetch;
+  await b.findUserByPhone('+919000000002').catch(() => null);
+  expect(Math.abs(b.serverNow()! - serverAt)).toBeLessThan(2000);
+});

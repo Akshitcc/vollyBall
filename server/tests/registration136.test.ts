@@ -83,8 +83,14 @@ describe('registration fields', () => {
     assert.equal((await put(new PincodeLookup(false, fake(NONE, calls)))).status, 200);
     assert.deepEqual(calls, []);
   });
-  it('a client from before 1.3.6 (no new fields) can still save', async () => {
+  it('1.3.7 (R136-2): a client from before 1.3.6 (no new fields) can save only once the profile has them', async () => {
     await acceptTermsFor(h.db, [me.uid]);
-    assert.equal((await h.as(me).put(`/api/users/${me.uid}`).send({ name: 'Old Client', phone: me.phone })).status, 200);
+    const r = await h.as(me).put(`/api/users/${me.uid}`).send({ name: 'Old Client', phone: me.phone });
+    assert.deepEqual([r.status, r.body.error], [400, 'profile_incomplete']);
+    assert.equal((await h.db('users').where({ id: me.uid }).first())?.profile_complete ?? 0, 0);
+    assert.equal((await h.as(me).put(`/api/users/${me.uid}`).send({ ...base })).status, 200);
+    const again = await h.as(me).put(`/api/users/${me.uid}`).send({ name: 'Old Client', phone: me.phone, city: 'Agra' });
+    assert.equal(again.status, 200);
+    assert.equal(again.body.name, 'Akshit Kumar');
   });
 });

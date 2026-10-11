@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { EVERYONE, createMatch, pt, register, startHarness, type Harness, SQUAD_A, SQUAD_B, playersOf, team } from './helpers';
+import { EVERYONE, createMatch, pt, register, startHarness, type Harness, SQUAD_A, SQUAD_B, playersOf, team, regFor } from './helpers';
 import { MAX_PHOTOS_PER_MATCH } from '../../src/core/limits';
 
 let h: Harness;
@@ -41,7 +41,7 @@ describe('sign-up rows from the first /me', () => {
     assert.equal((await h.as('cap').get(`/api/users/${newbie.uid}`)).status, 404);
     // the existing PUT upsert completes it
     await h.db('terms_acceptances').insert({ user_id: newbie.uid, version: (await h.as(newbie).get('/api/me')).body.currentTermsVersion, accepted_at: new Date() });
-    const put = await h.as(newbie).put(`/api/users/${newbie.uid}`).send({ name: 'New Person', phone: newbie.phone, position: 'any' });
+    const put = await h.as(newbie).put(`/api/users/${newbie.uid}`).send({ name: 'New Person', phone: newbie.phone, position: 'any', ...regFor('New Person') });
     assert.equal(put.status, 200, JSON.stringify(put.body));
     const row = await h.db('users').where({ id: newbie.uid }).first();
     assert.deepEqual([row.name, row.profile_complete], ['New Person', 1]);

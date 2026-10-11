@@ -122,7 +122,7 @@ describe('navigation gating (Teams step)', () => {
     expect(screen.getByTestId('new-match-step-of').props.children).toBe('Step 1 of 3');
     const next = screen.getByTestId('next-rules');
     expect(next.props.accessibilityState).toMatchObject({ disabled: true });
-    expect(screen.getByText('Next: Rules · needs 6 per team →')).toBeTruthy();
+    expect(screen.getByText('Next: Rules · needs exactly 6 per team →') /* 1.3.7 R136-20: the mode's rule */).toBeTruthy();
     expect(screen.getByTestId('next-rules-hint').props.children).toBe('Pick or build Team A and Team B to continue.');
     expect(a11y('step-tab-0')).toEqual({ selected: true, disabled: false });
     expect(a11y('step-tab-1')).toEqual({ selected: false, disabled: true });
@@ -157,7 +157,7 @@ describe('navigation gating (Teams step)', () => {
   it('Hindi: the disabled button and its hint are translated', async () => {
     await i18n.changeLanguage('hi');
     await render(<NewMatch />);
-    expect(screen.getByText('आगे: नियम · हर टीम में 6 चाहिए →')).toBeTruthy();
+    expect(screen.getByText('आगे: नियम · हर टीम में पूरे 6 खिलाड़ी चाहिए →')).toBeTruthy();
     expect(screen.getByTestId('next-rules-hint').props.children).toBe('आगे बढ़ने के लिए टीम A और टीम B चुनें या बनाएँ।');
     expect(screen.getByTestId('new-match-step-of').props.children).toBe('चरण 1 / 3');
     expect(screen.getByTestId('step-tab-1', H).props.accessibilityHint).toBe('पहले टीमें वाला चरण पूरा करें');

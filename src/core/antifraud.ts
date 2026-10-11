@@ -6,10 +6,12 @@
  *
  * A match COUNTS (towards rankings, the wallet and the win bonus) only if all of these hold:
  *   1. it is completed: status 'finished', a winner from the event log, and a Player of the Match;
- *   2. its result is verified: confirmed by the OPPOSING captain (never the scoring side), or
- *      approved by an admin (ADMIN_UIDS);
+ *   2. its result is verified: confirmed by the OPPOSING captain (never the scoring side);
  *   3. it is not flagged – flagged matches (too short, missing server times, disputed) are excluded
- *      until an admin reviews them (approve = counts, void = never counts);
+ *      until an admin reviews them. 1.3.7 (F135-1, safe default): an admin's approval only CLEARS
+ *      THE FLAG – the match still needs the opposing captain's confirmation, and a match the
+ *      opponent rejected never counts through approval alone. Void = never counts. One switch:
+ *      ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN (false); firestore.rules repeat it in adminApprovalCounts().
  *   4. the same team pair has fewer than MAX_COUNTED_PER_PAIR_PER_WEEK counted matches that IST
  *      week (weeks start Monday 00:00 IST);
  * and, per player, they have fewer than MAX_COUNTED_PER_PLAYER_PER_DAY counted matches that IST day.
@@ -37,6 +39,14 @@ export const ANTI_FRAUD = Object.freeze({
   /** Reject reason length (UTF-16 units). */
   REJECT_REASON_MAX: 200,
 });
+
+/**
+ * 1.3.7 (F135-1): what an admin's "approve" means. false (default, safe) = it only clears the fraud
+ * flag; the match counts once the opposing captain has also confirmed. true = approval alone counts
+ * (the 1.3.0–1.3.6 behaviour). Change it here: the API server and the demo backend import it;
+ * firestore.rules repeat the value in adminApprovalCounts() (rules-tests check that they agree).
+ */
+export const ADMIN_APPROVAL = Object.freeze({ COUNTS_WITHOUT_CAPTAIN: false as boolean });
 
 export const MIN_MATCH_MS = ANTI_FRAUD.MIN_MATCH_MINUTES * 60_000;
 const IST_MS = ANTI_FRAUD.IST_OFFSET_MINUTES * 60_000;
@@ -71,6 +81,26 @@ export type CountableMatch = RankableMatch &
   };
 
 export const verificationStatus = (m: { verification?: MatchVerification | null }): VerificationStatus => m.verification?.status ?? 'pending';
+
+/** 1.3.7: the opposing captain's verdict, whatever an admin did afterwards (older data: from the status). */
+export function captainVerdict(m: { verification?: MatchVerification | null }): 'confirmed' | 'rejected' | null {
+  const v = m.verification;
+  if (v?.captain) return v.captain;
+  const st = verificationStatus(m);
+  if (st === 'confirmed') return 'confirmed';
+  if (st === 'disputed') return 'rejected';
+  // 1.3.8 (V137-1): reviewed before the verdict field existed (1.3.6 data, or a 1.3.6 client before an
+  // admin approved): the captain's answer is still in the older fields. `by` set = the opposing captain
+  // answered; a reject reason means they rejected, no reason = they confirmed. (A 1.3.6 rejection sent
+  // with no reason can't be told apart from a confirmation; it counted under 1.3.6 as well.)
+  if ((st === 'approved' || st === 'voided') && v?.by) return v.reason ? 'rejected' : 'confirmed';
+  return null;
+}
+
+/** 1.3.7: an admin cleared the flag, but the opposing captain hasn't confirmed yet (so it doesn't count yet). */
+export function awaitingOpponentAfterApproval(m: CountableMatch, policy = ADMIN_APPROVAL): boolean {
+  return !policy.COUNTS_WITHOUT_CAPTAIN && verificationStatus(m) === 'approved' && captainVerdict(m) === null;
+}
 
 export function matchWinner(m: Pick<RankableMatch, 'rules' | 'events' | 'firstServe'> & { winner?: Side | null }): Side | null {
   if (m.winner !== undefined) return m.winner;
@@ -107,21 +137,29 @@ export function needsReview(m: CountableMatch): boolean {
 }
 
 /** Completed, verified and not flagged (or approved by an admin). Caps are applied on top. */
-export function isEligible(m: CountableMatch): boolean {
+export function isEligible(m: CountableMatch, policy = ADMIN_APPROVAL): boolean {
   if (!isCompleted(m)) return false;
   const v = verificationStatus(m);
-  if (v === 'approved') return true;
+  if (v === 'approved') return policy.COUNTS_WITHOUT_CAPTAIN || captainVerdict(m) === 'confirmed';
   return v === 'confirmed' && matchFlags(m).length === 0;
 }
 
 /** One state for the UI badge. */
-export type ResultState = 'not_finished' | 'awaiting_potm' | 'awaiting_confirmation' | 'confirmed' | 'flagged' | 'approved' | 'voided' | 'abandoned';
+export type ResultState = 'not_finished' | 'awaiting_potm' | 'awaiting_confirmation' | 'confirmed' | 'flagged' | 'approved' | 'voided' | 'abandoned' | 'approved_awaiting_confirmation' | 'approved_rejected';
 export function resultState(m: CountableMatch): ResultState {
   if (m.status === 'abandoned') return 'abandoned';
   if (m.status !== 'finished') return 'not_finished';
   if (!m.playerOfMatchId) return 'awaiting_potm';
   const v = verificationStatus(m);
   if (v === 'voided') return 'voided';
+  if (v === 'approved' && !ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN) {
+    const c = captainVerdict(m);
+    if (c === null) return 'approved_awaiting_confirmation';
+    if (c === 'rejected') return 'approved_rejected';
+    // 1.3.8 (V137-13): flag cleared and the opposing captain confirmed: show the result as confirmed
+    // (the latest state, and what makes it count), not "Approved by an admin".
+    return 'confirmed';
+  }
   if (v === 'approved') return 'approved';
   if (matchFlags(m).length) return 'flagged';
   return v === 'confirmed' ? 'confirmed' : 'awaiting_confirmation';
@@ -354,7 +392,8 @@ export const CONFIRM_MESSAGES: Record<ConfirmProblem, string> = {
 
 /**
  * Who may confirm/reject: a captain of the match who is not the scorer, not the creator, and not on
- * the side the scorer or creator plays for. Only once, from pending, on a completed match.
+ * the side the scorer or creator plays for. Only once, from pending, on a completed match – or (1.3.7)
+ * after an admin cleared the flag while the captain hadn't answered yet.
  */
 export function confirmProblem(m: CountableMatch, uid: string): ConfirmProblem | null {
   if (!isCompleted(m)) return 'not_completed';
@@ -363,7 +402,9 @@ export function confirmProblem(m: CountableMatch, uid: string): ConfirmProblem |
   if (!side) return 'not_captain';
   if (uid === m.scorerId || uid === m.createdBy) return 'scoring_side';
   if (sideOfPlayer(m, m.scorerId) === side || sideOfPlayer(m, m.createdBy) === side) return 'scoring_side';
-  if (verificationStatus(m) !== 'pending') return 'already_reviewed';
+  const st = verificationStatus(m);
+  // 1.3.8 (V137-1): an answer recorded in the older fields (1.3.6: `by` without a verdict) counts as answered
+  if (st !== 'pending' && !(st === 'approved' && captainVerdict(m) === null)) return 'already_reviewed';
   return null;
 }
 

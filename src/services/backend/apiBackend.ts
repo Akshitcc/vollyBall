@@ -1,3 +1,5 @@
+import { checkFeedback } from '../../core/reviewPrompt';
+import { checkDailyItem, type DailyItem } from '../../core/dailyItems';
 /**
  * Backend that talks to the VolleyLive API server (server/): REST for reads and
  * writes, one WebSocket (/live) for real-time updates. Firebase is only used for
@@ -16,7 +18,7 @@ import { Platform } from 'react-native';
 import type { Challenge, ChallengeStatus, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
 import { API_DEV_AUTH, API_OTP_AUTH, API_URL, DEMO_OTP } from '../config';
 import { IDEMPOTENCY_KEY_RE, inviteState, PHOTO_WRONG_ACCOUNT, type InviteState } from './types';
-import type { AuthUser, Backend, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, PhoneVerifier, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
+import type { AuthUser, Backend, FeedbackItem, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, PhoneVerifier, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
 import type { TermsAcceptance } from '../../core/terms';
 import { CodedError } from '../../core/codedError';
 import { readPhoto } from '../photoFile';
@@ -334,6 +336,17 @@ export class ApiBackend implements Backend {
     this.live = new LiveSocket(this.base.replace(/^http/, 'ws') + '/live', () => this.auth.token());
   }
 
+  // ---------- server clock (1.3.8, V137-4: the review cooldown uses it) ----------
+  private clockOffset: number | null = null;
+  private noteServerTime(res: Response) {
+    const d = res.headers?.get?.('date');
+    const at = d ? Date.parse(d) : NaN;
+    if (Number.isFinite(at)) this.clockOffset = at - Date.now();
+  }
+  serverNow(): number | null {
+    return this.clockOffset == null ? null : Date.now() + this.clockOffset;
+  }
+
   // ---------- HTTP ----------
   private async request<T>(method: string, path: string, body?: unknown, tokenOverride?: string, raw?: { blob: Blob; type: string; headers?: Record<string, string> }): Promise<T> {
     const send = async (force: boolean) => {
@@ -346,6 +359,7 @@ export class ApiBackend implements Backend {
     };
     let res = await send(false);
     if (res.status === 401 && !tokenOverride) res = await send(true); // expired Firebase ID token
+    this.noteServerTime(res);
     if (res.status === 204) return undefined as T;
     const text = await res.text();
     const data = text ? JSON.parse(text) : undefined;
@@ -602,6 +616,27 @@ export class ApiBackend implements Backend {
   }
   listFlagged() {
     return this.get<Match[]>('/admin/matches/flagged');
+  }
+  // 1.3.7 feedback + fact of the day
+  async sendFeedback(f: { stars: number; text: string; appVersion?: string }) {
+    const c = checkFeedback(f);
+    await this.request('POST', '/feedback', { ...c, appVersion: f.appVersion ?? null });
+  }
+  listFeedback() {
+    return this.get<FeedbackItem[]>('/admin/feedback');
+  }
+  listDailyItems(opts?: { all?: boolean }) {
+    return this.get<DailyItem[]>(opts?.all ? '/admin/daily-items' : '/daily-items');
+  }
+  async saveDailyItem(item: Partial<DailyItem>) {
+    const body = checkDailyItem(item);
+    const r = item.id
+      ? await this.request<{ id: string }>('PATCH', `/admin/daily-items/${encodeURIComponent(item.id)}`, body)
+      : await this.request<{ id: string }>('POST', '/admin/daily-items', body);
+    return (r as { id?: string } | undefined)?.id ?? item.id ?? '';
+  }
+  async deleteDailyItem(id: string) {
+    await this.request('DELETE', `/admin/daily-items/${encodeURIComponent(id)}`);
   }
   async lookupPincode(pin: string) {
     try {

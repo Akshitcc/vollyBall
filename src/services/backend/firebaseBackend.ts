@@ -1,3 +1,5 @@
+import { checkFeedback } from '../../core/reviewPrompt';
+import { checkDailyItem, type DailyItem } from '../../core/dailyItems';
 /**
  * Production backend: Firebase Auth (phone), Firestore, Storage.
  *
@@ -11,6 +13,8 @@
  *   tournaments/{id}               tournament with fixtures
  *   courts/{id}                    community-added courts
  */
+import { checkRegistrationUpdate, fullName, isApsPincode, pincodePrefixOk, sentRegistration } from '../../core/registration';
+import { MIN_AGE } from '../config';
 import { onAuthStateChanged, signInWithPhoneNumber, signOut as fbSignOut, type ApplicationVerifier } from 'firebase/auth';
 import {
   addDoc,
@@ -41,7 +45,7 @@ import { planEventSteps } from '../../core/eventSteps';
 import { computeState, summarize, type Side } from '../../core/scoring';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
-import { CONFIRM_MESSAGES, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
+import { CONFIRM_MESSAGES, captainVerdict, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
 import { guardCreate, guardProgress, guardUpdate } from '../../core/matchGuards';
 import { TERMS_VERSION, TERMS_VERSION_MISMATCH, type TermsAcceptance } from '../../core/terms';
 import { checkText } from '../../core/validate';
@@ -54,7 +58,7 @@ import { getFirebase } from '../firebase';
 import { checkChallengeFields, checkCourtFields, checkMatchFields, checkProfileFields, checkTeamFields, checkTournamentFields, ValidationError } from '../../core/validate';
 import { INVALID_PHONE_CODE, isValidE164 } from '../../core/phone';
 import { IDEMPOTENCY_KEY_RE, inviteState, PHOTO_WRONG_ACCOUNT, type InviteState } from './types';
-import type { Backend, NewMatch, PhoneVerifier, RankingsResult, ReviewDecision, UploadOptions, UploadProgress, WalletResult } from './types';
+import type { Backend, FeedbackItem, NewMatch, PhoneVerifier, RankingsResult, ReviewDecision, UploadOptions, UploadProgress, WalletResult } from './types';
 
 const withId = <T>(d: QueryDocumentSnapshot<DocumentData>): T => ({ ...(d.data() as object), id: d.id }) as T;
 /** Firestore Timestamp (rules-set server time) -> epoch ms; numbers/null pass through. */
@@ -146,7 +150,30 @@ export class FirebaseBackend implements Backend {
 
   // ---------- profiles ----------
   watchProfile(uid: string, cb: (p: UserProfile | null) => void) {
-    return onSnapshot(doc(this.fb.db, 'users', uid), (s) => cb(s.exists() ? ({ ...(s.data() as UserProfile), id: s.id }) : null));
+    // 1.3.7: your own profile also merges your private registration doc (dob, email, pincode…).
+    let pub: UserProfile | null | undefined;
+    let priv: Partial<UserProfile> = {};
+    const emit = () => pub !== undefined && cb(pub ? { ...pub, ...priv } : null);
+    const unPub = onSnapshot(doc(this.fb.db, 'users', uid), (s) => {
+      pub = s.exists() ? ({ ...(s.data() as UserProfile), id: s.id }) : null;
+      emit();
+    });
+    const own = this.fb.auth.currentUser?.uid === uid;
+    const unPriv = own
+      ? onSnapshot(
+          doc(this.fb.db, 'users', uid, 'private', 'registration'),
+          (s) => {
+            const d = (s.exists() ? s.data() : {}) as Record<string, unknown>;
+            priv = { dob: d.dob as string | undefined, email: (d.email as string | null) ?? null, pincode: d.pincode as string | undefined, district: (d.district as string | null) ?? null, state: (d.state as string | null) ?? null };
+            emit();
+          },
+          () => {},
+        )
+      : () => {};
+    return () => {
+      unPub();
+      unPriv();
+    };
   }
   async saveProfile(p0: UserProfile) {
     // The Indian format is checked when the number is set or changed (firestore.rules do the same),
@@ -154,8 +181,24 @@ export class FirebaseBackend implements Backend {
     const cur = await getDoc(doc(this.fb.db, 'users', p0.id));
     const samePhone = cur.exists() && (cur.data() as UserProfile).phone === p0.phone;
     if (!samePhone && !isValidE164(p0.phone)) throw new ValidationError(INVALID_PHONE_CODE, 'phone');
-    const p = checkProfileFields(p0);
     const batch = writeBatch(this.fb.db);
+    // 1.3.7: names on the public profile; dob / email / pincode / district / state in the owner-only doc
+    // (firestore.rules users/{uid}/private/registration). A save is checked together with the stored
+    // fields (R136-3); the age range only when the DOB is new or changed (R136-8).
+    const { dob: _dob, email: _email, pincode: _pin, district: _district, state: _state, ...rest } = p0 as UserProfile;
+    let pub: Omit<UserProfile, 'dob' | 'email' | 'pincode' | 'district' | 'state'> = rest;
+    if (sentRegistration(p0)) {
+      const curPub = cur.exists() ? (cur.data() as UserProfile) : null;
+      const priv = await getDoc(doc(this.fb.db, 'users', p0.id, 'private', 'registration')).catch(() => null);
+      const stored = { firstName: curPub?.firstName ?? null, lastName: curPub?.lastName ?? null, ...(priv?.exists() ? (priv.data() as { dob?: string; email?: string | null; pincode?: string }) : {}) };
+      const f = checkRegistrationUpdate(p0, stored, MIN_AGE);
+      // 1.3.8 (V137-5): same as the API without a lookup – an unallocated prefix is refused, and no
+      // client-typed district/state is stored (firestore.rules registrationOk refuses both)
+      if (!pincodePrefixOk(f.pincode) && !isApsPincode(f.pincode)) throw Object.assign(new CodedError('pincode_unknown', 'No post office has this pincode'), { field: 'pincode' });
+      pub = { ...pub, firstName: f.firstName, lastName: f.lastName, name: fullName(f.firstName, f.lastName) };
+      batch.set(doc(this.fb.db, 'users', p0.id, 'private', 'registration'), clean({ dob: f.dob, email: f.email, pincode: f.pincode, updatedAt: serverTimestamp() }));
+    }
+    const p = checkProfileFields(pub as UserProfile);
     batch.set(doc(this.fb.db, 'users', p.id), clean(p), { merge: true });
     batch.set(doc(this.fb.db, 'phoneIndex', p.phone), { uid: p.id });
     await batch.commit();
@@ -555,8 +598,14 @@ export class FirebaseBackend implements Backend {
     if (!s.exists()) throw new Error('Match not found');
     const problem = confirmProblem(matchFrom(s.data(), matchId), me);
     if (problem) throw new CodedError(problem, CONFIRM_MESSAGES[problem]);
+    // 1.3.7 (F135-1): keep the captain's verdict; after an admin cleared the flag the status stays 'approved'.
+    const old = (s.data().verification ?? {}) as Record<string, unknown>;
+    const captain = status === 'confirmed' ? 'confirmed' : 'rejected';
     await updateDoc(doc(this.fb.db, 'matches', matchId), {
-      verification: clean({ status, by: me, at: serverTimestamp(), reason: reason || undefined }),
+      verification:
+        old.status === 'approved'
+          ? clean({ status: 'approved', captain, by: me, at: serverTimestamp(), reason: reason || undefined, reviewedBy: old.reviewedBy, reviewedAt: old.reviewedAt })
+          : clean({ status, captain, by: me, at: serverTimestamp(), reason: reason || undefined }),
       updatedAt: Date.now(),
     });
   }
@@ -578,9 +627,42 @@ export class FirebaseBackend implements Backend {
     if (ownMatchReview(m, me)) throw new CodedError(OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE);
     const old = (s.data().verification ?? {}) as Record<string, unknown>;
     await updateDoc(doc(this.fb.db, 'matches', matchId), {
-      verification: clean({ by: old.by, at: old.at, reason: old.reason, status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: serverTimestamp() }),
+      // 1.3.8 (V137-1): the captain's verdict is written explicitly, also when it was only in the older
+      // fields (a 1.3.6 client confirmed without `captain`); firestore.rules reviewOk accepts exactly that.
+      verification: clean({ by: old.by, at: old.at, reason: old.reason, captain: captainVerdict(m) ?? undefined, status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: serverTimestamp() }),
       updatedAt: Date.now(),
     });
+  }
+  // ---------- 1.3.7 feedback + fact of the day (firestore.rules: feedback create-own, admin read; dailyItems public read, admin write) ----------
+  async sendFeedback(f: { stars: number; text: string; appVersion?: string }) {
+    const me = this.fb.auth.currentUser?.uid;
+    if (!me) throw new Error('Not signed in yet');
+    const c = checkFeedback(f);
+    await addDoc(collection(this.fb.db, 'feedback'), { userId: me, stars: c.stars, text: c.text, appVersion: f.appVersion ?? null, createdAt: serverTimestamp() });
+  }
+  async listFeedback() {
+    const snap = await getDocs(query(collection(this.fb.db, 'feedback'), orderBy('createdAt', 'desc'), limit(200)));
+    const out: FeedbackItem[] = [];
+    snap.forEach((d) => {
+      const x = d.data() as { userId: string; stars: number; text: string; appVersion?: string | null; createdAt?: { toMillis?: () => number } };
+      out.push({ id: d.id, userId: x.userId, stars: x.stars, text: x.text, appVersion: x.appVersion ?? null, createdAt: x.createdAt?.toMillis?.() ?? 0 });
+    });
+    return out;
+  }
+  async listDailyItems(opts?: { all?: boolean }) {
+    const snap = await getDocs(collection(this.fb.db, 'dailyItems'));
+    const out: DailyItem[] = [];
+    snap.forEach((d) => out.push({ ...(d.data() as Omit<DailyItem, 'id'>), id: d.id }));
+    return opts?.all ? out : out.filter((x) => x.active !== false);
+  }
+  async saveDailyItem(item: Partial<DailyItem>) {
+    const c = checkDailyItem(item);
+    const ref = item.id ? doc(this.fb.db, 'dailyItems', item.id) : doc(collection(this.fb.db, 'dailyItems'));
+    await setDoc(ref, clean({ ...c, updatedAt: serverTimestamp() }));
+    return ref.id;
+  }
+  async deleteDailyItem(id: string) {
+    await deleteDoc(doc(this.fb.db, 'dailyItems', id));
   }
   async listFlagged() {
     if (!(await this.isAdmin(this.fb.auth.currentUser?.uid ?? ''))) return [];

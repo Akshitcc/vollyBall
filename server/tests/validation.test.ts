@@ -25,22 +25,22 @@ const code = (r: { status: number; body: { error?: string } }, status: number, c
 const profile = (who: 'bob', over: Record<string, unknown>) => h.as(who).put('/api/users/bob').send({ name: 'Bob Builder', phone: '+919000000002', position: 'any', ...over });
 
 describe('names and text (G14, G15/G17, B3)', () => {
+  // 1.3.7 (R136-12): the display name is first + last, so the name checks run on those fields
+  // (core/registration.ts checkPersonName); a sent `name` is ignored.
   it('profile names: zero-width only, control characters and bidi overrides are refused; NFC is stored', async () => {
-    code(await profile('bob', { name: '\u200b\u200b' }), 400, 'text_empty');
-    code(await profile('bob', { name: '   ' }), 400, 'text_empty');
-    code(await profile('bob', { name: '😀😀' }), 400, 'text_empty'); // needs a letter or digit
-    code(await profile('bob', { name: 'a\u0000b' }), 400, 'text_control');
-    code(await profile('bob', { name: 'Bob\nBuilder' }), 400, 'text_control');
-    code(await profile('bob', { name: '\u202eevil' }), 400, 'text_bidi');
-    code(await profile('bob', { name: 'B' }), 400, 'text_too_short');
-    const long = await profile('bob', { name: 'x'.repeat(61) });
-    code(long, 400, 'text_too_long');
-    assert.equal(long.body.max, 60);
-    assert.equal(long.body.field, 'name');
-    assert.equal((await profile('bob', { name: 'é'.normalize('NFD').repeat(40) })).status, 200); // 40 letters after NFC
-    const r = await profile('bob', { name: ' \u200bराहुल शर्मा\u200b ' });
+    code(await profile('bob', { firstName: '   ' }), 400, 'name_empty');
+    for (const bad of ['\u200b\u200b', '😀😀', 'a\u0000b', '\u202eevil', 'Bob\u200b']) code(await profile('bob', { firstName: bad }), 400, 'name_chars');
+    code(await profile('bob', { firstName: 'B' }), 400, 'name_length');
+    assert.equal((await profile('bob', { firstName: 'Bob\nBob' })).body.firstName, 'Bob Bob'); // whitespace collapsed
+    const long = await profile('bob', { lastName: 'x'.repeat(41) });
+    code(long, 400, 'name_length');
+    assert.equal(long.body.max, 40);
+    assert.equal(long.body.field, 'lastName');
+    assert.equal((await profile('bob', { firstName: 'é'.normalize('NFD').repeat(40) })).status, 200); // 40 letters after NFC
+    const r = await profile('bob', { firstName: ' राहुल ', lastName: 'शर्मा' });
     assert.equal(r.status, 200);
     assert.equal(r.body.name, 'राहुल शर्मा');
+    assert.equal((await profile('bob', { name: '\u202eignored' })).body.name, 'राहुल शर्मा');
   });
 
   it('B3: a city of only spaces is saved as empty, never as whitespace', async () => {
@@ -151,13 +151,13 @@ describe('accounts from before build 216 with a non-Indian number (fix-retest N4
   const LEGACY = { uid: 'legacy', phone: '+16505551234' };
   beforeEach(async () => {
     // as written before 216 (no migration rewrites it)
-    await h.db('users').insert({ id: 'legacy', name: 'Old Timer', phone: LEGACY.phone, position: 'any', created_at: new Date(), updated_at: new Date() });
+    await h.db('users').insert({ id: 'legacy', name: 'Old Timer', phone: LEGACY.phone, position: 'any', first_name: 'Old', last_name: 'Timer', dob: '1980-01-01', pincode: '110001', created_at: new Date(), updated_at: new Date() });
   });
   it('saving the profile with the number unchanged works; changing to another bad number does not', async () => {
     await acceptTermsFor(h.db, ['legacy', 'newbie']);
-    const r = await h.as(LEGACY).put('/api/users/legacy').send({ name: 'Old Timer Renamed', phone: LEGACY.phone, position: 'setter' });
+    const r = await h.as(LEGACY).put('/api/users/legacy').send({ name: 'ignored', phone: LEGACY.phone, position: 'setter', lastName: 'Renamed' });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.equal(r.body.name, 'Old Timer Renamed');
+    assert.equal(r.body.name, 'Old Renamed');
     assert.equal((await h.db('users').where({ id: 'legacy' }).first()).phone, LEGACY.phone); // untouched
     const other = { uid: 'newbie', phone: '+447911123456' };
     code(await h.as(other).put('/api/users/newbie').send({ name: 'New Person', phone: other.phone }), 400, 'invalid_phone');

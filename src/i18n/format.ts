@@ -132,12 +132,24 @@ const CODED = new Set([
   'otp_expired', 'otp_too_many_attempts', 'otp_send_failed', 'otp_use_device', 'own_match',
   // 1.3.6 registration
   'name_empty', 'name_length', 'name_chars', 'dob_invalid', 'dob_future', 'age_too_young', 'age_too_old', 'email_invalid', 'pincode_invalid', 'pincode_unknown',
+  // 1.3.7 (R136-2/9)
+  'profile_incomplete', 'email_taken',
+  // 1.3.7 feedback + fact of the day
+  'feedback_stars', 'feedback_too_long', 'daily_invalid',
+  // 1.3.7 (R136-17) pincode order: required → digits → format
+  'pincode_required', 'pincode_digits',
 ]);
 /** "teamA.name" -> errors.fields.teamA; unknown fields read "This field". */
 function fieldLabel(field: string | undefined, t: TFunction): string {
   const key = (field ?? '').split('.')[0];
   const known = ['name', 'city', 'title', 'teamA', 'teamB', 'message', 'location', 'q', 'firstName', 'lastName'];
   return t(`errors.fields.${known.includes(key) ? key : 'field'}`);
+}
+
+/** 1.3.7 (R136-21): the field name inside a sentence (Hindi oblique case: "पहले नाम में"). */
+function fieldInLabel(field: string | undefined, t: TFunction): string {
+  const key = (field ?? '').split('.')[0];
+  return key === 'firstName' || key === 'lastName' ? t(`errors.fieldsIn.${key}`) : fieldLabel(field, t);
 }
 
 /** Translated text for a coded error (ValidationError, ApiError), or null. */
@@ -151,7 +163,7 @@ export function translateCode(e: unknown, t: TFunction = tr): string | null {
   if (code === 'otp_resend_wait') return t('errors.codes.otp_resend_wait', { seconds: secs });
   if (code === 'otp_too_many') return t('errors.codes.otp_too_many', { minutes: Math.max(1, Math.ceil(secs / 60)) });
   if (code === 'otp_invalid') return typeof err.attemptsLeft === 'number' ? t('errors.codes.otp_invalid', { left: err.attemptsLeft }) : t('errors.wrongCode');
-  if (CODED.has(code)) return t(`errors.codes.${code}`, { field: fieldLabel(err.field, t), min: err.min, max: err.max ?? (code === 'photo_limit' ? MAX_PHOTOS_PER_MATCH : undefined) });
+  if (CODED.has(code)) return t(`errors.codes.${code}`, { field: fieldLabel(err.field, t), fieldIn: fieldInLabel(err.field, t), min: err.min, max: err.max ?? (code === 'photo_limit' ? MAX_PHOTOS_PER_MATCH : undefined) });
   return null;
 }
 

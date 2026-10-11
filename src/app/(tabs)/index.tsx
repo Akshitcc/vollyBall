@@ -8,6 +8,7 @@ import { Dimensions, FlatList, ScrollView, StyleSheet, Text, View } from 'react-
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { EmptyCard, GlassButton, HeroHeader, ProgressBar, SectionHeader, Skeleton, card } from '../../components/Hero';
 import { LiveMatchCard } from '../../components/MatchCard';
+import { DailyCard } from '../../components/DailyCard';
 import { reduceMotionNow } from '../../hooks/useReduceMotion';
 import { LANGUAGES, currentLanguage, setLanguage } from '../../i18n';
 import type { RankingsResult } from '../../services/backend/types';
@@ -21,6 +22,7 @@ import { DEMO_MODE } from '../../services/config';
 import { acceptChallenge, getOnce } from '../../services/matchFactory';
 import { useMe } from '../../state/AuthContext';
 import { useWatch } from '../../state/hooks';
+import { useLocalScores } from '../../services/localScore';
 import { formatWhenT as formatWhen, translateError } from '../../i18n/format';
 import { notify } from '../../services/dialogs';
 import { colors, elevation, font, gradients, overlineFor, type } from '../../theme';
@@ -35,7 +37,7 @@ export default function Home() {
   const invites = useWatch<Team[]>((cb) => backend.watchTeamInvites(me.phone, cb, setInviteState), [me.phone]) ?? [];
   const teamIds = myTeams.map((t) => t.id);
   const challenges = useWatch<Challenge[]>((cb) => backend.watchChallenges(teamIds, cb), [teamIds.join(',')]) ?? [];
-  const matches = useWatch<Match[]>((cb) => backend.watchLiveMatches(cb), []);
+  const matches = useLocalScores(useWatch<Match[]>((cb) => backend.watchLiveMatches(cb), [])); // F135-2
   const live = (matches ?? []).filter((m) => m.status === 'live');
   const upcoming = (matches ?? []).filter((m) => m.status === 'scheduled').sort((a, b) => (a.scheduledAt ?? 0) - (b.scheduledAt ?? 0));
   const incoming = challenges.filter((c) => c.status === 'pending' && c.toCaptainId === me.id);
@@ -132,6 +134,7 @@ export default function Home() {
 
           {DEMO_MODE && <Banner tone="warn" text={tr('home.demoBanner')} />}
           <HomeRankCard rankings={rankings} meId={me.id} />
+          <DailyCard />
 
       {inviteState === 'invalid_phone' && (
         <Banner

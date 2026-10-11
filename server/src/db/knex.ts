@@ -20,7 +20,8 @@ export function connectionFromUrl(url: string): Knex.MySql2ConnectionConfig {
     password: decodeURIComponent(u.password),
     database: u.pathname.replace(/^\//, ''),
     timezone: 'Z',
-    dateStrings: false,
+    // 1.3.7 (R136-1): DATE (users.dob) is a calendar date, read as 'YYYY-MM-DD' in any server time zone
+    dateStrings: ['DATE'] as unknown as boolean, // mysql2 accepts a type list; knex's typing says boolean
     decimalNumbers: true,
     supportBigNumbers: true,
     charset: 'utf8mb4',

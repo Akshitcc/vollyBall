@@ -35,6 +35,14 @@ function withDemoStrip(config, env = process.env, root = __dirname) {
   return config;
 }
 
+// 1.3.7: regenerate the About page's open-source license list from package.json at build time.
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require('./scripts/gen-licenses').generate(__dirname);
+} catch (e) {
+  console.warn('[licenses] not regenerated:', e && e.message); // the committed src/generated/licenses.json is used
+}
+
 module.exports = withDemoStrip(getDefaultConfig(__dirname));
 module.exports.withDemoStrip = withDemoStrip;
 module.exports.DEMO_STUBS = DEMO_STUBS;

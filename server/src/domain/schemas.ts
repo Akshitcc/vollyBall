@@ -155,7 +155,8 @@ export const reviewSchema = z.object({ decision: z.enum(['approve', 'void']) }).
 
 export const profileSchema = z.object({
   id,
-  name: text('profileName'),
+  // 1.3.7 (R136-12): optional and ignored – the server stores first + last as the display name
+  name: z.string().max(200).optional(),
   // Indian format is enforced in users.saveProfile when the number is set or changed; a profile
   // registered before build 216 with another format can still be saved unchanged (fix-retest N4).
   phone: z.string().min(1).max(20),

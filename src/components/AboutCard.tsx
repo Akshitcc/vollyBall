@@ -7,7 +7,7 @@
  * - DemoQaTools (demo builds only, components/DemoQaTools.tsx – replaced by a stub in production bundles): "Demo admin" (approve flagged matches without real admin
  *   credentials) and "Simulate offline" (QA D133-1). Neither renders, nor works, outside DEMO_MODE.
  */
-import Constants from 'expo-constants';
+import { appVersionInfo, appVersionLabel } from '../services/appVersion';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Text, View } from 'react-native';
@@ -30,11 +30,11 @@ function Line({ label, value, testID }: { label: string; value: string; testID?:
 
 export function AboutCard({ kind = BACKEND_KIND, apiHost = API_HOST }: { kind?: BackendKind; apiHost?: string }) {
   const { t } = useTranslation();
-  const version = Constants.expoConfig?.version ?? '';
-  const code = Constants.expoConfig?.android?.versionCode;
+  const { version } = appVersionInfo();
+  const label = appVersionLabel();
   return (
     <View style={card} testID="about-card">
-      {version ? <Line label={t('about.version')} value={code ? `${version} (${code})` : version} testID="about-version" /> : null}
+      {version ? <Line label={t('about.version')} value={label} testID="about-version" /> : null}
       <Line label={t('about.backend')} value={t(backendKey[kind])} testID="about-backend" />
       {kind === 'api' ? <Line label={t('about.apiHost')} value={apiHost || '–'} testID="about-api-host" /> : null}
       {kind === 'demo' ? (

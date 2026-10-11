@@ -1,6 +1,7 @@
 import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -8,7 +9,8 @@ import Svg, { Circle } from 'react-native-svg';
 import { GlassTag, HeroHeader, SectionHeader, card } from '../../components/Hero';
 import { PressableScale } from '../../components/PressableScale';
 import { LanguageSwitch } from '../../components/LanguageSwitch';
-import { AboutCard, DemoQaTools } from '../../components/AboutCard';
+import { DemoQaTools } from '../../components/AboutCard';
+import { openStoreListing } from '../../services/review';
 import { MatchCard } from '../../components/MatchCard';
 import { PhotoGrid, PhotoViewer } from '../../components/PhotoGallery';
 import { RankCard } from '../../components/RankCard';
@@ -18,6 +20,7 @@ import type { Match, MatchPhoto, Team } from '../../core/types';
 import { backend } from '../../services/backend';
 import { signOut } from '../../services/session';
 import { formatPhone } from '../../core/phone';
+import { ageFromDob } from '../../core/registration';
 import { confirmAsk } from '../../services/dialogs';
 import { DemoBackend } from '../../services/backend/demoBackend';
 import { useAuth, useMe } from '../../state/AuthContext';
@@ -60,8 +63,17 @@ function RingAvatar({ name, uri, progress }: { name: string; uri?: string | null
   );
 }
 
+/** "12 March 2000" (en-IN) / "12 मार्च 2000" (hi-IN); the DOB is a plain YYYY-MM-DD date (no time zone). */
+export function formatDob(dob: string, lang: string): string {
+  const [y, m, d] = dob.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(lang === 'hi' ? 'hi-IN' : 'en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+function privateLabel(me: { dob?: string | null; pincode?: string | null; district?: string | null; state?: string | null }, t: TFunction) {
+  return [t('profile.privateDetails'), me.dob ? t('profile.dobAge', { dob: me.dob, count: ageFromDob(me.dob) ?? 0 }) : null, me.pincode ? [t('profile.pinLine', { pin: me.pincode }), me.district, me.state].filter(Boolean).join(', ') : null].filter(Boolean).join('. ');
+}
+
 export default function Profile() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const me = useMe();
   const { isAdmin } = useAuth();
   const matches = useWatch<Match[]>((cb) => backend.watchMyMatches(me.id, cb), [me.id]) ?? [];
@@ -96,10 +108,15 @@ export default function Profile() {
       <StatusBar style="light" />
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
         <HeroHeader overlap={64} testID="profile-hero">
+          {/* 1.3.8 (V137-14): Edit sits next to the title, so a long name (or Hindi label) never crowds it */}
           <Row>
             <Text style={[type.h1, { color: colors.onInk, flex: 1 }]} accessibilityRole="header">
               {t('profile.title')}
             </Text>
+            <PressableScale onPress={() => router.push('/edit-profile')} accessibilityRole="button" accessibilityLabel={t('profile.editProfile')} testID="profile-edit" style={st.edit}>
+              <Ionicons name="create-outline" size={16} color={colors.onPrimary} />
+              <Text style={{ color: colors.onPrimary, fontWeight: '700', fontSize: 14 }}>{t('profile.edit')}</Text>
+            </PressableScale>
           </Row>
           <Row style={{ marginTop: 12 }}>
             <RingAvatar name={me.name} uri={me.photoURL} progress={ringProgress} />
@@ -115,10 +132,6 @@ export default function Profile() {
                 {formatPhone(me.phone)}
               </Text>
             </View>
-            <PressableScale onPress={() => router.push('/edit-profile')} accessibilityRole="button" accessibilityLabel={t('profile.editProfile')} testID="profile-edit" style={st.edit}>
-              <Ionicons name="create-outline" size={16} color={colors.onPrimary} />
-              <Text style={{ color: colors.onPrimary, fontWeight: '700', fontSize: 14 }}>{t('profile.edit')}</Text>
-            </PressableScale>
           </Row>
         </HeroHeader>
 
@@ -129,6 +142,24 @@ export default function Profile() {
             <Button title={t('wallet.open')} icon="wallet-outline" variant="secondary" onPress={() => router.push('/wallet')} style={{ flex: 1 }} testID="open-wallet" />
             {isAdmin ? <Button title={t('verify.flaggedList')} icon="flag-outline" variant="secondary" onPress={() => router.push('/admin-review')} style={{ flex: 1 }} testID="open-admin" /> : null}
           </View>
+
+          {/* 1.3.7 (R136-19): my own registration details – only on my own Profile tab (other players never get them) */}
+          {me.dob || me.pincode ? (
+            <View style={[card, { marginTop: 10 }]} testID="profile-private" accessible accessibilityLabel={privateLabel(me, t)}>
+              <Text style={{ color: colors.muted, fontSize: 12, fontWeight: '700', marginBottom: 6 }}>{t('profile.privateDetails')}</Text>
+              {me.dob ? (
+                <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }} testID="profile-dob-age">
+                  {t('profile.dobAge', { dob: formatDob(me.dob, i18n.language), count: ageFromDob(me.dob) ?? 0 })}
+                </Text>
+              ) : null}
+              {me.pincode ? (
+                <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700', marginTop: 4 }} testID="profile-pin-district">
+                  {t('profile.pinLine', { pin: me.pincode })}
+                  {[me.district, me.state].filter(Boolean).length ? ` · ${[me.district, me.state].filter(Boolean).join(' · ')}` : ''}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
 
           <SectionHeader
             title={t('profile.careerStats')}
@@ -195,8 +226,12 @@ export default function Profile() {
       {/* 1.3.4: demo-only testing tools (demo admin, simulate offline) and About (backend mode + API host) */}
       <View style={{ height: 12 }} />
       <DemoQaTools />
-      <SectionHeader title={t('about.title')} />
-      <AboutCard />
+      {/* 1.3.7: feedback (never rewarded), Rate VolleyLive (not live until published), About page */}
+      <View style={{ gap: 8 }}>
+        <Button title={t('feedback.open')} icon="chatbox-ellipses-outline" variant="secondary" onPress={() => router.push('/feedback')} testID="profile-feedback" />
+        <Button title={t('review.rate')} icon="star-outline" variant="secondary" onPress={() => void openStoreListing()} testID="profile-rate" />
+        <Button title={t('aboutPage.open')} icon="information-circle-outline" variant="secondary" onPress={() => router.push('/about')} testID="profile-about" />
+      </View>
       <View style={{ height: 12 }} />
       <Button title={t('profile.signOut')} icon="log-out" variant="ghost" onPress={() => void signOut()} />
       {backend instanceof DemoBackend && (

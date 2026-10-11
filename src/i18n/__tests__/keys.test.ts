@@ -43,7 +43,8 @@ describe('translation resources', () => {
   it('Hindi strings are actually written in Devanagari (not copied English)', () => {
     // Keys whose Hindi value may legitimately contain no Devanagari.
     // liveV2.undoPlayer/undoTeam are "{{name}} −1" in every language (design: symbol only).
-    const allowed = new Set(['language.en', 'tournament.colPos', 'liveV2.undoPlayer', 'liveV2.undoTeam']);
+    // profileForm.pincodeFound (1.3.7, R136-21): only placeholders – India Post's English district/state shown as-is
+    const allowed = new Set(['language.en', 'tournament.colPos', 'liveV2.undoPlayer', 'liveV2.undoTeam', 'profileForm.pincodeFound']);
     const untranslated = Object.keys(HI).filter((k) => !allowed.has(k) && !/[\u0900-\u097F]/.test(HI[k]));
     expect(untranslated).toEqual([]);
   });

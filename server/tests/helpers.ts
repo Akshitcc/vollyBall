@@ -153,11 +153,17 @@ export async function startHarness(): Promise<Harness> {
   };
 }
 
+/** 1.3.7 (R136-2): the registration fields every complete profile needs (name split into first/last). */
+export const regFor = (name: string) => {
+  const [firstName, ...rest] = name.split(' ');
+  return { firstName, lastName: rest.join(' ') || 'Player', dob: '1995-06-15', pincode: '110001' };
+};
+
 /** Creates profiles for the given people. */
 export async function register(h: Harness, ...who: Who[]) {
   for (const w of who) {
     const p = PEOPLE[w];
-    const r = await h.as(w).put(`/api/users/${p.uid}`).send({ name: p.name, phone: p.phone, position: 'any' });
+    const r = await h.as(w).put(`/api/users/${p.uid}`).send({ name: p.name, phone: p.phone, position: 'any', ...regFor(p.name) });
     if (r.status !== 200) throw new Error(`register ${w}: ${r.status} ${JSON.stringify(r.body)}`);
   }
 }

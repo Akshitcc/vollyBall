@@ -20,7 +20,11 @@ export async function seedDemo(s: Services, now = Date.now()) {
   for (const u of Object.values(db.users)) {
     // 1.3.5 (QA E134-2): the app-only "Demo admin" seed never reaches the server (real admins: ADMIN_UIDS)
     if (u.id === DEMO_QA_ADMIN.id) continue;
-    await users.saveProfile(s, as(u.id), { id: u.id, name: u.name, phone: u.phone, photoURL: u.photoURL ?? null, position: u.position, city: u.city ?? null });
+    // 1.3.7 (R136 retest): seed accounts are complete (registration fields from the demo seed)
+    await users.saveProfile(s, as(u.id), {
+      id: u.id, name: u.name, phone: u.phone, photoURL: u.photoURL ?? null, position: u.position, city: u.city ?? null,
+      firstName: u.firstName, lastName: u.lastName, dob: u.dob, email: u.email ?? null, pincode: u.pincode,
+    });
   }
   for (const t of Object.values(db.teams)) {
     const cap = as(t.captainId);
