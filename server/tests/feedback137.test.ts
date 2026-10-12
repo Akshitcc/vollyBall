@@ -41,7 +41,7 @@ describe('1.3.7 feedback', () => {
 });
 
 describe('1.3.7 daily items', () => {
-  it('admin CRUD; public read without sign-in shows active items only', async () => {
+  it('admin CRUD; public read without sign-in shows active items (and tombstones)', async () => {
     const c = await h.as(ADMIN).post('/api/admin/daily-items').send(fact);
     assert.equal(c.status, 201, JSON.stringify(c.body));
     const q = await h.as(ADMIN).post('/api/admin/daily-items').send(quote);
@@ -49,12 +49,19 @@ describe('1.3.7 daily items', () => {
     assert.equal((await h.as(ADMIN).patch(`/api/admin/daily-items/${q.body.id}`).send({ active: false })).body.active, false);
     const pub = await h.api.get('/api/daily-items');
     assert.equal(pub.status, 200);
-    assert.deepEqual(pub.body.map((x: { id: string }) => x.id), [c.body.id]);
-    assert.equal(pub.body[0].textHi, fact.textHi);
+    type Pub = { id: string; active: boolean; textEn: string; textHi: string; removedAt: number | null };
+    const active = (b: Pub[]) => b.filter((x) => x.active);
+    assert.deepEqual(active(pub.body).map((x) => x.id), [c.body.id]);
+    assert.equal(active(pub.body)[0].textHi, fact.textHi);
+    // 1.4.1 (V140-7): the item turned off is sent as a tombstone (no text, server removedAt)
+    const tomb = (pub.body as Pub[]).find((x) => x.id === q.body.id)!;
+    assert.equal(tomb.textEn, '');
+    assert.equal(typeof tomb.removedAt, 'number');
     assert.equal((await h.as(ADMIN).get('/api/admin/daily-items')).body.length, 2);
     assert.equal((await h.as(ADMIN).del(`/api/admin/daily-items/${c.body.id}`)).status, 204);
     assert.equal((await h.as(ADMIN).del(`/api/admin/daily-items/${c.body.id}`)).status, 404);
-    assert.equal((await h.api.get('/api/daily-items')).body.length, 0);
+    assert.equal(active((await h.api.get('/api/daily-items')).body).length, 0);
+    assert.deepEqual((await h.as(ADMIN).get('/api/admin/daily-items')).body.map((x: Pub) => x.id), [q.body.id]); // deleted: not listed
   });
   it('non-admins cannot write; validation (quotes need attribution + https source)', async () => {
     assert.equal((await h.as('cap').post('/api/admin/daily-items').send(fact)).status, 403);

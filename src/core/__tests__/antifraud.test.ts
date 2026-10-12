@@ -248,7 +248,7 @@ describe('terminal statuses only move one way', () => {
     expect(ok('live', null, 'finished')).toBe(true);
     expect(statusMoveOk({ status: 'live', events: [] }, 'scheduled')).toBe(true); // before the first rally
     expect(statusMoveOk({ status: 'live', events: [{}] }, 'scheduled')).toBe(false);
-    expect(ok('finished', null, 'live')).toBe(true); // undo while awaiting POTM
+    expect(ok('finished', null, 'live')).toBe(false); // 1.4.2 (V141-8): no undo once the match is over
     expect(ok('finished', null, 'abandoned')).toBe(false);
     expect(ok('finished', 'a1', 'live')).toBe(false);
     expect(ok('abandoned', null, 'finished')).toBe(false);

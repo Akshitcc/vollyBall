@@ -189,7 +189,8 @@ describe('demo backend: feedback + daily items (parity with the API and rules)',
     const a = await signedIn(2); // seed2 = demo admin (EXPO_PUBLIC_DEMO_ADMIN_UIDS)
     const id = await a.saveDailyItem({ type: 'fact', textEn: 'New fact', textHi: 'नया तथ्य', active: true });
     await a.saveDailyItem({ id, type: 'fact', textEn: 'New fact', textHi: 'नया तथ्य', active: false });
-    expect((await a.listDailyItems()).some((x: { id: string }) => x.id === id)).toBe(false); // hidden from Home
+    // hidden from Home: 1.4.1 (V140-7) lists it only as a tombstone (off, no text) that keeps its rotation slot
+    expect((await a.listDailyItems()).filter((x: { id: string }) => x.id === id).map((x: { active: boolean; textEn: string }) => [x.active, x.textEn])).toEqual([[false, '']]);
     expect((await a.listDailyItems({ all: true })).find((x: { id: string }) => x.id === id).active).toBe(false);
     await a.deleteDailyItem(id);
     expect((await a.listDailyItems({ all: true })).some((x: { id: string }) => x.id === id)).toBe(false);

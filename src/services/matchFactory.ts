@@ -1,9 +1,8 @@
-import type { Place } from '../core/geo';
-import type { RuleSet } from '../core/rules';
-import { orderedParticipants, TEAM_TOO_SMALL_MESSAGE, teamCanPlay } from '../core/roster';
-import { computeState, summarize, type Side } from '../core/scoring';
-import { CHALLENGE_MATCH_TITLE, distinctColor, type Challenge, type MatchCaptains, type MatchTeam, type Team } from '../core/types';
-import { backend, type NewMatch } from './backend';
+import { TEAM_TOO_SMALL_MESSAGE, teamCanPlay } from '../core/roster';
+import { buildMatch } from '../core/buildMatch';
+export { buildMatch };
+import { CHALLENGE_MATCH_TITLE, type Challenge, type MatchTeam, type Team } from '../core/types';
+import { backend } from './backend';
 import { isPastStart } from '../core/dates';
 
 export async function matchTeamFromTeam(team: Team): Promise<MatchTeam> {
@@ -17,54 +16,6 @@ export async function matchTeamFromTeam(team: Team): Promise<MatchTeam> {
     color: team.color,
     // Only members with a profile (registered users) play; ids, not typed names.
     players: ordered.filter((id) => byId.has(id)).map((id) => ({ id, name: byId.get(id)!.name, photoURL: byId.get(id)!.photoURL ?? null })),
-  };
-}
-
-export function buildMatch(input: {
-  teamA: MatchTeam;
-  teamB: MatchTeam;
-  rules: RuleSet;
-  createdBy: string;
-  scorerId: string;
-  firstServe?: Side;
-  location?: Place | null;
-  scheduledAt?: number | null;
-  startNow?: boolean;
-  title?: string;
-  tournamentId?: string | null;
-  fixtureId?: string | null;
-  challengeId?: string | null;
-  /** 1.3.0: a registered team's captain; for a side built by number, the player the creator named. */
-  captains?: MatchCaptains | null;
-}): NewMatch {
-  const firstServe = input.firstServe ?? 'A';
-  // Both sides must be told apart on the scoreboard: team B switches colour if it clashes (QA bug F).
-  const teamB = { ...input.teamB, color: distinctColor(input.teamB.color, [input.teamA.color]) };
-  // Team A players, team B players, then creator/scorer: the order the Firestore rules check.
-  const participants = orderedParticipants(input.teamA, teamB, [input.createdBy, input.scorerId]);
-  return {
-    title: input.title,
-    teamA: input.teamA,
-    teamB,
-    rules: input.rules,
-    firstServe,
-    events: [],
-    summary: summarize(computeState(input.rules, [], firstServe)),
-    status: input.startNow ? 'live' : 'scheduled',
-    createdBy: input.createdBy,
-    scorerId: input.scorerId,
-    participantIds: participants,
-    location: input.location ?? null,
-    scheduledAt: input.scheduledAt ?? null,
-    // set by the backend's clock when the match goes live (server time only, QA AF-14 / N121-3)
-    startedAt: null,
-    captains: input.captains ?? null,
-    finishedAt: null,
-    tournamentId: input.tournamentId ?? null,
-    fixtureId: input.fixtureId ?? null,
-    challengeId: input.challengeId ?? null,
-    stream: null,
-    interestedIds: [],
   };
 }
 

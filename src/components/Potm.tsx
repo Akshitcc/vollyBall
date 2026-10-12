@@ -3,7 +3,8 @@
  * (auto-picked with src/core/potm.ts, override before confirming).
  */
 import { Ionicons } from '@expo/vector-icons';
-import React, { useMemo, useState } from 'react';
+import { HoldUi } from '../state/uiBusy';
+import React, { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { pickPlayerOfMatch, potmLines, potmProblem } from '../core/potm';
@@ -65,6 +66,7 @@ export function PotmPicker({ match, uid, onDark }: { match: Match; uid: string; 
   const auto = useMemo(() => pickPlayerOfMatch(match), [match]);
   const [chosen, setChosen] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const busy = useRef(false);
   const [error, setError] = useState<string | null>(null);
   if (match.playerOfMatchId) return <PotmBadge match={match} />;
   const pick = chosen ?? auto;
@@ -78,7 +80,10 @@ export function PotmPicker({ match, uid, onDark }: { match: Match; uid: string; 
   // credited at all (then the scorer still chooses freely, see core/potm.ts).
   const zeroBlocked = potmZeroBlocked(lines);
   const confirm = async () => {
-    if (!pick) return;
+    // 1.4.5 (QA V144-9): one save per tap – a second tap before the button shows "saving" is ignored (ref, not
+    // state: two taps in the same frame both saw saving = false), and the first tap is never swallowed by it
+    if (!pick || busy.current) return;
+    busy.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -86,11 +91,13 @@ export function PotmPicker({ match, uid, onDark }: { match: Match; uid: string; 
     } catch (e) {
       setError(translateError(e, t));
     } finally {
+      busy.current = false;
       setSaving(false);
     }
   };
   return (
     <View style={[s.picker, onDark && { backgroundColor: colors.surface }]} testID="potm-picker">
+      <HoldUi />{/* 1.4.0 (V139-7): no review prompt while the scorer is still choosing */}
       <Text style={s.pickerTitle}>
         <Ionicons name="star" size={16} color={colors.primaryText} /> {t('potm.title')}
       </Text>

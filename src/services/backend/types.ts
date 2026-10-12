@@ -1,3 +1,5 @@
+import type { AbandonAnswer, ResolveAction } from '../../core/abandon';
+import type { RepairFix } from '../../core/verdictRepair';
 import type { DailyItem } from '../../core/dailyItems';
 import { isValidE164 } from '../../core/phone';
 import type { Place } from '../../core/geo';
@@ -155,8 +157,30 @@ export interface Backend {
   rejectResult(matchId: string, reason: string): Promise<void>;
   /** Admin only: approve (counts) or void (never counts) a completed match, once. */
   reviewMatch(matchId: string, decision: ReviewDecision): Promise<void>;
-  /** Admin only: completed matches waiting for a review. */
+  /** Admin only: completed matches waiting for a review, plus (1.4.5) everything an admin can resolve. */
   listFlagged(): Promise<Match[]>;
+  /**
+   * 1.4.5 (QA V144-1): the scorer's ⋮ Abandon (src/core/abandon.ts planAbandon, policy src/core/abandonPolicy.ts):
+   * 'abandoned' (before the first rally, or the 'flag' policy – then it waits for an admin's review) or 'requested'
+   * ('consent' policy: the opposing captain(s) must agree; scoring is paused meanwhile).
+   */
+  abandonMatch(matchId: string): Promise<'abandoned' | 'requested'>;
+  /** 1.4.5: answer a pending abandon request – a captain who must agree: agree / decline; the requester: cancel. */
+  answerAbandonRequest(matchId: string, action: AbandonAnswer): Promise<void>;
+  /** 1.4.5 (QA V144-1/2/3): admin resolution (never on the admin's own match). */
+  resolveMatch(matchId: string, action: ResolveAction): Promise<void>;
+  /** 1.4.5: the opposing captain reports an abandoned match to admin review (core/abandon.ts reportersOf). */
+  reportAbandon(matchId: string): Promise<void>;
+  /** 1.4.5 (QA V144-8): an admin who isn't part of the match moves scoring to any participant. */
+  reassignScorer(matchId: string, scorerId: string): Promise<void>;
+  /** 1.4.8 (QA V147-2): an admin outside the match repairs a match nobody can confirm (core/verdictRepair.ts). */
+  repairVerdict(matchId: string, fix: RepairFix): Promise<void>;
+  /**
+   * 1.4.6 (QA V145-17): admins the creator / scorer may hand scoring to after the first rally (core
+   * eligibleHandoffAdmins). Absent on Firebase (the rules can't check an admin target): the app offers
+   * "Ask an admin to take over" instead.
+   */
+  handoffAdmins?(matchId: string): Promise<{ id: string; name: string }[]>;
   /** 1.3.6: pincode → district/state (API: server lookup with fallback; demo: bundled sample; else format only). */
   lookupPincode?(pin: string): Promise<import('../../core/registration').PincodeInfo>;
 

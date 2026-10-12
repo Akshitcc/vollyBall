@@ -5,6 +5,9 @@
  */
 import { CodedError } from './codedError';
 import { HIDDEN_CHARS, HIDDEN_RE } from './text';
+import { EMAIL_LETTERS } from './emailChars';
+import { EMAIL_JOIN_RE, EMAIL_LETTERS_WIDE } from './emailCharsWide';
+import { EMAIL_WIDE_ACTIVE } from './emailPolicy';
 
 export const NAME_MIN = 2;
 export const NAME_MAX = 40;
@@ -17,9 +20,32 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 /** 1.3.7 (R136-9): control, zero-width, soft-hyphen, bidi and BOM characters are never part of an address. */
 const EMAIL_BAD_CHARS = HIDDEN_RE; // 1.3.9 (V138-4): the shared set (core/text.ts)
 /**
+ * 1.4.2 (QA V141-5): invisible characters that look like nothing in an address – every Unicode
+ * Default_Ignorable_Code_Point (Hangul fillers U+115F/U+1160/U+3164/U+FFA0, combining grapheme joiner U+034F,
+ * zero-width and bidi format characters, variation selectors, tags…) plus the Braille blank U+2800. Listed as
+ * ranges (Unicode 15 DerivedCoreProperties.txt), the same list as firestore.rules registrationOk.
+ */
+export const EMAIL_INVISIBLE_RE =
+  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u2800\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8]|\uD82F[\uDCA0-\uDCA3]|\uD834[\uDD73-\uDD7A]|[\uDB40-\uDB43][\uDC00-\uDFFF]/;
+/**
  * Latin (incl. accented, no × ÷) and Devanagari letters/marks (no digits or dandas), space, apostrophe,
  * hyphen; 1.3.7 (R136-10): ZWNJ/ZWJ (U+200C/U+200D) only between two Devanagari characters.
  */
+/**
+ * 1.4.3 (QA V142-5/V142-6): an ALLOW list instead of more deny lists. After folding, an address may only contain
+ * ASCII lower-case letters, digits and the RFC 5322 "atext" signs in the local part (! # $ % & ' * + - / = ? ^ _ `
+ * { | } ~ and dots), letters, digits, hyphens and dots in the domain, plus the vetted letters of
+ * core/emailChars.ts (lower-case Latin/Greek/Cyrillic, Indian scripts). Every format (Cf – U+FFF9–FFFB, U+0600–0605,
+ * U+13430…), control, private-use, unassigned and separator character is outside it. firestore.rules uses the same
+ * class (rules-tests compare them), so Firebase never refuses an address the app accepted.
+ */
+const allowedRe = (l: string) => new RegExp(`^[-a-z0-9!#$%&'*+/=?^_\`{|}~.${l}]+@[-a-z0-9.${l}]+\\.[-a-z0-9${l}]{2,}$`);
+/** The 1.4.3 list (always this list unless emailPolicy.ts switches the wider one on). */
+export const EMAIL_ALLOWED_NARROW_RE = allowedRe(EMAIL_LETTERS);
+/** 1.4.4 (QA V143-6): the prepared wider list (+ ZWNJ/ZWJ, which EMAIL_JOIN_RE then restricts). Inactive in 1.4.4. */
+export const EMAIL_ALLOWED_WIDE_RE = allowedRe(`${EMAIL_LETTERS_WIDE}\u200C\u200D`);
+/** The ACTIVE list (core/emailPolicy.ts EMAIL_WIDE_ACTIVE; the 1.4.3 list in 1.4.4). */
+export const EMAIL_ALLOWED_RE = EMAIL_WIDE_ACTIVE ? EMAIL_ALLOWED_WIDE_RE : EMAIL_ALLOWED_NARROW_RE;
 const NAME_CHARS = /^[A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u0900-\u0963\u0971-\u097F\u200C\u200D' \-\u2019]+$/;
 const ZW_MISPLACED = /(^|[^\u0900-\u097F])[\u200C\u200D]|[\u200C\u200D]($|[^\u0900-\u097F])/;
 /** A name starts with a letter (not a vowel sign or punctuation). */
@@ -87,17 +113,67 @@ export function checkDob(raw: unknown, minAge = DEFAULT_MIN_AGE, now = Date.now(
 }
 
 /**
- * Optional: '' / null → null; otherwise a plausible address, trimmed and lower-cased (1.3.7, R136-9:
+ * 1.4.1 (QA V140-4): characters whose lower case is not their case fold (Unicode CaseFolding.txt, status C,
+ * single character): JS toLowerCase keeps final sigma ς, so ΟΔΟΣ@ (→ οδος@) and οδοσ@ were two accounts.
+ * Only these simple folds – NOT the full ones (ß stays ß: straße@ ≠ strasse@, as the API index compares).
+ */
+const CASE_FOLD: Readonly<Record<string, string>> = Object.freeze({
+  '\u03C2': '\u03C3', // ς → σ (final sigma)
+  '\u017F': 's', // ſ long s
+  '\u00B5': '\u03BC', // µ micro sign → μ
+  '\u03D0': '\u03B2', '\u03D1': '\u03B8', '\u03D5': '\u03C6', '\u03D6': '\u03C0', // ϐ ϑ ϕ ϖ
+  '\u03F0': '\u03BA', '\u03F1': '\u03C1', '\u03F5': '\u03B5', // ϰ ϱ ϵ
+  '\u1E9B': '\u1E61', // ẛ → ṡ
+  '\u1FBE': '\u03B9', // ι prosgegrammeni → ι
+  '\u0345': '\u03B9', // 1.4.2 (QA info): combining ypogegrammeni → ι
+});
+const CASE_FOLD_RE = /[\u03C2\u017F\u00B5\u03D0\u03D1\u03D5\u03D6\u03F0\u03F1\u03F5\u1E9B\u1FBE\u0345]/g;
+
+/**
+ * The one form every backend validates, compares and stores: NFC, trimmed, lower-cased, case-folded, NFC.
+ * 1.4.0 (QA V139-2): NFC first (e + U+0301 is the same address as é), again after lower-casing (which can
+ * decompose, e.g. İ → i̇). 1.4.1 (V140-4): plus the simple case folds above.
+ */
+export function emailFold(raw: string): string {
+  return raw.normalize('NFC').trim().toLowerCase().replace(CASE_FOLD_RE, (c) => CASE_FOLD[c] ?? c).normalize('NFC');
+}
+
+/**
+ * Optional: '' / null → null; otherwise a plausible address, NFC, trimmed and lower-cased (1.3.7, R136-9:
  * no control/zero-width characters, local part ≤ 64, no leading/trailing/double dots).
  */
-export function checkEmail(raw: unknown): string | null {
-  const s = String(raw ?? '').trim().toLowerCase();
+export function checkEmail(raw: unknown, wide: boolean = EMAIL_WIDE_ACTIVE): string | null {
+  // 1.4.0 (QA V139-2) / 1.4.1 (V140-4): emailFold, so every backend validates, compares and stores one form.
+  const s = emailFold(String(raw ?? ''));
   if (!s) return null;
   const local = s.slice(0, s.lastIndexOf('@'));
-  if (s.length > EMAIL_MAX || !EMAIL_RE.test(s) || EMAIL_BAD_CHARS.test(s) || local.length > EMAIL_LOCAL_MAX
-    || /^\.|\.$|\.\./.test(local) || /\.\./.test(s.slice(s.lastIndexOf('@') + 1))) throw regError('email_invalid', 'email');
+  const domain = s.slice(s.lastIndexOf('@') + 1);
+  // 1.4.4 (QA V143-6, wider list only – inactive in 1.4.4): ZWNJ/ZWJ between two letters of one Indic script are
+  // part of the word; the invisible-character checks below then look at the address without them. Anywhere
+  // else they stay invisible characters (email_invalid).
+  const t = wide && EMAIL_JOIN_RE.test(s) ? s.replace(/[\u200C\u200D]/g, '') : s;
+  // 1.4.1 (V140-6): a letter that is still upper/title case after folding (e.g. ℂ, which has no lower case)
+  // is refused, as firestore.rules refuses it. 1.4.4 (QA V143-10): no domain label starts or ends with '-'
+  // (firestore.rules emailPartsOk makes the same checks).
+  if (s.length > EMAIL_MAX || !EMAIL_RE.test(s) || EMAIL_BAD_CHARS.test(t) || EMAIL_INVISIBLE_RE.test(t) || /[\p{Lu}\p{Lt}]/u.test(s) || local.length > EMAIL_LOCAL_MAX
+    || /^\.|\.$|\.\./.test(local) || /\.\./.test(domain) || /^[-.]|[-.]$|\.-|-\./.test(domain)) throw regError('email_invalid', 'email');
+  // 1.4.3 (QA V142-5): a character outside the allow list (symbols, emoji, scripts the rules can't check) gets
+  // its own message, on every backend
+  if (!(wide ? EMAIL_ALLOWED_WIDE_RE : EMAIL_ALLOWED_NARROW_RE).test(s)) throw regError('email_chars', 'email');
   return s;
 }
+
+/**
+ * 1.4.0 (QA V139-3): the key two accounts may not share – NFC, trimmed, lower-case (case/spaces only; accents
+ * and widths count, as the API's utf8mb4_bin index). '' / null → null. Also the Firebase `emails/{key}` id.
+ */
+export function emailKey(raw: unknown): string | null {
+  const s = emailFold(String(raw ?? ''));
+  return s || null;
+}
+
+/** 1.4.0 (QA V139-3): Firestore doc id of an email claim (firestore.rules emailClaimId): % and / escaped. */
+export const emailClaimId = (key: string) => key.replace(/%/g, '%25').replace(/\//g, '%2F');
 
 /** 1.3.7 (R136-14): Devanagari (०-९) and other Unicode decimal digits typed in a number field become ASCII. */
 export function asciiDigits(raw: string): string {
@@ -192,7 +268,8 @@ export function registrationFieldErrors(
   run('lastName', () => checkPersonName(v.lastName, 'lastName'));
   const dob = String(v.dob ?? '').trim();
   run('dob', () => checkDob(dob, minAge, now, !stored?.dob || dob !== stored.dob));
-  run('email', () => checkEmail(v.email));
+  // 1.4.4 (QA V143-6): the stored address, unchanged, is never an inline error (the save keeps it)
+  if (!emailUnchanged(v.email, stored?.email)) run('email', () => checkEmail(v.email));
   const pin = asciiDigits(String(v.pincode ?? '')).trim();
   if (!pin) out.pincode = { code: 'pincode_required', field: 'pincode' };
   else if (/\D/.test(pin)) out.pincode = { code: 'pincode_digits', field: 'pincode' };
@@ -260,5 +337,25 @@ export function checkRegistrationUpdate(sent: RegInput, stored: RegStored, minAg
   const pick = <K extends keyof RegistrationFields>(k: K) => (sent[k] !== undefined ? sent[k] : stored?.[k]);
   const merged = { firstName: pick('firstName'), lastName: pick('lastName'), dob: pick('dob'), email: pick('email'), pincode: pick('pincode') };
   const dobChanged = !stored?.dob || String(merged.dob ?? '').trim() !== stored.dob;
+  // 1.4.4 (QA V143-6): the account's own UNCHANGED stored email always passes, on every backend (API, demo,
+  // Firebase client; firestore.rules registrationOk skips the format check for d.email == oldEmail too). An
+  // address saved before a stricter check (an out-of-list character, a 1.3.x format) used to block every
+  // profile save (pincode, name) until it was removed. A valid one is still returned folded (as before); an
+  // invalid one is kept byte for byte. A NEW or changed address gets the full check.
+  if (emailUnchanged(merged.email, stored?.email)) {
+    const f = checkRegistration({ ...merged, email: null }, minAge, now, dobChanged);
+    let email: string | null;
+    try {
+      email = checkEmail(stored!.email);
+    } catch {
+      email = stored!.email!;
+    }
+    return { ...f, email };
+  }
   return checkRegistration(merged, minAge, now, dobChanged);
+}
+
+/** 1.4.4 (QA V143-6): the sent email is the stored one (up to case/spaces/NFC, as emailKey compares). */
+export function emailUnchanged(sent: unknown, stored: string | null | undefined): boolean {
+  return !!stored && (sent === stored || (emailKey(sent) !== null && emailKey(sent) === emailKey(stored)));
 }

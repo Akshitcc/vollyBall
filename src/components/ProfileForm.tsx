@@ -7,6 +7,7 @@ import { POSITIONS, type Position, type UserProfile } from '../core/types';
 import { backend } from '../services/backend';
 import { useAuth } from '../state/AuthContext';
 import { positionLabel, translateError } from '../i18n/format';
+import { placeParts } from '../core/placeNamesHi';
 import { colors } from '../theme';
 import { Avatar, Banner, Button, Chip, Field, styles as ui } from './ui';
 import { checkProfileFields } from '../core/validate';
@@ -16,11 +17,12 @@ import { ageFromDob, asciiDigits, checkRegistrationUpdate, fullName, MAX_AGE, NA
 import { MIN_AGE, SUPPORT_EMAIL } from '../services/config';
 import { signOut } from '../services/session';
 import { DobPicker } from './DobPicker';
+import { citySuggestion } from '../core/citySuggest';
 
 type Input = TextInput;
 
 export function ProfileForm({ onSaved }: { onSaved?: () => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { user, profile } = useAuth();
   const [name] = useState(profile?.name ?? '');
   // 1.3.6 registration: older profiles only have `name` – split it as a starting point.
@@ -44,6 +46,21 @@ export function ProfileForm({ onSaved }: { onSaved?: () => void }) {
     };
   }, [pincode]);
   const [city, setCity] = useState(profile?.city ?? '');
+  // 1.4.4 (QA V143-11): a successful lookup of a pincode the user typed updates the city (core/citySuggest.ts);
+  // a city they typed themselves is only replaced after "Use Mumbai?" → Yes.
+  const pinTouched = useRef(false);
+  const autoCity = useRef<string | null>(null);
+  const [cityAsk, setCityAsk] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pinTouched.current || !pin || pin.pin !== pincode || pin.info === 'checking' || pin.info.status !== 'ok') return setCityAsk(null);
+    const s = citySuggestion(city, pin.info, [profile?.district, autoCity.current]);
+    if (s.action === 'fill') {
+      setCity(s.name);
+      autoCity.current = s.name;
+      setCityAsk(null);
+    } else setCityAsk(s.action === 'ask' ? s.name : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when a lookup finishes, not on every keystroke in the city field
+  }, [pin]);
   const [position, setPosition] = useState<Position>(profile?.position ?? 'any');
   const [photo, setPhoto] = useState<string | null>(profile?.photoURL ?? null);
   const [localPhoto, setLocalPhoto] = useState<string | null>(null);
@@ -148,7 +165,7 @@ export function ProfileForm({ onSaved }: { onSaved?: () => void }) {
 
   return (
     <View>
-      <Pressable onPress={pickPhoto} style={{ alignItems: 'center', marginBottom: 20 }}>
+      <Pressable accessibilityRole="button" onPress={pickPhoto} style={{ alignItems: 'center', marginBottom: 20 }}>
         <Avatar name={name || '?'} uri={localPhoto ?? photo} size={96} />
         <Text style={{ color: colors.ink, fontWeight: '800', marginTop: 8 }}>{localPhoto || photo ? t('profileForm.changePhoto') : t('profileForm.addPhoto')}</Text>
       </Pressable>
@@ -194,6 +211,7 @@ export function ProfileForm({ onSaved }: { onSaved?: () => void }) {
           const digits = asciiDigits(v);
           setPinNote(/\D/.test(digits)); // R136-17: say why a letter / symbol didn't appear
           setPincode(digits.replace(/\D/g, '').slice(0, 6));
+          pinTouched.current = true;
           setServerField(null);
         }}
         placeholder={t('profileForm.pincodePlaceholder')}
@@ -209,7 +227,8 @@ export function ProfileForm({ onSaved }: { onSaved?: () => void }) {
           {pin.info === 'checking'
             ? t('profileForm.pincodeChecking')
             : pin.info.status === 'ok'
-              ? t('profileForm.pincodeFound', { district: pin.info.district, state: pin.info.state })
+              ? // 1.4.3 (QA V142-8): the same names as the Profile line – Hindi names in Hindi, never mixed
+                placeParts(pin.info.district, pin.info.state, i18n.language).join(', ') || t('profileForm.pincodeFoundNoName')
               : pin.info.status === 'invalid'
                 ? t('profileForm.pincodeNotFound')
                 : t('profileForm.pincodeUnknown') /* R136-16: same words in the demo and on the API */}
@@ -234,7 +253,29 @@ export function ProfileForm({ onSaved }: { onSaved?: () => void }) {
           <Chip key={p.id} label={positionLabel(p.id, t)} active={position === p.id} onPress={() => setPosition(p.id)} />
         ))}
       </View>
-      <Field label={t('profileForm.city')} value={city} onChangeText={setCity} placeholder={t('profileForm.cityPlaceholder')} autoCapitalize="words" maxLength={LIMITS.city.max} testID="profile-city" />
+      <Field label={t('profileForm.city')} value={city} onChangeText={(v) => (setCity(v), setCityAsk(null))} placeholder={t('profileForm.cityPlaceholder')} autoCapitalize="words" maxLength={LIMITS.city.max} testID="profile-city" />
+      {cityAsk ? (
+        <View style={{ marginTop: -8, marginBottom: 12, padding: 10, borderRadius: 10, borderWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }} testID="profile-city-ask" accessibilityLiveRegion="polite">
+          <Text style={{ color: colors.text, fontWeight: '700', flexGrow: 1, flexShrink: 1, marginRight: 8 }}>
+            {t('profileForm.cityUse', { city: placeParts(cityAsk, null, i18n.language)[0] ?? cityAsk })}
+          </Text>
+          <Pressable
+            onPress={() => {
+              setCity(cityAsk);
+              autoCity.current = cityAsk;
+              setCityAsk(null);
+            }}
+            accessibilityRole="button"
+            style={{ paddingVertical: 6, paddingHorizontal: 12 }}
+            testID="profile-city-use"
+          >
+            <Text style={{ color: colors.primaryText, fontWeight: '800' }}>{t('profileForm.cityUseYes')}</Text>
+          </Pressable>
+          <Pressable onPress={() => setCityAsk(null)} accessibilityRole="button" style={{ paddingVertical: 6, paddingHorizontal: 12 }} testID="profile-city-keep">
+            <Text style={{ color: colors.muted, fontWeight: '800' }}>{t('profileForm.cityUseKeep', { city })}</Text>
+          </Pressable>
+        </View>
+      ) : null}
       {error && <Text style={{ color: colors.danger, fontWeight: '700' }} testID="profile-error" accessibilityRole="alert">{error}</Text>}
       {ageBlocked && (
         <View style={{ marginVertical: 12, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.danger }} testID="profile-age-blocked">

@@ -6,6 +6,23 @@ import type { Place } from '../../../src/core/geo';
 export type Trx = Knex | Knex.Transaction;
 
 export const newId = () => crypto.randomUUID();
+/**
+ * 1.4.7 (QA V146-1): a transaction that is retried when MySQL picks it as a deadlock victim (ER_LOCK_DEADLOCK – the
+ * whole transaction was rolled back, so running it again is safe). Concurrent writes to different matches can
+ * deadlock on the child tables' index gaps (points / sets / match_players); the client should never see that as a
+ * 500. Each attempt re-reads and re-checks everything under the match lock.
+ */
+export async function txRetry<T>(db: Knex, fn: (trx: Knex.Transaction) => Promise<T>, tries = 4): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await db.transaction(fn);
+    } catch (e) {
+      const code = (e as { code?: string; errno?: number }).code;
+      if (i >= tries || (code !== 'ER_LOCK_DEADLOCK' && (e as { errno?: number }).errno !== 1213)) throw e;
+      await new Promise((r) => setTimeout(r, 5 * i + Math.floor(Math.random() * 10)));
+    }
+  }
+}
 export const toDate = (ms: number | null | undefined): Date | null => (ms === null || ms === undefined ? null : new Date(ms));
 export const toMs = (d: Date | null | undefined): number | null => (d ? new Date(d).getTime() : null);
 export const nowDate = () => new Date();

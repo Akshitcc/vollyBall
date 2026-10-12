@@ -168,7 +168,8 @@ export function teamNameSize(name: string): { fontSize: number; lineHeight: numb
 /** Last rally + the last 4 rally dots (team colours). */
 export function RallyTicker({ text, dots, onPress }: { text: string; dots: string[]; onPress?: () => void }) {
   return (
-    <Pressable style={s.ticker} onPress={onPress} accessibilityRole={onPress ? 'button' : 'text'} testID="rally-ticker">
+    // 1.4.1 (V140-11): without an action it is plain text (a Pressable was focusable with no role on web)
+    <Pressable style={s.ticker} onPress={onPress} disabled={!onPress} focusable={!!onPress} tabIndex={onPress ? 0 : -1} accessibilityRole={onPress ? 'button' : 'text'} testID="rally-ticker">
       <Ionicons name="flash" size={16} color={colors.danger} />
       <Text style={s.tickerText} numberOfLines={2} testID="rally-ticker-text">
         {text}

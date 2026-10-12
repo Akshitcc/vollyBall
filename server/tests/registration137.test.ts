@@ -168,7 +168,7 @@ describe('1.3.7 team size on the server', () => {
     assert.equal(r.status, 201, JSON.stringify(r.body));
     const id = r.body.id;
     assert.equal((await h.as('cap').put(`/api/matches/${id}/progress`).send({ events: [pt('A', Date.now())], status: 'live' })).status, 200);
-    assert.equal((await h.as('cap').patch(`/api/matches/${id}`).send({ teamSizeMode: 'exact' })).status, 403);
-    assert.equal((await h.as('cap').patch(`/api/matches/${id}`).send({ teamA: team('QA Spikers', playersOf([...SQUAD_A, 'eve'])), participantIds: [...SQUAD_A, 'eve', ...SQUAD_B] })).status, 403);
+    assert.equal((await h.as('cap').patch(`/api/matches/${id}`).send({ teamSizeMode: 'exact' })).status, 409); // 1.4.6 (V145-3): match_setup_locked
+    assert.equal((await h.as('cap').patch(`/api/matches/${id}`).send({ teamA: team('QA Spikers', playersOf([...SQUAD_A, 'eve'])), participantIds: [...SQUAD_A, 'eve', ...SQUAD_B] })).status, 409); // 1.4.6 (V145-3): match_setup_locked
   });
 });

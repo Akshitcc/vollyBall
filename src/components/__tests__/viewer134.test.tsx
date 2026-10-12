@@ -159,3 +159,24 @@ describe('viewer page', () => {
     for (const x of slots) expect(x).toHaveTextContent('0 of 50 photos · 50 more can be added');
   });
 });
+
+// 1.4.3 (QA V142-9): the Stats tab leaves out shot-type rows that are 0 for both teams
+describe('V142-9: team stats rows', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+  test('only spikes happened: the Spikes row shows; Blocks / Aces / Tips (0–0) and team-only (0–0) are left out; points and run stay', async () => {
+    await open([{ ...pt('A', 1, 'a1'), kind: 'kill' } as Match['events'][number], pt('B', 2, 'b1'), { ...pt('A', 3, 'a2'), kind: 'kill' } as Match['events'][number]]);
+    await fireEvent.press(screen.getByTestId('match-tab-stats'));
+    expect(screen.getByTestId('team-stat-points')).toBeTruthy();
+    expect(screen.getByTestId('team-stat-run')).toBeTruthy();
+    expect(screen.getByTestId('team-stat-kill')).toBeTruthy();
+    for (const k of ['block', 'ace', 'tip', 'teamOnly']) expect([k, screen.queryByTestId(`team-stat-${k}`)]).toEqual([k, null]);
+  });
+  test('a row that is 0 for one team only still shows (0 – 1)', async () => {
+    await open([{ ...pt('B', 1, 'b1'), kind: 'ace' } as Match['events'][number], pt('A', 2)]);
+    await fireEvent.press(screen.getByTestId('match-tab-stats'));
+    expect(screen.getByTestId('team-stat-ace')).toBeTruthy();
+    expect(screen.getByTestId('team-stat-teamOnly')).toBeTruthy(); // A's point had no player
+    expect(screen.queryByTestId('team-stat-kill')).toBeNull();
+  });
+});

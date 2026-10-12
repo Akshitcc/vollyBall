@@ -12,7 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as StoreReview from 'expo-store-review';
 import { Linking } from 'react-native';
 import i18n from '../i18n';
-import { PLAY_MARKET_URL, PLAY_WEB_URL, reviewEligible, type ReviewMoment } from '../core/reviewPrompt';
+import { PLAY_MARKET_URL, PLAY_WEB_URL, REVIEW_LAST_ASKED_PREFIX, reviewEligible, type ReviewMoment } from '../core/reviewPrompt';
 import { openDialog } from '../state/dialog';
 import { DEMO_MODE } from './config';
 
@@ -29,7 +29,7 @@ import { DEMO_MODE } from './config';
  */
 export const REVIEW_PREPROMPT: boolean = process.env.EXPO_PUBLIC_REVIEW_PREPROMPT === '1';
 
-const KEY = (uid: string) => `volleylive.review.lastAsked.${uid}`;
+const KEY = (uid: string) => `${REVIEW_LAST_ASKED_PREFIX}${uid}`;
 
 export async function lastAskedAt(uid: string): Promise<number | null> {
   try {

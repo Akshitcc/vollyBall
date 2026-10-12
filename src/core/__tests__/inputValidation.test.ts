@@ -41,7 +41,7 @@ describe('G15/G17 one table of limits', () => {
     expect(LIMITS.teamName).toEqual({ min: 2, max: 40 });
     expect(LIMITS.tournamentName).toEqual({ min: 3, max: 80 });
     expect(LIMITS.placeName.max).toBe(160);
-    expect([MAX_EVENTS, MAX_SCORE, MAX_IMAGE_BYTES, MAX_TOURNAMENT_TEAMS]).toEqual([2000, 199, 10 * 1024 * 1024, 10]);
+    expect([MAX_EVENTS, MAX_SCORE, MAX_IMAGE_BYTES, MAX_TOURNAMENT_TEAMS]).toEqual([3000 /* 1.4.4 (QA Info): raised from 2000 */, 199, 10 * 1024 * 1024, 10]);
   });
   test('firestore.rules use the same numbers', () => {
     const rules = fs.readFileSync(path.resolve(__dirname, '../../../firestore.rules'), 'utf8');
@@ -49,7 +49,7 @@ describe('G15/G17 one table of limits', () => {
     expect(rules).toMatch(/nameOk\([^)]*, 2, 40\)/); // team name
     expect(rules).toMatch(/nameOk\([^)]*, 3, 80\)/); // tournament name
     expect(rules).toMatch(/nameOk\([^)]*, 2, 80\)/); // court name
-    expect(rules).toContain('2000');
+    expect(rules).toContain('3000'); // MAX_EVENTS (1.4.4)
     expect(rules).toContain('900000'); // PAST_GRACE_MS
     expect(PAST_GRACE_MS).toBe(900000);
     const storage = fs.readFileSync(path.resolve(__dirname, '../../../storage.rules'), 'utf8');

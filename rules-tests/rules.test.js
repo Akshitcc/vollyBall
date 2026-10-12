@@ -5,13 +5,39 @@
 const fs = require('fs');
 const path = require('path');
 const { initializeTestEnvironment, assertSucceeds, assertFails } = require('@firebase/rules-unit-testing');
-const { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, addDoc, arrayUnion, arrayRemove, serverTimestamp, deleteField, writeBatch } = require('firebase/firestore');
+const { doc, getDoc, setDoc, updateDoc: rawUpdateDoc, deleteDoc, collection, getDocs, addDoc, arrayUnion, arrayRemove, serverTimestamp, deleteField, writeBatch } = require('firebase/firestore');
 const { ref, uploadBytes } = require('firebase/storage');
 
 let env;
+/**
+ * 1.4.5 (QA V144-1): every events write on a match that isn't stored as finished states maxEvents (max of the stored
+ * value / old length and the new length), and the write that finishes sets wasWon – as the app does
+ * (firebaseBackend marksFor). The older suites below are about other rules, so their match writes get these two
+ * fields added here; the 1.4.5 suite uses rawUpdateDoc to test the enforcement itself.
+ */
+let WRAP_ENV = null; // the budget test's second environment (its matches live there)
+async function updateDoc(ref, data, ...rest) {
+  if (rest.length || !data || typeof data !== 'object' || !/^matches\/[^/]+$/.test(ref.path) || 'maxEvents' in data) return rawUpdateDoc(ref, data, ...rest);
+  let stored = null;
+  await (WRAP_ENV || env).withSecurityRulesDisabled(async (c) => {
+    const snap = await getDoc(doc(c.firestore(), ref.path));
+    stored = snap.exists() ? snap.data() : null;
+  });
+  if (!stored || stored.status === 'finished') return rawUpdateDoc(ref, data);
+  const extra = {};
+  if (Array.isArray(data.events)) {
+    const old = typeof stored.maxEvents === 'number' ? stored.maxEvents : (stored.events ?? []).length;
+    extra.maxEvents = Math.max(old, data.events.length);
+  }
+  if (data.status === 'finished' && !('wasWon' in data)) extra.wasWon = true;
+  return rawUpdateDoc(ref, { ...data, ...extra });
+}
 const hostPort = (v, port) => (v ? { host: v.split(':')[0], port: Number(v.split(':')[1]) } : { host: '127.0.0.1', port });
 const PHONES = { cap: '+919000000001', bob: '+919000000002', eve: '+919000000003' };
 const ctx = (uid) => env.authenticatedContext(uid, { phone_number: PHONES[uid] });
+// 1.4.5 (V144-1): the record an abandon after the first rally carries ('review' policy: core/abandon.ts planAbandon)
+// 1.4.6 (V145-4): `behind` is a bool (null only in an admin's record), the score four small ints
+const abRec = (by, events, over = {}) => ({ by, at: serverTimestamp(), events, mode: 'review', review: 'pending', score: { setsA: 0, setsB: 0, currentA: 0, currentB: 0 }, behind: over.mode === 'admin' ? null : false, ...over });
 
 // Team rosters: t1 = cap + p1..p5, t2 = eve + q1..q5 (6 members each, MIN_PLAYERS).
 const T1 = ['cap', 'p1', 'p2', 'p3', 'p4', 'p5'];
@@ -22,6 +48,12 @@ const ordered = (a, b, extra = []) => [...new Set([...a, ...b, ...extra])];
 const RULES = { preset: 'indoor', bestOf: 5, pointsPerSet: 25, decidingSetPoints: 15, winBy: 2, pointCap: null, timeoutsPerSet: 2, sideSwitchEvery: null, decidingSideSwitchEvery: null, decidingSwitchAt: 8 };
 // Every new match carries the empty summary (required since 1.2.1, QA NB-R1).
 const EMPTY_SUMMARY = { setsA: 0, setsB: 0, currentA: 0, currentB: 0, setScores: [], winner: null, serving: 'A' };
+// 1.4.3 (V142-2): the summary follows the rallies exactly (one point per appended point event), so an event write
+// carries the summary the app computes; within the first set that is the points per side.
+const sumOf = (events) => (Array.isArray(events)
+  ? { ...EMPTY_SUMMARY, currentA: events.filter((e) => e.type === 'point' && e.side === 'A').length, currentB: events.filter((e) => e.type === 'point' && e.side === 'B').length }
+  : EMPTY_SUMMARY);
+const withSum = (o) => ({ ...o, summary: sumOf(o.events) });
 const matchDoc = (a, b, over = {}) => ({
   createdBy: 'cap', scorerId: 'cap', status: 'scheduled', events: [], interestedIds: [], rules: RULES, firstServe: 'A', summary: EMPTY_SUMMARY,
   teamA: side(a.teamId ?? null, a.ids), teamB: side(b.teamId ?? null, b.ids),
@@ -65,8 +97,13 @@ const challengeDoc = (over = {}) => ({
   fromTeamId: 't1', fromTeamName: 'Smashers', fromCaptainId: 'cap', toTeamId: 't2', toTeamName: 'Blockers', toCaptainId: 'eve',
   status: 'pending', when: Date.now() + DAY, location: PLACE, message: '', rules: RULES, matchId: null, createdAt: Date.now(), ...over,
 });
+// 1.4.4 (V143-5): a match created live carries its server start (what every app version since 1.3.0 writes)
+const liveNow = () => ({ status: 'live', startedAt: Date.now(), startedServerAt: serverTimestamp() });
 const newMatch = (data) => setDoc(doc(ctx('cap').firestore(), `matches/n${Math.random().toString(36).slice(2)}`), data);
 
+// 1.4.1 (QA harness note): the emulator can take well over jest's default 5 s to answer under CPU load (e.g.
+// when run alongside jest + server + tsc). Generous timeouts here; still, run this suite on its own (serially).
+jest.setTimeout(30000);
 beforeAll(async () => {
   env = await initializeTestEnvironment({
     projectId: 'demo-volleylive',
@@ -74,7 +111,7 @@ beforeAll(async () => {
     firestore: { rules: fs.readFileSync(path.join(__dirname, '../firestore.rules'), 'utf8'), ...hostPort(process.env.FIRESTORE_EMULATOR_HOST, 8080) },
     storage: { rules: fs.readFileSync(path.join(__dirname, '../storage.rules'), 'utf8'), ...hostPort(process.env.FIREBASE_STORAGE_EMULATOR_HOST, 9199) },
   });
-});
+}, 120000);
 afterAll(() => env.cleanup());
 beforeEach(async () => {
   await env.clearFirestore();
@@ -192,7 +229,12 @@ describe('teams: only captains edit', () => {
 
 describe('matches: only the assigned scorer changes the score', () => {
   test('scorer can update events', async () => {
-    await assertSucceeds(updateDoc(doc(ctx('cap').firestore(), 'matches/m1'), { events: [{ type: 'point', side: 'A', at: 1 }] }));
+    await assertSucceeds(updateDoc(doc(ctx('cap').firestore(), 'matches/m1'), withSum({ events: [{ type: 'point', side: 'A', at: 1 }] })));
+    // 1.4.4 (V143-1): the summary is untrusted on Firebase (the app replays the events): a rally may carry any
+    // well-shaped summary, or none; a malformed one is refused (cheap shape check)
+    await env.withSecurityRulesDisabled((c) => updateDoc(doc(c.firestore(), 'matches/m1'), { events: [], summary: EMPTY_SUMMARY }));
+    await assertSucceeds(updateDoc(doc(ctx('cap').firestore(), 'matches/m1'), { events: [{ type: 'point', side: 'A', at: 1 }] })); // summary unchanged
+    await assertFails(updateDoc(doc(ctx('cap').firestore(), 'matches/m1'), { events: [{ type: 'point', side: 'A', at: 1 }, { type: 'point', side: 'B', at: 2 }], summary: { ...EMPTY_SUMMARY, currentB: 'x' } }));
   });
   test('other participant cannot update score', async () => {
     await assertFails(updateDoc(doc(ctx('bob').firestore(), 'matches/m1'), { events: [{ type: 'point', side: 'B', at: 1 }] }));
@@ -232,7 +274,7 @@ describe('matches: registered players only', () => {
   });
   test('registered teams and by-number sides can be created', async () => {
     await assertSucceeds(newMatch(matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 })));
-    await assertSucceeds(newMatch(matchDoc({ ids: BUILT_A }, { ids: ['cap', ...BUILT_B] }, { status: 'live' })));
+    await assertSucceeds(newMatch(matchDoc({ ids: BUILT_A }, { ids: ['cap', ...BUILT_B] }, liveNow())));
   });
   test('typed names / guest ids are rejected', async () => {
     await assertFails(newMatch(matchDoc({ ids: ['cap', 'Rahul K', 'u2', 'u3', 'u4', 'u5'] }, { ids: BUILT_B })));
@@ -246,7 +288,7 @@ describe('matches: registered players only', () => {
       await setDoc(doc(c.firestore(), 'teams/big1'), { name: 'Big 1', captainId: 'cap', memberIds: A, subIds: [], pendingPhones: [] });
       await setDoc(doc(c.firestore(), 'teams/big2'), { name: 'Big 2', captainId: 'b0', memberIds: B, subIds: [], pendingPhones: [] });
     });
-    await assertSucceeds(newMatch(matchDoc({ teamId: 'big1', ids: A }, { teamId: 'big2', ids: B }, { status: 'live' })));
+    await assertSucceeds(newMatch(matchDoc({ teamId: 'big1', ids: A }, { teamId: 'big2', ids: B }, liveNow())));
     // and the scorer's roster update (the costliest update) also fits
     await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'matches/big'), matchDoc({ teamId: 'big1', ids: A.slice(0, 11) }, { teamId: 'big2', ids: B })));
     // (1.3.0: going live is its own write, stamping the server start; firebaseBackend never combines it with a roster change)
@@ -294,11 +336,12 @@ describe('matches: registered players only', () => {
   test('by-number sides: the first players must have a profile (QA retest #4)', async () => {
     const ghostFirst = ['ghost', 'u2', 'u3', 'u4', 'u5', 'u6'];
     await assertFails(newMatch(matchDoc({ ids: ghostFirst }, { ids: ['cap', ...BUILT_B] })));
+    const ghostThird = ['u1', 'u2', 'ghost', 'u4', 'u5', 'u6'];
+    await assertFails(newMatch(matchDoc({ ids: ghostThird }, { ids: ['cap', ...BUILT_B] })));
+    // documented gap: since 1.4.4 (V143-5, create budget) players 4+ of a by-number side are format-checked only
+    // (the app checks them all before writing; the API checks every player)
     const ghostFourth = ['u1', 'u2', 'u3', 'ghost', 'u5', 'u6'];
-    await assertFails(newMatch(matchDoc({ ids: ghostFourth }, { ids: ['cap', ...BUILT_B] })));
-    // documented gap: players 5+ of a by-number side are format-checked only (the app checks them all)
-    const ghostSixth = ['u1', 'u2', 'u3', 'u4', 'u5', 'ghost'];
-    await assertSucceeds(newMatch(matchDoc({ ids: ghostSixth }, { ids: ['cap', ...BUILT_B] })));
+    await assertSucceeds(newMatch(matchDoc({ ids: ghostFourth }, { ids: ['cap', ...BUILT_B] })));
   });
   test('worst case read budget: two by-number 12-player sides still fit', async () => {
     const big = (k) => Array.from({ length: 12 }, (_, i) => `${k}${i}`);
@@ -320,12 +363,13 @@ describe('matches: registered players only', () => {
     await assertFails(updateDoc(ref('cap'), { status: 'abandoned', title: 'x' }));
     await assertFails(updateDoc(ref('cap'), { status: 'finished' }));
     await assertFails(updateDoc(ref('bob'), { status: 'abandoned' }));
-    await assertSucceeds(updateDoc(ref('cap'), { status: 'abandoned', finishedAt: 5, updatedAt: 5 }));
+    await assertFails(updateDoc(ref('cap'), { status: 'abandoned', finishedAt: 5, updatedAt: 5 })); // 1.4.5: after a rally, only with the record
+    await assertSucceeds(updateDoc(ref('cap'), { status: 'abandoned', finishedAt: 5, updatedAt: 5, abandon: abRec('cap', 1) }));
     await assertFails(updateDoc(ref('cap'), { events: [{ type: 'point', side: 'A', at: 1 }, { type: 'point', side: 'B', at: 2 }] }));
   });
   test('the scorer cannot rewrite rosters after the first rally', async () => {
     const ref = doc(ctx('cap').firestore(), 'matches/m1');
-    await assertSucceeds(updateDoc(ref, { events: [{ type: 'point', side: 'A', at: 1 }] }));
+    await assertSucceeds(updateDoc(ref, withSum({ events: [{ type: 'point', side: 'A', at: 1 }] })));
     const t1 = ['cap', 'p1', 'p2', 'p3', 'p4'];
     await assertFails(updateDoc(ref, { teamA: side('t1', t1), participantIds: ordered(t1, T2, ['cap']) }));
     await assertFails(updateDoc(ref, { teamA: { ...side('t1', T1), name: 'Renamed' } }));
@@ -418,11 +462,11 @@ describe('input validation (QA input-validation audit G1–G19, retest N4)', () 
     await assertFails(newMatch(named(' Smashers')));
   });
   test('G1 events: side A/B only, sane timestamps, capped at 2000', async () => {
-    await assertSucceeds(updateDoc(scorer(), { events: [{ type: 'point', side: 'A', at: Date.now() }] }));
-    await assertFails(updateDoc(scorer(), { events: [{ type: 'point', side: 'C', at: Date.now() }] }));
-    await assertFails(updateDoc(scorer(), { events: [{ type: 'point', side: 'A', at: Date.now() + 3 * DAY }] }));
+    await assertSucceeds(updateDoc(scorer(), withSum({ events: [{ type: 'point', side: 'A', at: Date.now() }] })));
+    await assertFails(updateDoc(scorer(), withSum({ events: [{ type: 'point', side: 'C', at: Date.now() }] })));
+    await assertFails(updateDoc(scorer(), withSum({ events: [{ type: 'point', side: 'A', at: Date.now() + 3 * DAY }] })));
     const many = Array.from({ length: 2001 }, (_, i) => ({ type: 'point', side: i % 2 ? 'A' : 'B', at: Date.now() }));
-    await assertFails(updateDoc(scorer(), { events: many }));
+    await assertFails(updateDoc(scorer(), withSum({ events: many })));
   });
   test('G9 a new scheduled match cannot start in the past (15 min grace)', async () => {
     await assertFails(newMatch(base({ scheduledAt: Date.now() - DAY })));
@@ -638,8 +682,8 @@ describe('build 27: match photos by players + scorer; Player of the Match', () =
     // 1.2.1 (QA NB-R3): the finishing write can't carry the POTM (the finish time would move with it)
     await assertFails(updateDoc(doc(ctx('cap').firestore(), 'matches/m1'), { status: 'finished', startedAt: Date.now() - 3600000, finishedAt: Date.now() - 1000, playerOfMatchId: 'q2' }));
     // can't be created with one
-    await assertFails(newMatch(matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, { createdAt: Date.now(), updatedAt: Date.now(), playerOfMatchId: 'p1' })));
-    await assertSucceeds(newMatch(matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, { createdAt: Date.now(), updatedAt: Date.now() })));
+    await assertFails(newMatch(matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, { updatedAt: Date.now(), playerOfMatchId: 'p1' })));
+    await assertSucceeds(newMatch(matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, { updatedAt: Date.now() })));
   });
 
   test('POTM is locked: re-opening the match keeps it; it can never be cleared or re-picked (QA NB-R3)', async () => {
@@ -662,40 +706,42 @@ describe('build-217 retest follow-ups', () => {
   const seed = (over) => env.withSecurityRulesDisabled((c) => updateDoc(doc(c.firestore(), 'matches/m1'), over));
 
   test('G1: an update appends at most 1 event, shape-checked at its index', async () => {
-    await assertSucceeds(updateDoc(m1(), { events: log(1) }));
-    await assertFails(updateDoc(m1(), { events: log(3) })); // +2
+    await assertSucceeds(updateDoc(m1(), withSum({ events: log(1) })));
+    await assertFails(updateDoc(m1(), withSum({ events: log(3) }))); // +2
     const l = log(1);
-    await assertFails(updateDoc(m1(), { events: [...l, ev('C', 1)] })); // bad side
-    await assertFails(updateDoc(m1(), { events: [...l, ev('A', 1, { extra: 1 })] })); // extra key
-    await assertFails(updateDoc(m1(), { events: [...l, ev('A', 1, { kind: 'smash' })] })); // unknown shot type
-    await assertFails(updateDoc(m1(), { events: [...l, ev('A', 1, { playerId: 'not an id!' })] }));
-    await assertFails(updateDoc(m1(), { events: [...l, ev('A', 1, { at: now + 5 * DAY })] })); // insane time
-    await assertFails(updateDoc(m1(), { events: [...l, { type: 'point', side: 'A', at: 'soon' }] }));
-    await assertFails(updateDoc(m1(), { events: [ev('B', 0), ev('A', 1)] })); // history rewritten
-    await assertSucceeds(updateDoc(m1(), { events: [...l, ev('B', 1, { playerId: 'q1', kind: 'kill' })] }));
-    await assertSucceeds(updateDoc(m1(), { events: [...l, ev('B', 1, { playerId: 'q1', kind: 'kill' }), { type: 'timeout', side: 'A', at: now + 2 }] }));
+    await assertFails(updateDoc(m1(), withSum({ events: [...l, ev('C', 1)] }))); // bad side
+    await assertFails(updateDoc(m1(), withSum({ events: [...l, ev('A', 1, { extra: 1 })] }))); // extra key
+    await assertFails(updateDoc(m1(), withSum({ events: [...l, ev('A', 1, { kind: 'smash' })] }))); // unknown shot type
+    await assertFails(updateDoc(m1(), withSum({ events: [...l, ev('A', 1, { playerId: 'not an id!' })] })));
+    await assertFails(updateDoc(m1(), withSum({ events: [...l, ev('A', 1, { at: now + 5 * DAY })] }))); // insane time
+    await assertFails(updateDoc(m1(), withSum({ events: [...l, { type: 'point', side: 'A', at: 'soon' }] })));
+    await assertFails(updateDoc(m1(), withSum({ events: [ev('B', 0), ev('A', 1)] }))); // history rewritten
+    await assertSucceeds(updateDoc(m1(), withSum({ events: [...l, ev('B', 1, { playerId: 'q1', kind: 'kill' })] })));
+    await assertSucceeds(updateDoc(m1(), withSum({ events: [...l, ev('B', 1, { playerId: 'q1', kind: 'kill' }), { type: 'timeout', side: 'A', at: now + 2 }] })));
   });
   test('G1: undo exactly the last event; re-credit one of the last 3 without changing the rally', async () => {
-    await seed({ events: log(6) });
-    await assertFails(updateDoc(m1(), { events: log(4) })); // two undone at once
-    await assertSucceeds(updateDoc(m1(), { events: log(5) }));
+    await seed({ events: log(6), summary: sumOf(log(6)) });
+    await assertFails(updateDoc(m1(), withSum({ events: log(4) }))); // two undone at once
+    await assertSucceeds(updateDoc(m1(), withSum({ events: log(5) })));
     const l = log(5);
     // event 3 was won by team B: only a team B player can be credited (QA NB-R5)
-    await assertFails(updateDoc(m1(), { events: l.map((e, i) => (i === 3 ? { ...e, playerId: 'p1', kind: 'ace' } : e)) }));
-    await assertSucceeds(updateDoc(m1(), { events: l.map((e, i) => (i === 3 ? { ...e, playerId: 'q1', kind: 'ace' } : e)) }));
-    await assertFails(updateDoc(m1(), { events: l.map((e, i) => (i === 0 ? { ...e, playerId: 'p1' } : e)) })); // too far back
-    await assertFails(updateDoc(m1(), { events: l.map((e, i) => (i === 4 ? { ...e, side: e.side === 'A' ? 'B' : 'A' } : e)) }));
+    await assertFails(updateDoc(m1(), withSum({ events: l.map((e, i) => (i === 3 ? { ...e, playerId: 'p1', kind: 'ace' } : e)) })));
+    await assertSucceeds(updateDoc(m1(), withSum({ events: l.map((e, i) => (i === 3 ? { ...e, playerId: 'q1', kind: 'ace' } : e)) })));
+    await assertFails(updateDoc(m1(), withSum({ events: l.map((e, i) => (i === 0 ? { ...e, playerId: 'p1' } : e)) }))); // too far back
+    await assertFails(updateDoc(m1(), withSum({ events: l.map((e, i) => (i === 4 ? { ...e, side: e.side === 'A' ? 'B' : 'A' } : e)) })));
   });
-  test('G1: the summary moves at most 1 rally per appended event, completed sets only grow at the end', async () => {
+  test('1.4.4 (V143-1/V143-4): the summary is a display hint – any well-shaped summary rides on a rally; a malformed one is refused', async () => {
     const summary = { setsA: 1, setsB: 0, currentA: 5, currentB: 0, setScores: [{ a: 25, b: 20 }], winner: null, serving: 'A' };
     await seed({ events: log(50), summary });
     const next = [...log(50), ev('A', 50)];
-    await assertFails(updateDoc(m1(), { events: next, summary: { ...summary, currentA: 7 } })); // +2 for 1 event
-    await assertFails(updateDoc(m1(), { events: next, summary: { ...summary, currentA: 6, setScores: [{ a: 25, b: 19 }] } })); // past set edited
-    await assertFails(updateDoc(m1(), { events: next, summary: null })); // can't drop the summary
-    await assertSucceeds(updateDoc(m1(), { events: next, summary: { ...summary, currentA: 6 } }));
-    await assertFails(updateDoc(m1(), { events: log(50), summary: { ...summary, currentA: 3 } })); // undo moves 1 at most
-    await assertSucceeds(updateDoc(m1(), { events: log(50), summary }));
+    await assertSucceeds(updateDoc(m1(), { events: next, summary: { ...summary, currentA: 7 } })); // ignored by the app (replay)
+    for (const bad of [{ ...summary, currentA: 'x' }, { ...summary, currentB: -5 }, { ...summary, serving: 'C' }, { ...summary, winner: 'Z' },
+      { ...summary, setsA: 9 }, { ...summary, extra: 1 }, { ...summary, currentA: 10000 }, { ...summary, setScores: 'x' }, 'won']) {
+      await seed({ events: log(50), summary });
+      await assertFails(updateDoc(m1(), { events: next, summary: bad }));
+    }
+    await assertSucceeds(updateDoc(m1(), { events: next, summary: null })); // no summary at all: the replay is used anyway
+    await assertSucceeds(updateDoc(m1(), { events: log(50), summary })); // undo
   });
   // Worst cases for the 1000-expression budget: 12-a-side rosters, title + place, a long log,
   // 4 completed sets; the finishing rally (status + finish time change), undoing it (POTM
@@ -712,11 +758,108 @@ describe('build-217 retest follow-ups', () => {
     await big({ status: 'live', events: log(300), summary: live5 });
     await assertSucceeds(updateDoc(bigRef(), { events: [...log(300), ev('A', 300, { playerId: 'a7', kind: 'kill' })], summary: won5, status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp(), updatedAt: Date.now() }));
   });
-  test('G1 budget: undoing the winning rally while the POTM is open, 12-a-side (1.3.0: after the POTM it is closed)', async () => {
-    await big({ status: 'finished', events: [...log(300), ev('A', 300)], summary: won5, finishedAt: Date.now() - 60000 });
-    await assertSucceeds(updateDoc(bigRef(), { events: log(300), summary: live5, status: 'live', finishedAt: null, finishedServerAt: null, updatedAt: Date.now() }));
-    await big({ status: 'finished', events: [...log(300), ev('A', 300)], summary: won5, finishedAt: Date.now() - 60000, playerOfMatchId: 'a1' });
+  // 1.4.2 (QA V141-8): once the match is over its score is final – no undo (before: allowed until the
+  // POTM), no extra rally; crediting the winning rally to a player still works. 12-a-side, 300 events.
+  test('V141-8: a finished match (POTM still open) refuses undo, back-to-live and an extra rally; a credit is fine', async () => {
+    const fin = [...log(300), ev('A', 300)];
+    await big({ status: 'finished', events: fin, summary: won5, finishedAt: Date.now() - 60000 });
     await assertFails(updateDoc(bigRef(), { events: log(300), summary: live5, status: 'live', finishedAt: null, finishedServerAt: null, updatedAt: Date.now() }));
+    await assertFails(updateDoc(bigRef(), { events: log(300), summary: live5, updatedAt: Date.now() }));
+    await assertFails(updateDoc(bigRef(), { events: log(300), summary: won5, updatedAt: Date.now() }));
+    await assertFails(updateDoc(bigRef(), { events: [...fin, ev('B', 301)], summary: won5, updatedAt: Date.now() }));
+    await assertFails(updateDoc(bigRef(), { events: [...fin, ev('A', 301)], summary: won5, updatedAt: Date.now() }));
+    await assertFails(updateDoc(bigRef(), { status: 'live', updatedAt: Date.now() }));
+    await assertFails(updateDoc(bigRef(), { events: [...fin, ev('B', 301)], summary: won5, title: 'Edited', updatedAt: Date.now() })); // with a meta field
+    await assertSucceeds(updateDoc(bigRef(), { events: [...log(300), ev('A', 300, { playerId: 'a7', kind: 'kill' })], summary: won5, updatedAt: Date.now() }));
+    await big({ status: 'finished', events: fin, summary: won5, finishedAt: Date.now() - 60000, playerOfMatchId: 'a1' });
+    await assertFails(updateDoc(bigRef(), { events: log(300), summary: live5, status: 'live', finishedAt: null, finishedServerAt: null, updatedAt: Date.now() }));
+  });
+  // 1.4.3 (QA V142-2): Tester's 1.4.2 probes (qa142.probe.js F4–F5, C11, T2/T3) – the summary and the rules of a
+  // finished match were writable before the POTM. Now a finished match only takes a credit on one of the last 3
+  // rallies, the POTM and the verdict/review; every other field is frozen (src/core/matchGuards.ts MATCH_FIELDS).
+  const won5b = { ...won5, setsA: 2, setsB: 3, winner: 'B' };
+  const FROZEN_WRITES = [
+    ['summary: winner flipped to B', { summary: won5b }],
+    ['summary: winner removed (2-2)', { summary: { ...won5, setsA: 2, winner: null } }],
+    ['summary: currentA 199', { summary: { ...won5, currentA: 199 } }],
+    ['summary: 0:25 sets + winner B', { summary: { ...won5b, setScores: [{ a: 0, b: 25 }, { a: 0, b: 25 }, { a: 0, b: 25 }, { a: 25, b: 0 }, { a: 13, b: 15 }] } }],
+    ['summary flip + title', { summary: won5b, title: 'x' }],
+    ['rules: decidingSetPoints 25', { rules: { ...RULES, decidingSetPoints: 25 } }],
+    ['rules: pointsPerSet 30', { rules: { ...RULES, pointsPerSet: 30 } }],
+    ['rules: bestOf 3', { rules: { ...RULES, bestOf: 3 } }],
+    ['rules: winBy 1', { rules: { ...RULES, winBy: 1 } }],
+    ['rules + summary winner null', { rules: { ...RULES, pointsPerSet: 30 }, summary: { ...won5, setsA: 2, winner: null } }],
+    ['status: abandoned', { status: 'abandoned', finishedAt: Date.now() }],
+    ['status: live', { status: 'live', finishedAt: null, finishedServerAt: null }],
+    ['firstServe', { firstServe: 'B' }],
+    ['lineups', { lineups: { 1: { A: A12.slice(0, 6), B: B12.slice(0, 6) } } }],
+    ['title', { title: 'Edited' }],
+    ['location', { location: null }],
+    ['scheduledAt', { scheduledAt: Date.now() + DAY }],
+    ['tournamentId', { tournamentId: 't9' }],
+    ['challengeId', { challengeId: 'c9' }],
+    ['fixtureId', { fixtureId: 'f9' }],
+    ['stream', { stream: { provider: 'youtube', playbackUrl: 'https://youtu.be/x', live: false } }],
+    ['teamSizeMode', { teamSizeMode: 'custom' }],
+    ['startedAt', { startedAt: Date.now() - 60000 }],
+    ['finishedAt', { finishedAt: Date.now() - 1000 }],
+    ['scorerId (handover)', { scorerId: 'a1' }],
+    ['captains', { captains: { A: 'a1', B: 'b1' } }],
+    ['participantIds', { participantIds: ordered(A12, B12, ['bob']) }],
+    ['teamA name', { teamA: { ...side(null, A12), name: 'Renamed' } }],
+  ];
+  test('V142-2: a finished match before the POTM – every frozen field is refused; a credit and the POTM still work', async () => {
+    const fin = [...log(300), ev('A', 300)];
+    for (const [what, w] of FROZEN_WRITES) {
+      await big({ status: 'finished', events: fin, summary: won5, finishedAt: Date.now() - 60000 });
+      try { await assertFails(updateDoc(bigRef(), { ...w, updatedAt: Date.now() })); } catch (e) { throw new Error(`${what} was accepted`); }
+    }
+    await big({ status: 'finished', events: fin, summary: won5, finishedAt: Date.now() - 60000 });
+    // "I want to play" by someone else (scheduled matches only), and the C11 credit + summary flip
+    await assertFails(updateDoc(doc(ctx('bob').firestore(), 'matches/big'), { interestedIds: ['bob'] }));
+    const credited = [...log(300), ev('A', 300, { playerId: 'a7', kind: 'kill' })];
+    await assertFails(updateDoc(bigRef(), { events: credited, summary: won5b, updatedAt: Date.now() }));
+    await assertFails(updateDoc(bigRef(), { events: credited, title: 'x', updatedAt: Date.now() }));
+    await assertSucceeds(updateDoc(bigRef(), { events: credited, summary: won5, updatedAt: Date.now() }));
+    await assertFails(updateDoc(bigRef(), { playerOfMatchId: 'a7', title: 'x' }));
+    await assertSucceeds(updateDoc(bigRef(), { playerOfMatchId: 'a7', updatedAt: Date.now() }));
+    // after the POTM (T2/T3)
+    await assertFails(updateDoc(bigRef(), { summary: won5b }));
+    await assertFails(updateDoc(bigRef(), { rules: { ...RULES, decidingSetPoints: 25 } }));
+  });
+  test('1.4.4 (V143-1/V143-2): the finishing write – at most one appended rally, nothing else rides on it, a log too short for any win is refused', async () => {
+    const fin = (over) => ({ events: [...log(300), ev('A', 300)], summary: won5, status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp(), updatedAt: Date.now(), ...over });
+    const tryFin = async (over, seedOver = {}) => { await big({ status: 'live', events: log(300), summary: live5, ...seedOver }); return updateDoc(bigRef(), Object.fromEntries(Object.entries(fin(over)).filter(([, v]) => v !== undefined))); };
+    await assertFails(tryFin({ title: 'Final!' })); // nothing else rides on the finishing write
+    await assertFails(tryFin({ events: [...log(300), ev('A', 300), ev('A', 301)] })); // two rallies at once
+    await assertFails(tryFin({ events: log(299) })); // an undo can't finish
+    await assertFails(tryFin({ summary: { ...won5, currentA: 'x' } })); // shape
+    await assertFails(tryFin({ rules: { ...RULES, pointsPerSet: 11 } }));
+    // fewer events than the shortest possible win (best of 5 to 25: 75 points) – an obvious forgery
+    await assertFails(tryFin({ events: [...log(70), ev('A', 70)] }, { events: log(70) }));
+    await assertFails(tryFin({ events: undefined }, { events: log(10) }));
+    // the summary is NOT checked against the rallies any more (the app replays them): these are accepted by the rules
+    // and the app shows the replayed result (src/core/__tests__/replay144.test.ts covers what it shows)
+    await assertSucceeds(tryFin({ summary: won5b }));
+    await assertSucceeds(tryFin({ events: undefined })); // the winning rally was written before: status-only finish
+    await assertSucceeds(tryFin({})); // the real finish
+  });
+  test('1.4.4 (V143-3): the replay inputs are frozen once the first rally exists – rules, firstServe, rosters, stored set lineups', async () => {
+    const L = log(62);
+    const seedL = (over = {}) => big({ status: 'live', events: L, summary: live5, lineups: { 1: { A: A12.slice(0, 6), B: B12.slice(0, 6) } }, ...over });
+    await seedL();
+    await assertFails(updateDoc(bigRef(), { rules: { ...RULES, pointsPerSet: 11 } })); // Tester's L3a
+    await assertFails(updateDoc(bigRef(), { rules: { ...RULES, pointsPerSet: 11 }, events: [...L, ev('B', 62)] })); // L4
+    await assertFails(updateDoc(bigRef(), { firstServe: 'B' }));
+    await assertFails(updateDoc(bigRef(), { teamA: { ...side(null, A12), name: 'Renamed' } }));
+    await assertFails(updateDoc(bigRef(), { lineups: { 1: { A: A12.slice(1, 7), B: B12.slice(0, 6) } } })); // set 1's lineup changed
+    await assertFails(updateDoc(bigRef(), { lineups: {} })); // removed
+    await assertSucceeds(updateDoc(bigRef(), { lineups: { 1: { A: A12.slice(0, 6), B: B12.slice(0, 6) }, 2: { A: A12.slice(1, 7), B: B12.slice(0, 6) } } })); // next set's lineup
+    await assertSucceeds(updateDoc(bigRef(), { summary: { ...live5, serving: 'B' } })); // a display hint only
+    // before the first rally the rules and the first server may still change, but not in the write adding the first rally
+    await seedL({ events: [] });
+    await assertFails(updateDoc(bigRef(), { rules: { ...RULES, pointsPerSet: 11 }, events: [ev('A', 0)] }));
+    await assertSucceeds(updateDoc(bigRef(), { rules: { ...RULES, pointsPerSet: 21 }, firstServe: 'B' }));
   });
   test('G1 budget: re-crediting the 3rd-last rally, 12-a-side', async () => {
     await big({ status: 'live', events: log(300), summary: live5 });
@@ -733,14 +876,14 @@ describe('build-217 retest follow-ups', () => {
       summary: { setsA: 2, setsB: 1, currentA: 15, currentB: 10, setScores: [...s2.setScores, { a: 15, b: 10 }], winner: 'A', serving: 'A' },
     }));
   });
-  test('G1: a newly completed set score is range-checked; sets won must match the sets listed', async () => {
+  test('1.4.4 (V143-4): summary shape – at most 5 set scores, sets 0-3, points 0-9999', async () => {
     const s1 = { setsA: 0, setsB: 0, currentA: 24, currentB: 20, setScores: [], winner: null, serving: 'A' };
     await seed({ events: log(44), summary: s1 });
-    const done = (set) => ({ setsA: 1, setsB: 0, currentA: 0, currentB: 0, setScores: [set], winner: null, serving: 'B' });
-    await assertFails(updateDoc(m1(), { events: log(45), summary: done({ a: 25, b: 500 }) }));
-    await assertFails(updateDoc(m1(), { events: log(45), summary: done({ a: -1, b: 20 }) }));
-    await assertFails(updateDoc(m1(), { events: log(45), summary: { ...done({ a: 25, b: 20 }), setsA: 0 } })); // sets won ≠ sets listed
-    await assertSucceeds(updateDoc(m1(), { events: log(45), summary: done({ a: 25, b: 20 }) }));
+    const done = (sets, over = {}) => ({ setsA: 1, setsB: 0, currentA: 0, currentB: 0, setScores: sets, winner: null, serving: 'B', ...over });
+    const six = Array.from({ length: 6 }, () => ({ a: 25, b: 20 }));
+    await assertFails(updateDoc(m1(), { events: log(45), summary: done(six) }));
+    await assertFails(updateDoc(m1(), { events: log(45), summary: done([], { setsA: 4 }) }));
+    await assertSucceeds(updateDoc(m1(), { events: log(45), summary: done([{ a: 25, b: 20 }]) }));
   });
 
   const tour = (teams) => ({ name: 'Cup', organizerId: 'cap', format: 'knockout', rules: RULES, startDate: Date.now() + DAY, endDate: Date.now() + 2 * DAY, location: PLACE, teams: teams.map((id) => ({ id, name: id, color: '#123456' })), fixtures: [], status: 'registration' });
@@ -795,14 +938,14 @@ describe('1.2.1: retest 1.1.0 bugs (NB-R1..R5, storage)', () => {
   const log = (n) => Array.from({ length: n }, (_, i) => ev(i % 2 ? 'B' : 'A', i));
   const m1 = (who = 'cap') => doc(ctx(who).firestore(), 'matches/m1');
   const seed = (over) => env.withSecurityRulesDisabled((c) => updateDoc(doc(c.firestore(), 'matches/m1'), over));
-  const base = (over = {}) => matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, { createdAt: now, updatedAt: now, ...over });
+  const base = (over = {}) => matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, { updatedAt: now, ...over });
   const won3 = { setsA: 3, setsB: 0, currentA: 25, currentB: 0, setScores: [{ a: 25, b: 0 }, { a: 25, b: 0 }, { a: 25, b: 0 }], winner: 'A', serving: 'A' };
 
-  test('NB-R1: a match must be created with the empty summary', async () => {
+  test('1.4.4: the summary is not checked at create (untrusted; `events == []` is what makes a new match 0-0)', async () => {
     const { summary, ...noSummary } = base();
-    await assertFails(newMatch(noSummary));
-    await assertFails(newMatch(base({ summary: { ...summary, currentA: 3 } })));
-    await assertFails(newMatch(base({ summary: { ...summary, winner: 'A' } })));
+    await assertSucceeds(newMatch(noSummary));
+    await assertSucceeds(newMatch(base({ summary: { ...summary, winner: 'A' } }))); // ignored: the app replays the (empty) log
+    await assertFails(newMatch(base({ events: [{ type: 'point', side: 'A', at: 1 }] })));
     await assertSucceeds(newMatch(base()));
   });
   test('NB-R1: a stored document without a summary is checked against the empty one (no jump to 3-0)', async () => {
@@ -810,11 +953,23 @@ describe('1.2.1: retest 1.1.0 bugs (NB-R1..R5, storage)', () => {
     await assertFails(updateDoc(m1(), { events: log(1), summary: won3, status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp() }));
     await assertSucceeds(updateDoc(m1(), { events: log(1), summary: { setsA: 0, setsB: 0, currentA: 1, currentB: 0, setScores: [], winner: null, serving: 'A' } }));
   });
-  test('NB-R2: status finished needs a winner (status-only write denied)', async () => {
+  test('1.4.4 (V143-2): finishing needs a log long enough for a win; a scorer abandons only a match that can\'t be won yet, an admin any unfinished one', async () => {
+    await assertFails(updateDoc(m1(), { status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp() })); // 0 events
+    // best of 5 to 25: no win before 75 points
+    await seed({ events: log(74) });
     await assertFails(updateDoc(m1(), { status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp() }));
-    await seed({ events: log(150), summary: { setsA: 2, setsB: 0, currentA: 24, currentB: 0, setScores: [{ a: 25, b: 0 }, { a: 25, b: 0 }], winner: null, serving: 'A' } });
-    await assertFails(updateDoc(m1(), { status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp() }));
-    await assertSucceeds(updateDoc(m1(), { status: 'abandoned', finishedAt: Date.now() }));
+    await assertFails(updateDoc(m1(), { status: 'abandoned', finishedAt: Date.now() })); // 1.4.5: no record
+    await assertSucceeds(updateDoc(m1(), { status: 'abandoned', finishedAt: Date.now(), abandon: abRec('cap', 74) }));
+    await seed({ status: 'live', events: log(150), finishedAt: null, abandon: deleteField(), summary: { setsA: 2, setsB: 0, currentA: 24, currentB: 0, setScores: [{ a: 25, b: 0 }, { a: 25, b: 0 }], winner: null, serving: 'A' } });
+    await assertFails(updateDoc(m1(), { status: 'abandoned', finishedAt: Date.now(), abandon: abRec('cap', 150) })); // might be won: scorer can't
+    await assertFails(updateDoc(m1(), { status: 'abandoned', finishedAt: Date.now(), events: log(74) })); // not by shortening the log either
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'terms/adm'), { version: TERMS_VERSION, acceptedAt: new Date() }));
+    await assertFails(updateDoc(doc(env.authenticatedContext('adm', { admin: true }).firestore(), 'matches/m1'), { status: 'abandoned', finishedAt: Date.now(), title: 'x' }));
+    await assertFails(updateDoc(doc(env.authenticatedContext('adm', { admin: true }).firestore(), 'matches/m1'), { status: 'abandoned', finishedAt: Date.now(), updatedAt: Date.now() })); // 1.4.5: no record
+    await assertSucceeds(updateDoc(doc(env.authenticatedContext('adm', { admin: true }).firestore(), 'matches/m1'), { status: 'abandoned', finishedAt: Date.now(), updatedAt: Date.now(), abandon: abRec('adm', 150, { mode: 'admin', review: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() }) }));
+    // the status-only finish of a log that is long enough is accepted by the rules; the app shows the replayed result
+    await seed({ status: 'live', events: log(150), finishedAt: null });
+    await assertSucceeds(updateDoc(m1(), { status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp() }));
   });
   test('NB-R3: finishedAt moves only with the status, never into the future; finishedServerAt = request.time', async () => {
     const live = { setsA: 2, setsB: 0, currentA: 24, currentB: 0, setScores: [{ a: 25, b: 0 }, { a: 25, b: 0 }], winner: null, serving: 'A' };
@@ -850,10 +1005,10 @@ describe('1.2.1: retest 1.1.0 bugs (NB-R1..R5, storage)', () => {
     expect((await getDoc(f2)).data().playerOfMatchId).toBe('p1');
   });
   test('NB-R5: a credited player must be on the side that won the rally', async () => {
-    await assertFails(updateDoc(m1(), { events: [ev('A', 0, { playerId: 'q1' })] })); // team B player on an A rally
-    await assertFails(updateDoc(m1(), { events: [ev('A', 0, { playerId: 'bob' })] })); // not a player
-    await assertSucceeds(updateDoc(m1(), { events: [ev('A', 0, { playerId: 'p1', kind: 'kill' })] }));
-    await assertSucceeds(updateDoc(m1(), { events: [ev('A', 0, { playerId: 'p1', kind: 'kill' }), ev('B', 1, { playerId: 'q5' })] }));
+    await assertFails(updateDoc(m1(), withSum({ events: [ev('A', 0, { playerId: 'q1' })] }))); // team B player on an A rally
+    await assertFails(updateDoc(m1(), withSum({ events: [ev('A', 0, { playerId: 'bob' })] }))); // not a player
+    await assertSucceeds(updateDoc(m1(), withSum({ events: [ev('A', 0, { playerId: 'p1', kind: 'kill' })] })));
+    await assertSucceeds(updateDoc(m1(), withSum({ events: [ev('A', 0, { playerId: 'p1', kind: 'kill' }), ev('B', 1, { playerId: 'q5' })] })));
   });
   test('storage: no overwriting an existing photo; per-type minimum size (bare GIF header denied)', async () => {
     const st = ctx('p1').storage();
@@ -871,7 +1026,7 @@ describe('1.3.0: T&C gate, anti-fraud, baseline holes', () => {
   const won3 = { setsA: 3, setsB: 0, currentA: 25, currentB: 0, setScores: [{ a: 25, b: 0 }, { a: 25, b: 0 }, { a: 25, b: 0 }], winner: 'A', serving: 'A' };
   const ev = (side, i) => ({ type: 'point', side, at: now + i });
   const log = (n) => Array.from({ length: n }, (_, i) => ev(i % 2 ? 'B' : 'A', i));
-  const base = (over = {}) => matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, { createdAt: now, updatedAt: now, ...over });
+  const base = (over = {}) => matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, { updatedAt: now, ...over });
   /** A completed match (finished + POTM) between t1 (captain cap, scorer cap) and t2 (captain eve). */
   const seedDone = (id = 'done', over = {}) => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), `matches/${id}`), base({
     status: 'finished', events: log(75), summary: won3, finishedAt: now - 60000, finishedServerAt: new Date(now - 60000),
@@ -934,7 +1089,9 @@ describe('1.3.0: T&C gate, anti-fraud, baseline holes', () => {
     await assertFails(newMatch(base({ status: 'finished', summary: won3, events: log(75) })));
     await assertFails(newMatch(base({ status: 'live', finishedAt: Date.UTC(2100, 0, 1) })));
     await assertFails(newMatch(base({ status: 'live', verification: { status: 'confirmed' } })));
-    await assertSucceeds(newMatch(base({ status: 'live' })));
+    await assertSucceeds(newMatch(base(liveNow())));
+    // 1.4.4 (V143-5): a match created live must carry its server start
+    await assertFails(newMatch(base({ status: 'live' })));
   });
   test('AF-14/AF-17a: start times are the server\'s, never backdated', async () => {
     await assertFails(newMatch(base({ status: 'live', startedAt: now - 2 * 3600000 })));
@@ -968,8 +1125,10 @@ describe('1.3.0: T&C gate, anti-fraud, baseline holes', () => {
     await assertFails(updateDoc(m('done'), { status: 'abandoned', finishedAt: Date.now() }));
     await assertFails(updateDoc(m('done'), { title: 'Edited' }));
     await assertFails(updateDoc(m('done'), { scorerId: 'bob' }));
-    await assertSucceeds(updateDoc(m('done', 'bob'), { interestedIds: ['bob'] }));
+    // 1.4.3 (V142-2): a finished match is final – "I want to play" (offered on scheduled matches only) too
+    await assertFails(updateDoc(m('done', 'bob'), { interestedIds: ['bob'] }));
     await seedDone('ab', { status: 'abandoned', playerOfMatchId: null, summary: { ...EMPTY_SUMMARY, currentA: 3 }, events: log(3), finishedServerAt: null });
+    await assertSucceeds(updateDoc(m('ab', 'bob'), { interestedIds: ['bob'] })); // abandoned: still harmless
     await assertFails(updateDoc(m('ab'), { status: 'live' }));
     await assertFails(updateDoc(m('ab'), { status: 'finished', summary: won3, events: log(75), finishedAt: Date.now(), finishedServerAt: serverTimestamp() }));
     await assertFails(updateDoc(m('ab'), { events: log(4), summary: { ...EMPTY_SUMMARY, currentA: 3, currentB: 1 } }));
@@ -1046,12 +1205,12 @@ describe('1.3.0: T&C gate, anti-fraud, baseline holes', () => {
     await assertFails(updateDoc(m('s2'), { status: 'live', startedAt: now - 3600000, startedServerAt: serverTimestamp() })); // H-ST1
     await assertSucceeds(updateDoc(m('s2'), { status: 'live', startedAt: Date.now(), startedServerAt: serverTimestamp() }));
   });
-  test('delete: a finished match only by an admin; scheduled by its creator (AF-50, BN-11)', async () => {
+  test('delete: never a finished match (1.4.6 V145-1: not even by an admin); scheduled by its creator (AF-50, BN-11)', async () => {
     await seedDone();
     await assertFails(deleteDoc(m('done')));
     await seedDone('await', { playerOfMatchId: null });
     await assertFails(deleteDoc(m('await')));
-    await assertSucceeds(deleteDoc(m('done', admin())));
+    await assertFails(deleteDoc(m('done', admin())));
     await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'matches/s1'), base({ status: 'scheduled', scheduledAt: now + DAY })));
     await assertFails(deleteDoc(m('s1', 'bob')));
     await assertSucceeds(deleteDoc(m('s1')));
@@ -1062,28 +1221,28 @@ describe('1.3.2: tap a player to score', () => {
   const m1 = (uid) => doc(ctx(uid).firestore(), 'matches/m1');
   test('one tapped point (team point + player credit in one event): the scorer only', async () => {
     const tapped = [{ type: 'point', side: 'A', at: Date.now(), playerId: 'p2' }];
-    await assertFails(updateDoc(m1('p2'), { events: tapped })); // the credited player
-    await assertFails(updateDoc(m1('eve'), { events: tapped })); // the other captain
-    await assertFails(updateDoc(m1('bob'), { events: tapped }));
-    await assertSucceeds(updateDoc(m1('cap'), { events: tapped }));
+    await assertFails(updateDoc(m1('p2'), withSum({ events: tapped }))); // the credited player
+    await assertFails(updateDoc(m1('eve'), withSum({ events: tapped }))); // the other captain
+    await assertFails(updateDoc(m1('bob'), withSum({ events: tapped })));
+    await assertSucceeds(updateDoc(m1('cap'), withSum({ events: tapped })));
   });
   test('the credit must be a player of the team that won the rally; team-only points carry none', async () => {
-    await assertFails(updateDoc(m1('cap'), { events: [{ type: 'point', side: 'A', at: Date.now(), playerId: 'q1' }] }));
-    await assertFails(updateDoc(m1('cap'), { events: [{ type: 'point', side: 'A', at: Date.now(), playerId: 'zz' }] }));
-    await assertSucceeds(updateDoc(m1('cap'), { events: [{ type: 'point', side: 'B', at: Date.now() }] }));
+    await assertFails(updateDoc(m1('cap'), withSum({ events: [{ type: 'point', side: 'A', at: Date.now(), playerId: 'q1' }] })));
+    await assertFails(updateDoc(m1('cap'), withSum({ events: [{ type: 'point', side: 'A', at: Date.now(), playerId: 'zz' }] })));
+    await assertSucceeds(updateDoc(m1('cap'), withSum({ events: [{ type: 'point', side: 'B', at: Date.now() }] })));
   });
   test('1.3.3: a team point (scoreboard panel, no player credit) is scorer-only', async () => {
     const team = [{ type: 'point', side: 'B', at: Date.now() }];
-    await assertFails(updateDoc(m1('eve'), { events: team })); // captain of B
-    await assertFails(updateDoc(m1('p1'), { events: team }));
-    await assertSucceeds(updateDoc(m1('cap'), { events: team }));
+    await assertFails(updateDoc(m1('eve'), withSum({ events: team }))); // captain of B
+    await assertFails(updateDoc(m1('p1'), withSum({ events: team })));
+    await assertSucceeds(updateDoc(m1('cap'), withSum({ events: team })));
   });
   test('one rally per write, and undo pops it', async () => {
     const at = Date.now();
     const two = [{ type: 'point', side: 'A', at, playerId: 'p2' }, { type: 'point', side: 'A', at, playerId: 'p3' }];
-    await assertFails(updateDoc(m1('cap'), { events: two }));
-    await assertSucceeds(updateDoc(m1('cap'), { events: two.slice(0, 1) }));
-    await assertSucceeds(updateDoc(m1('cap'), { events: [] }));
+    await assertFails(updateDoc(m1('cap'), withSum({ events: two })));
+    await assertSucceeds(updateDoc(m1('cap'), withSum({ events: two.slice(0, 1) })));
+    await assertSucceeds(updateDoc(m1('cap'), withSum({ events: [] })));
   });
 });
 
@@ -1093,7 +1252,17 @@ describe('1.3.7: registration fields, team size, admin approval (F135-1)', () =>
     const t = new Date(Date.now() + 330 * 60000 + plusDays * DAY);
     return `${t.getUTCFullYear() - years}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
   };
-  const reg = (uid, d) => setDoc(doc(ctx(uid).firestore(), `users/${uid}/private/registration`), d);
+  // 1.4.0 (V139-3): a new email is claimed in the same write, as firebaseBackend.saveProfile does
+  const reg = async (uid, d) => {
+    const db = ctx(uid).firestore();
+    const b = writeBatch(db);
+    b.set(doc(db, `users/${uid}/private/registration`), d);
+    if (typeof d.email === 'string' && /^[^/]+$/.test(d.email)) {
+      const c = await getDoc(doc(db, `emails/${d.email}`)).catch(() => null);
+      if (c && !c.exists()) b.set(doc(db, `emails/${d.email}`), { uid });
+    }
+    return b.commit();
+  };
   // 1.3.8 (V137-5): Firebase stores no district/state (no lookup in rules; parity with the API without a lookup)
   const okReg = { dob: '2000-05-20', email: null, pincode: '110001', district: null, state: null };
 
@@ -1231,15 +1400,15 @@ describe('1.3.7: feedback + fact of the day', () => {
     await assertFails(deleteDoc(doc(fb(admin()), 'f1')));
   });
   test('dailyItems: anyone reads; only admins write; quotes need attribution + https source', async () => {
-    const fact = { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: 'FIVB', sourceUrl: null, active: true };
+    const fact = { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: 'FIVB', sourceUrl: null, active: true, createdAt: serverTimestamp() };
     const di = (c, id) => doc(c.firestore(), `dailyItems/${id}`);
     await assertFails(setDoc(di(ctx('bob'), 'd1'), fact));
     await assertSucceeds(setDoc(di(admin(), 'd1'), fact));
     await assertSucceeds(getDoc(di(env.unauthenticatedContext(), 'd1')));
     await assertSucceeds(getDocs(collection(ctx('bob').firestore(), 'dailyItems')));
-    await assertFails(updateDoc(di(ctx('bob'), 'd1'), { active: false }));
-    await assertSucceeds(updateDoc(di(admin(), 'd1'), { active: false }));
-    const quote = { type: 'quote', textEn: 'Q', textHi: 'क्यू', attribution: 'Someone', sourceUrl: 'https://example.org/q', active: true };
+    await assertFails(updateDoc(di(ctx('bob'), 'd1'), { active: false, removedAt: serverTimestamp() }));
+    await assertSucceeds(updateDoc(di(admin(), 'd1'), { active: false, removedAt: serverTimestamp() })); // 1.4.1: removedAt stamped
+    const quote = { type: 'quote', textEn: 'Q', textHi: 'क्यू', attribution: 'Someone', sourceUrl: 'https://example.org/q', active: true, createdAt: serverTimestamp() };
     await assertSucceeds(setDoc(di(admin(), 'q1'), quote));
     await assertFails(setDoc(di(admin(), 'q2'), { ...quote, sourceUrl: null }));
     await assertFails(setDoc(di(admin(), 'q2'), { ...quote, attribution: null }));
@@ -1249,7 +1418,7 @@ describe('1.3.7: feedback + fact of the day', () => {
     await assertFails(setDoc(di(admin(), 'q2'), { ...fact, textHi: 'x'.repeat(401) }));
     await assertFails(setDoc(di(admin(), 'q2'), { ...fact, extra: 1 }));
     await assertFails(deleteDoc(di(ctx('bob'), 'd1')));
-    await assertSucceeds(deleteDoc(di(admin(), 'd1')));
+    await assertFails(deleteDoc(di(admin(), 'd1'))); // 1.4.1 (V140-7): a tombstone instead (deleted = true)
   });
 });
 
@@ -1308,7 +1477,7 @@ describe('1.3.8: tester findings V137-1 / V137-5', () => {
   });
 
   test('V137-5: daily items refuse control / zero-width / bidi characters in every text field', async () => {
-    const di = (id, over) => setDoc(doc(admin().firestore(), `dailyItems/${id}`), { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: 'FIVB', sourceUrl: null, active: true, ...over });
+    const di = (id, over) => setDoc(doc(admin().firestore(), `dailyItems/${id}`), { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: 'FIVB', sourceUrl: null, active: true, createdAt: serverTimestamp(), ...over });
     await assertSucceeds(di('c0', {}));
     for (const [k, v] of [['textEn', 'a\nb'], ['textEn', 'a\u0000b'], ['textHi', 'क\u200Bख'], ['attribution', 'FI\u202EVB'], ['textEn', 'x\uFEFF']]) await assertFails(di(`c-${k}`, { [k]: v }));
     const quote = { type: 'quote', textEn: 'Q', textHi: 'क्यू', attribution: 'Someone', sourceUrl: 'https://example.org/q' };
@@ -1418,16 +1587,17 @@ describe('1.3.9: tester findings V138-3 / V138-4', () => {
   });
 
   test('V138-4: daily items refuse the newly listed characters too', async () => {
-    const di = (id, over) => setDoc(doc(admin().firestore(), `dailyItems/${id}`), { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: 'FIVB', sourceUrl: null, active: true, ...over });
+    const di = (id, over) => setDoc(doc(admin().firestore(), `dailyItems/${id}`), { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: 'FIVB', sourceUrl: null, active: true, createdAt: serverTimestamp(), ...over });
     await assertSucceeds(di('n0', {}));
     for (const [i, c] of ['\u00AD', '\u2060', '\u2063', '\u2028', '\u061C', '\u180E', '\u0085'].entries()) await assertFails(di(`n${i + 1}`, { textEn: `Court${c}18` }));
   });
 
-  test('V138-7: dailyItems.createdAt is the server time on create (or absent) and never changes', async () => {
+  test('V138-7: dailyItems.createdAt is the server time on create (1.4.2: required) and never changes', async () => {
     const ref = (id) => doc(admin().firestore(), `dailyItems/${id}`);
     const base = { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: null, sourceUrl: null, active: true };
     await assertSucceeds(setDoc(ref('c1'), { ...base, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }));
-    await assertSucceeds(setDoc(ref('c0'), base)); // a 1.3.8 admin app: no createdAt
+    await assertFails(setDoc(ref('c0'), base)); // 1.4.2 (V141-3): a create without createdAt is refused
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'dailyItems/c0'), base)); // a 1.3.8-era doc
     await assertFails(setDoc(ref('c2'), { ...base, createdAt: new Date(now - 86400000) })); // back-dated
     await assertFails(setDoc(ref('c3'), { ...base, createdAt: new Date(now + 86400000) })); // forward-dated
     const created = (await getDoc(ref('c1'))).get('createdAt');
@@ -1450,5 +1620,1382 @@ describe('1.3.9: tester findings V138-3 / V138-4', () => {
     await assertFails(getDoc(rv('eve', 'bob')));
     await assertFails(setDoc(rv('eve', 'bob'), { checkedAt: serverTimestamp() }, { merge: true }));
     await assertFails(setDoc(doc(ctx('bob').firestore(), 'users/bob/private/other'), { checkedAt: serverTimestamp() }));
+  });
+});
+
+describe('1.4.0: tester findings V139 (real serverTimestamp writes, email claims)', () => {
+  const now = Date.now();
+  const admin = () => env.authenticatedContext('adm', { admin: true });
+  const won3 = { setsA: 3, setsB: 0, currentA: 25, currentB: 0, setScores: [{ a: 25, b: 0 }, { a: 25, b: 0 }, { a: 25, b: 0 }], winner: 'A', serving: 'A' };
+  const log = (n) => Array.from({ length: n }, (_, i) => ({ type: 'point', side: i % 2 ? 'B' : 'A', at: now + i }));
+  const seedDone = (verification) => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'matches/k1'), matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, {
+    status: 'finished', events: log(75), summary: won3, finishedAt: now - 60000, finishedServerAt: new Date(now - 60000),
+    startedServerAt: new Date(now - 3600000), playerOfMatchId: 'p1', createdAt: now, updatedAt: now, ...(verification ? { verification } : {}),
+  })));
+  const k1 = (who) => doc((typeof who === 'string' ? ctx(who) : who).firestore(), 'matches/k1');
+  beforeEach(() => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'terms/adm'), { version: TERMS_VERSION, acceptedAt: new Date() })));
+
+  // The app's own clean() (src/services/backend/firebaseBackend.ts), transpiled from the source, so a
+  // regression like 1.3.8's (sentinels turned into plain maps) fails here and not only on a device.
+  // (1.4.4: clean() moved to firebaseMatchDoc.ts, which firebaseBackend re-exports; loaded from the source)
+  const appClean = require('./appSource')('src/services/backend/firebaseMatchDoc.ts').clean;
+  // 1.3.8's clean(): recursed into every object, so serverTimestamp() became {} – the emulator refuses it
+  const clean138 = (v) => (Array.isArray(v) ? v.map(clean138) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined).map(([k, x]) => [k, clean138(x)])) : v);
+  // firebaseBackend.verify / reviewMatch payloads, field for field
+  const captainWrite = (clean, status) => {
+    const captain = status === 'confirmed' ? 'confirmed' : 'rejected';
+    return updateDoc(k1('eve'), { verification: clean({ status, captain, by: 'eve', at: serverTimestamp(), reason: undefined }), updatedAt: Date.now() });
+  };
+  const reviewWrite = async (clean, decision) => {
+    const s = await getDoc(k1(admin()));
+    const old = s.data().verification ?? {};
+    return updateDoc(k1(admin()), { verification: clean({ by: old.by, at: old.at, reason: old.reason, captain: old.captain ?? undefined, status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: 'adm', reviewedAt: serverTimestamp() }), updatedAt: Date.now() });
+  };
+
+  test('captain confirm and reject through the app\'s clean() with a real serverTimestamp succeed (1.3.8\'s clean() is refused)', async () => {
+    expect(typeof appClean).toBe('function');
+    await seedDone(null);
+    await assertFails(captainWrite(clean138, 'confirmed')); // the bug the 1.3.9 suite missed
+    await assertSucceeds(captainWrite(appClean, 'confirmed'));
+    const v = (await getDoc(k1(admin()))).data().verification;
+    expect(v.at && typeof v.at.toMillis).toBe('function'); // stored as a real timestamp
+    expect(Math.abs(v.at.toMillis() - Date.now())).toBeLessThan(120000);
+    await seedDone(null);
+    await assertSucceeds(captainWrite(appClean, 'disputed'));
+  });
+
+  test('admin review through the app\'s clean() with a real serverTimestamp succeeds after a captain answer and on a flagged match', async () => {
+    await seedDone(null);
+    await assertSucceeds(captainWrite(appClean, 'disputed')); // captain's real-timestamp answer first
+    await assertFails(reviewWrite(clean138, 'approve'));
+    await assertSucceeds(reviewWrite(appClean, 'approve'));
+    const v = (await getDoc(k1(admin()))).data().verification;
+    expect(v.status).toBe('approved');
+    expect(v.captain).toBe('rejected');
+    expect(typeof v.reviewedAt.toMillis).toBe('function');
+    await seedDone(null); // nobody answered
+    await assertSucceeds(reviewWrite(appClean, 'void'));
+    await seedDone(null);
+    await assertSucceeds(captainWrite(appClean, 'confirmed'));
+    await assertSucceeds(reviewWrite(appClean, 'approve'));
+  });
+
+  // ---- V139-3: one email per account ----
+  const okReg = { dob: '2000-05-20', email: null, pincode: '110001', district: null, state: null };
+  const claimId = (e) => e.replace(/%/g, '%25').replace(/\//g, '%2F'); // = core/registration.ts emailClaimId
+  const peek = async (id) => {
+    let out;
+    await env.withSecurityRulesDisabled(async (c) => { const d = await getDoc(doc(c.firestore(), `emails/${id}`)); out = d.exists() ? d.data() : null; });
+    return out;
+  };
+  const save = (uid, email, { claim = true, release = null } = {}) => {
+    const db = ctx(uid).firestore();
+    const b = writeBatch(db);
+    b.set(doc(db, `users/${uid}/private/registration`), { ...okReg, email });
+    if (claim && email) b.set(doc(db, `emails/${claimId(email)}`), { uid });
+    if (release) b.delete(doc(db, `emails/${claimId(release)}`));
+    return b.commit();
+  };
+
+  test('V139-3: a new email must be claimed in the same write; the first account keeps it', async () => {
+    await assertFails(save('bob', 'a@b.in', { claim: false }));
+    await assertSucceeds(save('bob', 'a@b.in'));
+    await assertFails(save('eve', 'a@b.in')); // the claim exists: create becomes an update – refused
+    await assertFails(save('eve', 'a@b.in', { claim: false }));
+    // a claim only for the email the same write stores, only for yourself
+    await assertFails(setDoc(doc(ctx('eve').firestore(), 'emails/x@y.in'), { uid: 'eve' }));
+    const db = ctx('eve').firestore();
+    let b = writeBatch(db);
+    b.set(doc(db, 'users/eve/private/registration'), { ...okReg, email: 'e@y.in' });
+    b.set(doc(db, 'emails/e@y.in'), { uid: 'bob' });
+    await assertFails(b.commit());
+    b = writeBatch(db);
+    b.set(doc(db, 'users/eve/private/registration'), { ...okReg, email: 'e@y.in' });
+    b.set(doc(db, 'emails/e@y.in'), { uid: 'eve', extra: 1 });
+    await assertFails(b.commit());
+    // unchanged email re-saved: no new claim needed
+    await assertSucceeds(save('bob', 'a@b.in', { claim: false }));
+  });
+
+  test('V139-3: claims are private (own or missing only), never listed, never updated', async () => {
+    await assertSucceeds(save('bob', 'a@b.in'));
+    await assertSucceeds(getDoc(doc(ctx('bob').firestore(), 'emails/a@b.in')));
+    await assertFails(getDoc(doc(ctx('eve').firestore(), 'emails/a@b.in'))); // → "email already used" in the app
+    await assertSucceeds(getDoc(doc(ctx('eve').firestore(), 'emails/free@b.in')));
+    await assertFails(getDocs(collection(ctx('bob').firestore(), 'emails')));
+    await assertFails(setDoc(doc(ctx('bob').firestore(), 'emails/a@b.in'), { uid: 'bob' })); // update
+    await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), 'emails/free@b.in')));
+  });
+
+  test('V139-3: changing the email releases the old claim; only the owner, only when no longer stored', async () => {
+    await assertSucceeds(save('bob', 'a@b.in'));
+    await assertFails(deleteDoc(doc(ctx('bob').firestore(), 'emails/a@b.in'))); // still bob's stored email
+    await assertFails(deleteDoc(doc(ctx('eve').firestore(), 'emails/a@b.in')));
+    await assertSucceeds(save('bob', 'c@d.in', { release: 'a@b.in' }));
+    await assertSucceeds(save('eve', 'a@b.in')); // free again
+    await assertSucceeds(save('bob', null, { release: 'c@d.in' })); // removing the email releases too
+    expect(await peek('c@d.in')).toBe(null);
+    expect(await peek('a@b.in')).toEqual({ uid: 'eve' });
+  });
+
+  test('V139-3: a 1.3.7–1.3.9 account (email stored, no claim) can still save; addresses with % or / are escaped', async () => {
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'users/bob/private/registration'), { ...okReg, email: 'old@b.in' }));
+    await assertSucceeds(save('bob', 'old@b.in', { claim: false }));
+    await assertSucceeds(save('bob', 'a/b%c@d.in'));
+    expect(await peek('a%2Fb%25c@d.in')).toEqual({ uid: 'bob' });
+    const src = fs.readFileSync(path.join(__dirname, '../src/core/registration.ts'), 'utf8');
+    expect(src).toContain("key.replace(/%/g, '%25').replace(/\\//g, '%2F')");
+  });
+});
+
+describe('1.4.1: tester findings V140', () => {
+  const admin = () => env.authenticatedContext('adm', { admin: true });
+  beforeEach(() => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'terms/adm'), { version: TERMS_VERSION, acceptedAt: new Date() })));
+  const okReg = { dob: '2000-05-20', email: null, pincode: '110001', district: null, state: null };
+  const claimId = (e) => e.replace(/%/g, '%25').replace(/\//g, '%2F');
+  const peek = async (id) => {
+    let out;
+    await env.withSecurityRulesDisabled(async (c) => { const d = await getDoc(doc(c.firestore(), `emails/${id}`)); out = d.exists() ? d.data() : null; });
+    return out;
+  };
+  const save = (uid, email, { claim = true, release = null } = {}) => {
+    const db = ctx(uid).firestore();
+    const b = writeBatch(db);
+    b.set(doc(db, `users/${uid}/private/registration`), { ...okReg, email });
+    if (claim && email) b.set(doc(db, `emails/${claimId(email)}`), { uid });
+    if (release) b.delete(doc(db, `emails/${claimId(release)}`));
+    return b.commit();
+  };
+
+  test('V140-5: no claim hoarding – changing or removing the email must release the old claim in the same write', async () => {
+    await assertSucceeds(save('eve', 'hoard1@x.in'));
+    await assertFails(save('eve', 'hoard2@x.in')); // keeps hoard1's claim: refused
+    await assertFails(save('eve', null)); // removing without releasing: refused
+    await assertSucceeds(save('eve', 'hoard2@x.in', { release: 'hoard1@x.in' }));
+    expect(await peek('hoard1@x.in')).toBe(null);
+    await assertSucceeds(save('bob', 'hoard1@x.in')); // the victim can use it
+    await assertSucceeds(save('eve', null, { release: 'hoard2@x.in' }));
+    expect(await peek('hoard2@x.in')).toBe(null);
+    // an old address with no claim (1.3.x) or claimed by someone else (FB-9a) needs no release
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'users/eve/private/registration'), { ...okReg, email: 'legacy@x.in' }));
+    await assertSucceeds(save('eve', 'new@x.in'));
+    await env.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), 'users/eve/private/registration'), { ...okReg, email: 'shared@x.in' });
+      await setDoc(doc(c.firestore(), 'emails/shared@x.in'), { uid: 'bob' });
+    });
+    await assertSucceeds(save('eve', 'new2@x.in', { release: null }));
+    expect(await peek('shared@x.in')).toEqual({ uid: 'bob' });
+  });
+
+  test('V140-6: any upper/title-case letter and any Unicode space are refused (not only ASCII A–Z)', async () => {
+    await assertFails(save('bob', 'josÉ@x.in'));
+    await assertFails(save('bob', 'bob2@x.in\u00A0'));
+    await assertFails(save('bob', 'bo\u3000b@x.in'));
+    await assertFails(save('bob', 'ǅx@x.in')); // title case
+    await assertFails(save('bob', 'ΟΔΟΣ@x.in'));
+    await assertSucceeds(save('bob', 'josé@x.in'));
+    await assertSucceeds(save('eve', 'οδοσ@x.in'));
+  });
+
+  const BLANK = { textEn: '', textHi: '', attribution: null, sourceUrl: null };
+  test('V140-7: dailyItems – removedAt is server time, set once; an item that is off is never turned back on in place; no deletes', async () => {
+    const ref = (id) => doc(admin().firestore(), `dailyItems/${id}`);
+    const base = { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: null, sourceUrl: null, active: true };
+    await assertSucceeds(setDoc(ref('r1'), { ...base, createdAt: serverTimestamp() }));
+    const now0 = { createdAt: serverTimestamp() }; // 1.4.2 (V141-3): required on create
+    await assertFails(setDoc(ref('r0'), { ...base, ...now0, removedAt: serverTimestamp() })); // on, but "removed"
+    await assertFails(setDoc(ref('r0'), { ...base, ...now0, active: false })); // created off without the server stamp
+    await assertSucceeds(setDoc(ref('r0'), { ...base, ...now0, active: false, removedAt: serverTimestamp() }));
+    await assertFails(setDoc(ref('r5'), { ...base, ...now0, deleted: true, active: false, removedAt: serverTimestamp(), textEn: '', textHi: '' })); // created deleted
+    const created = (await getDoc(ref('r1'))).get('createdAt');
+    await assertFails(updateDoc(ref('r1'), { active: false })); // off without removedAt
+    await assertFails(updateDoc(ref('r1'), { active: false, removedAt: new Date(Date.now() - DAY) })); // back-dated
+    await assertSucceeds(updateDoc(ref('r1'), { active: false, removedAt: serverTimestamp() }));
+    const removed = (await getDoc(ref('r1'))).get('removedAt');
+    await assertFails(updateDoc(ref('r1'), { removedAt: serverTimestamp() })); // re-stamped
+    await assertFails(updateDoc(ref('r1'), { active: true, removedAt: null })); // back on in place
+    await assertSucceeds(updateDoc(ref('r1'), { textEn: 'Edited while off' }));
+    await assertFails(deleteDoc(ref('r1')));
+    await assertFails(updateDoc(ref('r1'), { deleted: true })); // 1.4.2 (V141-6): a tombstone keeps no text
+    await assertSucceeds(updateDoc(ref('r1'), { deleted: true, ...BLANK }));
+    await assertFails(updateDoc(ref('r1'), { deleted: false }));
+    await assertFails(updateDoc(ref('r1'), { textEn: 'Edited after delete' }));
+    expect((await getDoc(ref('r1'))).get('createdAt')).toEqual(created);
+    expect((await getDoc(ref('r1'))).get('removedAt')).toEqual(removed);
+    // deleting an item that is on: off + deleted + server stamp in one write
+    await assertSucceeds(setDoc(ref('r2'), { ...base, createdAt: serverTimestamp() }));
+    await assertFails(updateDoc(ref('r2'), { deleted: true, ...BLANK })); // still on
+    await assertSucceeds(updateDoc(ref('r2'), { deleted: true, active: false, removedAt: serverTimestamp(), ...BLANK }));
+    // turning back on = a copy (new doc) + the old one marked deleted, in one batch (what the app does)
+    await assertSucceeds(setDoc(ref('r3'), { ...base, ...now0, active: false, removedAt: serverTimestamp() }));
+    const db = admin().firestore();
+    const b = writeBatch(db);
+    b.update(doc(db, 'dailyItems/r3'), { deleted: true, ...BLANK });
+    b.set(doc(db, 'dailyItems/r4'), { ...base, createdAt: serverTimestamp() });
+    await assertSucceeds(b.commit());
+    // a doc turned off before 1.4.1 (no removedAt) stays without one (it is in no cycle; a stamp now would make
+    // it a member of the running cycle and shift today's fact) – editing or deleting it keeps removedAt absent
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'dailyItems/old'), { ...base, active: false }));
+    await assertFails(updateDoc(ref('old'), { deleted: true, removedAt: serverTimestamp(), ...BLANK }));
+    await assertSucceeds(updateDoc(ref('old'), { textEn: 'Edited while off' }));
+    await assertSucceeds(updateDoc(ref('old'), { deleted: true, ...BLANK }));
+  });
+
+  test('V140-8: match createdAt can be neither set at create nor changed by an update', async () => {
+    const A = { teamId: 't1', ids: T1 };
+    const B = { teamId: 't2', ids: T2 };
+    const base = (over = {}) => matchDoc(A, B, { location: PLACE, scheduledAt: Date.now() + DAY, ...over });
+    await assertSucceeds(newMatch(base())); // absent (what the app writes since 1.4.1)
+    await assertFails(newMatch(base({ createdAt: Date.now() }))); // any client value
+    await assertFails(newMatch(base({ createdAt: serverTimestamp() })));
+    await assertFails(newMatch(base({ createdAt: 1 })));
+    await assertFails(newMatch(base({ createdAt: Date.now() - DAY })));
+    await assertFails(newMatch(base({ createdAt: Date.now() + DAY })));
+    await assertFails(newMatch(base({ createdAt: String(Date.now()) })));
+    await assertFails(newMatch(base({ status: 'live', createdAt: 1 })));
+    const m1 = doc(ctx('cap').firestore(), 'matches/m1'); // live, cap scores
+    await assertFails(updateDoc(m1, { createdAt: 1 }));
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'matches/s9'), base({ status: 'scheduled', createdAt: new Date() })));
+    await assertFails(updateDoc(doc(ctx('cap').firestore(), 'matches/s9'), { createdAt: 1 }));
+    await assertSucceeds(updateDoc(doc(ctx('cap').firestore(), 'matches/s9'), { title: 'Renamed' }));
+  });
+});
+
+describe('1.4.2: tester findings V141', () => {
+  const admin = () => env.authenticatedContext('adm', { admin: true });
+  beforeEach(() => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'terms/adm'), { version: TERMS_VERSION, acceptedAt: new Date() })));
+  const okReg = { dob: '2000-05-20', email: null, pincode: '110001', district: null, state: null };
+  const claimId = (e) => e.replace(/%/g, '%25').replace(/\//g, '%2F');
+  // (bob, a registered user with the current T&C; a successful save releases bob's previous claim)
+  let last = null;
+  const save = async (_uid, email) => {
+    const db = ctx('bob').firestore();
+    const b = writeBatch(db);
+    b.set(doc(db, 'users/bob/private/registration'), { ...okReg, email });
+    if (email) b.set(doc(db, `emails/${claimId(email)}`), { uid: 'bob' });
+    if (last) b.delete(doc(db, `emails/${claimId(last)}`));
+    await b.commit();
+    last = email;
+  };
+  beforeEach(() => (last = null));
+  const base = { type: 'fact', textEn: 'Court 18 x 9 m', textHi: 'कोर्ट 18 x 9 मी', attribution: null, sourceUrl: null, active: true };
+  const ref = (id) => doc(admin().firestore(), `dailyItems/${id}`);
+
+  test('V141-3: a daily item create needs createdAt = server time (absent, client or dated values refused)', async () => {
+    await assertFails(setDoc(ref('k1'), base));
+    await assertFails(setDoc(ref('k1'), { ...base, createdAt: null }));
+    await assertFails(setDoc(ref('k1'), { ...base, createdAt: new Date() }));
+    await assertFails(setDoc(ref('k1'), { ...base, createdAt: Date.now() }));
+    await assertSucceeds(setDoc(ref('k1'), { ...base, createdAt: serverTimestamp() }));
+  });
+
+  test('V141-4: capitals RE2 misses or that are not Lu are refused (Mtavruli, Cherokee, Ⓐ, Ⅰ), and unfolded letters', async () => {
+    let n = 0;
+    for (const bad of ['\u1C90x@x.in', '\u13A0x@x.in', '\u24B6x@x.in', '\u2160x@x.in', 'x@\u1C90x.in', 'x@x.\u24B6\u24B7', '\u10A0x@x.in', 'ς1@x.in', 'a\u0345@x.in', 'ſ@x.in'])
+      await assertFails(save(`u${n++}`, bad));
+    // their lower-case forms (what the app stores after emailFold) are fine in the vetted scripts
+    for (const good of ['σ1@x.in', 'aι@x.in'])
+      await assertSucceeds(save(`v${n++}`, good));
+    // 1.4.3 (QA V142-5): Georgian, Cherokee, circled and Roman-numeral forms are outside the allow list now –
+    // the app refuses them too (email_chars), so Firebase never refuses something the app accepted
+    for (const nowBad of ['\u10D0x@x.in', '\uAB70x@x.in', '\u24D0x@x.in', '\u2170x@x.in'])
+      await assertFails(save(`v${n++}`, nowBad));
+  });
+
+  test('V141-5: invisible / filler characters are refused in an address (local part, domain and TLD)', async () => {
+    let n = 0;
+    const inv = ['\u3164', '\u115F', '\u1160', '\uFFA0', '\u034F', '\u2800', '\u200B', '\u2060', '\u206A', '\uFE0F', '\u180B', '\u202E', '\u2066', '\u{E0041}', '\u{1D173}', '\u17B4'];
+    for (const c of inv) {
+      await assertFails(save(`w${n++}`, `bo${c}b@x.in`));
+      await assertFails(save(`w${n++}`, `bob@x${c}.in`));
+      await assertFails(save(`w${n++}`, `bob@x.in${c}`));
+    }
+    await assertSucceeds(save('w-ok', 'bob.k@x.in'));
+  });
+
+  test('V141-6: a deleted daily item keeps no text (public read); a 1.4.1 tombstone with text may only be scrubbed', async () => {
+    const BLANK = { textEn: '', textHi: '', attribution: null, sourceUrl: null };
+    await assertSucceeds(setDoc(ref('t1'), { ...base, createdAt: serverTimestamp() }));
+    await assertFails(updateDoc(ref('t1'), { deleted: true, active: false, removedAt: serverTimestamp() })); // text kept
+    await assertFails(updateDoc(ref('t1'), { deleted: true, active: false, removedAt: serverTimestamp(), textEn: '', textHi: '', attribution: 'x' }));
+    await assertSucceeds(updateDoc(ref('t1'), { deleted: true, active: false, removedAt: serverTimestamp(), ...BLANK }));
+    const pub = (await getDoc(doc(env.unauthenticatedContext().firestore(), 'dailyItems/t1'))).data();
+    expect([pub.textEn, pub.textHi, pub.deleted]).toEqual(['', '', true]);
+    await assertFails(updateDoc(ref('t1'), { textEn: 'back' }));
+    // a quote tombstone needs neither attribution nor source any more
+    await assertSucceeds(setDoc(ref('t2'), { ...base, type: 'quote', attribution: 'A', sourceUrl: 'https://e.org/q', createdAt: serverTimestamp() }));
+    await assertSucceeds(updateDoc(ref('t2'), { deleted: true, active: false, removedAt: serverTimestamp(), ...BLANK }));
+    // a tombstone written by 1.4.1 (text still there): scrubbing is allowed, nothing else
+    const at = new Date(Date.now() - 86400000);
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'dailyItems/t3'), { ...base, active: false, deleted: true, removedAt: at, createdAt: at }));
+    await assertFails(updateDoc(ref('t3'), { textEn: 'Changed' }));
+    await assertFails(updateDoc(ref('t3'), { ...BLANK, deleted: false }));
+    await assertFails(updateDoc(ref('t3'), { ...BLANK, removedAt: serverTimestamp() }));
+    await assertSucceeds(updateDoc(ref('t3'), { ...BLANK }));
+    await assertFails(updateDoc(ref('t3'), { ...BLANK, updatedAt: serverTimestamp() })); // once scrubbed it is frozen
+  });
+
+  test('V141-7: a scheduled time is a safe integer at most 2 years ahead', async () => {
+    const A = { teamId: 't1', ids: T1 };
+    const B = { teamId: 't2', ids: T2 };
+    const mk = (scheduledAt) => newMatch(matchDoc(A, B, { location: PLACE, scheduledAt }));
+    await assertFails(mk(2 ** 53));
+    await assertFails(mk(1e300));
+    await assertFails(mk(Date.now() + 3 * 365 * DAY));
+    await assertSucceeds(mk(Date.now() + 365 * DAY));
+  });
+});
+
+describe('1.4.3: tester findings V142-5/V142-6 (email allow list)', () => {
+  const okReg = { dob: '2000-05-20', email: null, pincode: '110001', district: null, state: null };
+  const claimId = (e) => e.replace(/%/g, '%25').replace(/\//g, '%2F');
+  // each address on its own user (no claim release needed): uid = 'e' + counter
+  let n = 0;
+  const save = async (email) => {
+    const uid = `e${n++}`;
+    PHONES[uid] = PHONES[uid] || `+9198${String(10000000 + n).slice(-8)}`;
+    const db = ctx(uid).firestore();
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), `terms/${uid}`), { version: TERMS_VERSION, acceptedAt: new Date() }));
+    const b = writeBatch(db);
+    b.set(doc(db, `users/${uid}/private/registration`), { ...okReg, email });
+    if (email) b.set(doc(db, `emails/${claimId(email)}`), { uid });
+    return b.commit();
+  };
+  // the app's generated class (src/core/emailChars.ts), transpiled from the source
+  const chars = (() => {
+    const ts = require('../node_modules/typescript');
+    const src = fs.readFileSync(path.join(__dirname, '../src/core/emailChars.ts'), 'utf8');
+    const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019 } }).outputText;
+    const m = { exports: {} };
+    new Function('module', 'exports', js)(m, m.exports);
+    return m.exports;
+  })();
+  const rulesText = fs.readFileSync(path.join(__dirname, '../firestore.rules'), 'utf8');
+  const allowed = new RegExp(`^[${chars.EMAIL_LETTERS}]$`);
+
+  test('V142-5: firestore.rules uses exactly the app\'s generated letters (local part, domain and TLD)', () => {
+    const fn = /function emailLetters\(\) \{\s*return '([^']*)';/.exec(rulesText);
+    expect(fn).not.toBeNull();
+    expect(fn[1]).toBe(chars.EMAIL_LETTERS_RULES);
+    // and the rules class is the same set as the app's (JS reading of both)
+    for (let cp = 0x80; cp < 0x10000; cp++) {
+      const c = String.fromCharCode(cp);
+      if (new RegExp(`^[${fn[1]}]$`, 'u').test(c) !== allowed.test(c)) throw new Error(`differs at U+${cp.toString(16)}`);
+    }
+    expect(/emailOk\(e\) \{\s*let l = emailLetters\(\);\s*return e\.matches\('\^\[-a-z0-9[^']*' \+ l \+ '[^']*' \+ l \+ '[^']*' \+ l \+ '[^']*'\)\s*&& emailJoinOk\(e\)/.test(rulesText)).toBe(true); // 1.4.4: + emailJoinOk / emailPartsOk
+    expect(rulesText).not.toMatch(/\\\\p\{Lu\}/); // the old deny list is gone
+  });
+
+  test('V142-5: every remaining Tester capital (288 RE2 misses) and every non-vetted letter is refused', async () => {
+    // all Lu/Lt in Unicode that RE2 might not know, sampled: every 4th of the BMP+SMP capitals, plus Tester's ones
+    const caps = [];
+    for (let cp = 0x80; cp < 0x20000; cp++) if (/^[\p{Lu}\p{Lt}]$/u.test(String.fromCodePoint(cp))) caps.push(cp);
+    const sample = caps.filter((_, i) => i % 12 === 0).concat([0x1c89, 0xa7cb, 0xa7da, 0x10d50, 0x16ea0, 0x1e900]);
+    for (const cp of sample) await assertFails(save(`a${String.fromCodePoint(cp)}@x.in`));
+    for (const s of ['ⓐ@x.in', 'x@例え.jp', 'محمد@x.in', 'a😀@x.in', 'a℃@x.in', '\u10D0@x.in'])
+      await assertFails(save(s));
+  });
+
+  test('V142-6: every Cf, Cc, Zs, Zl, Zp character (generated from Unicode data) and Co/Cn samples are refused', async () => {
+    const bad = [];
+    for (let cp = 0; cp < 0x110000; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const c = String.fromCodePoint(cp);
+      if (/^[\p{Cf}\p{Cc}\p{Zs}\p{Zl}\p{Zp}]$/u.test(c)) bad.push(c);
+    }
+    expect(bad.length).toBeGreaterThan(250);
+    for (const c of ['\u0378', '\u0A04', '\u{2FFFF}', '\uFDD0']) expect(/^\p{Cn}$/u.test(c)).toBe(true);
+    // Co (private use) and Cn (unassigned) cover ~1M code points: block starts/ends and some in between
+    bad.push('\uE000', '\uF8FF', '\u{F0000}', '\u{10FFFD}', '\u0378', '\u0A04', '\u{2FFFF}', '\uFDD0', '\uFFFE');
+    for (const c of bad) {
+      expect(allowed.test(c)).toBe(false);
+      await assertFails(save(`ab${c}c@x.in`));
+    }
+    // Tester's probes: format characters inside the local part, domain and TLD
+    for (const c of ['\uFFF9', '\uFFFA', '\uFFFB', '\u0600', '\u0605', '\u{13430}', '\u{1BCA0}', '\u{E0001}']) {
+      await assertFails(save(`a${c}b@x.in`));
+      await assertFails(save(`ab@x${c}y.in`));
+      await assertFails(save(`ab@xy.i${c}n`));
+    }
+  }, 300000);
+
+  test('V142-5: what the app accepts is accepted – ASCII signs, Latin/Greek/Cyrillic lower case, Indian scripts', async () => {
+    for (const s of ["o'brien+tag@x.in", 'a.b_c-d@sub.x-y.in', 'josé@x.in', 'çağrı@x.com.tr', 'οδοσ@x.gr', 'иван@почта.рф', 'राम@उदाहरण.भारत', 'ਪੰਜਾਬ@x.in', 'தமிழ்@x.in', 'ಕನ್ನಡ@x.in', 'x@xn--p1ai.in', 'a1!#$%&*/=?^_`{|}~@x.in'])
+      await save(s).catch((e) => { throw new Error(`${s}: ${e.message}`); });
+    // all generated letters pass in the local part (in chunks of 40 per address)
+    const all = [];
+    for (let cp = 0x80; cp < 0x10000; cp++) if (allowed.test(String.fromCharCode(cp))) all.push(String.fromCharCode(cp));
+    expect(all.length).toBe(chars.EMAIL_LETTER_COUNT);
+    for (let i = 0; i < all.length; i += 40) await assertSucceeds(save(`a${all.slice(i, i + 40).join('')}@x.in`));
+  }, 300000);
+});
+
+// ================= 1.4.4: Tester's 1.4.3 findings V143-1..5 + the event cap =================
+// Firebase no longer trusts the stored summary (firestore.rules "the stored summary is NOT trusted"): every
+// probe of qa143.probe.js / qa143b / qa143c is reproduced here and either refused, or accepted with the app
+// showing the result REPLAYED from the events (src/core/replay.ts, what firebaseBackend.matchFrom applies).
+describe('1.4.4: V143-1..5 – untrusted summary, frozen replay inputs, abandon, create budget, event cap', () => {
+  const app = require('./appSource');
+  const { buildMatch } = app('src/core/buildMatch.ts');
+  const FB = app('src/services/backend/firebaseMatchDoc.ts');
+  const { replayStored } = app('src/core/replay.ts');
+  const { MAX_EVENTS } = app('src/core/limits.ts');
+  const { minWinEvents } = app('src/core/matchGuards.ts');
+  const NOW = Date.now();
+  let T0 = NOW - 3 * 3600000;
+  const mkev = (s, extra = {}) => ({ type: 'point', side: s, at: (T0 += 1000), ...extra });
+  const to = (s) => ({ type: 'timeout', side: s, at: (T0 += 1000) });
+  const pts = (s, n) => Array.from({ length: n }, () => mkev(s));
+  const A12 = ['cap', ...Array.from({ length: 11 }, (_, i) => `a${i + 1}`)];
+  const B12 = Array.from({ length: 12 }, (_, i) => `b${i}`);
+  const R3 = { ...RULES, bestOf: 3 };
+  const seedM = (id, over) => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), `matches/${id}`),
+    matchDoc({ ids: A12 }, { ids: B12 }, { title: 'Final', location: PLACE, startedAt: NOW - 7200000, startedServerAt: new Date(NOW - 7200000), updatedAt: NOW, ...over })));
+  const mref = (id, who = 'cap') => doc(ctx(who).firestore(), `matches/${id}`);
+  const peek = async (id) => { let v; await env.withSecurityRulesDisabled(async (c) => { v = (await getDoc(doc(c.firestore(), `matches/${id}`))).data(); }); return v; };
+  // what the app shows for a stored match (firebaseBackend.matchFrom → core replay)
+  const shown = async (id) => { const d = await peek(id); return { ...replayStored(d), status: d.status }; };
+  const finFields = () => ({ status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp() });
+  const fake = (base, over) => ({ ...EMPTY_SUMMARY, ...base, ...over });
+
+  test('MAX_EVENTS (src/core/limits.ts) is the cap in firestore.rules; minWinEvents matches the app', () => {
+    const rules = fs.readFileSync(path.join(__dirname, '../firestore.rules'), 'utf8');
+    expect(MAX_EVENTS).toBe(3000);
+    expect(rules).toContain(`return ns <= ${MAX_EVENTS} && (ns > os`);
+    expect(rules).toContain(`n.size() <= ${MAX_EVENTS} && appendOk`);
+    expect(rules).toMatch(/function minWinEvents\(r\) \{ return \(r\.bestOf \+ 1\) \/ 2 \* r\.pointsPerSet; \}/);
+    expect(minWinEvents(RULES)).toBe(75);
+    expect(minWinEvents(R3)).toBe(50);
+    expect(rules).not.toMatch(/function (summaryStepOk|tallyOk|setDoneOk)\(/);
+  });
+
+  test('S (V143-1): set-ending rallies written as plain +1, re-opened sets, forged final summaries – accepted as display hints, the app shows the replay', async () => {
+    // S1/S1b: 24:23 + A written as current 25:23, then 26:23
+    let ev = [...pts('A', 24), ...pts('B', 23)];
+    await seedM('s1', { status: 'live', events: ev, summary: fake({ currentA: 24, currentB: 23 }), rules: RULES });
+    const nx = [...ev, mkev('A')];
+    await assertSucceeds(updateDoc(mref('s1'), { events: nx, summary: fake({ currentA: 25, currentB: 23 }) }));
+    let s = await shown('s1');
+    expect(s.summary).toMatchObject({ setsA: 1, setsB: 0, currentA: 0, currentB: 0, setScores: [{ a: 25, b: 23 }] }); // the set IS closed
+    expect(s.resultCheck).toBe('summary_mismatch'); // flagged for admin review
+    // S4b: a winner claimed while live, and S8b: serving flipped – the app ignores both
+    ev = pts('A', 24);
+    await seedM('s4', { status: 'live', events: ev, rules: R3, summary: fake({ currentA: 24 }) });
+    await assertSucceeds(updateDoc(mref('s4'), { events: [...ev, mkev('A')], summary: fake({ setsA: 2, winner: 'A', currentA: 25 }) }));
+    s = await shown('s4');
+    expect(s.summary.winner).toBeNull();
+    expect(s.summary.setScores).toEqual([{ a: 25, b: 0 }]);
+    await assertSucceeds(updateDoc(mref('s4'), { summary: fake({ serving: 'B' }) }));
+    expect((await shown('s4')).summary.serving).toBe('B'); // derived from the events: set 2 is served by B (alternating)
+    // S5: two rallies at once, a fake undo – still refused (the event step rules)
+    ev = pts('A', 10);
+    await seedM('s5', { status: 'live', events: ev, rules: RULES });
+    await assertFails(updateDoc(mref('s5'), { events: [...ev, mkev('A'), mkev('A')] }));
+    await assertFails(updateDoc(mref('s5'), { events: [...ev.slice(0, 4), ...ev.slice(5)] }));
+    // S8c / S9: malformed summaries refused; a forged but well-shaped final summary is accepted and ignored
+    await assertFails(updateDoc(mref('s5'), { summary: fake({ currentA: '5' }) }));
+    ev = [...pts('A', 25), ...pts('A', 24)];
+    for (const bad of [fake({ currentA: 'x' }), fake({ currentB: -5 }), fake({ currentA: 199, winner: 'Q' })]) {
+      await seedM('s9', { status: 'live', events: ev, rules: R3 });
+      await assertFails(updateDoc(mref('s9'), { events: [...ev, mkev('A')], summary: bad, ...finFields() }));
+    }
+    await seedM('s9', { status: 'live', events: ev, rules: R3 });
+    await assertSucceeds(updateDoc(mref('s9'), { events: [...ev, mkev('A')], summary: fake({ setsA: 2, currentA: 199, winner: 'A' }), ...finFields() }));
+    s = await shown('s9');
+    expect(s.summary).toMatchObject({ setsA: 2, setsB: 0, winner: 'A', currentA: 25, currentB: 0 });
+  });
+
+  test('W (V143-1/V143-2): Tester\'s full attack – B wins 25:0 25:0 in the events, the summary claims A 52:50 25:0; the app shows B; no abandon after B\'s win', async () => {
+    await seedM('w1', { status: 'live', events: [], rules: R3, summary: EMPTY_SUMMARY });
+    let ev = [];
+    let sum = { ...EMPTY_SUMMARY };
+    const push = async (side, next, extra = {}) => { const nx = [...ev, mkev(side)]; await updateDoc(mref('w1'), { events: nx, summary: next, ...extra }); ev = nx; sum = next; };
+    for (let i = 0; i < 50; i++) await push('B', { ...sum, currentB: sum.currentB + 1, serving: 'B' });
+    // W1a: the events already have a winner (B) – 50 events = the shortest best-of-3 win, so the scorer can't abandon
+    await assertFails(updateDoc(mref('w1'), { status: 'abandoned', finishedAt: Date.now(), updatedAt: Date.now() }));
+    for (let i = 0; i < 51; i++) await push('A', { ...sum, currentA: sum.currentA + 1, serving: 'A' });
+    await push('A', { setsA: 1, setsB: 0, currentA: 0, currentB: 0, setScores: [{ a: 52, b: 50 }], winner: null, serving: 'A' });
+    for (let i = 0; i < 24; i++) await push('A', { ...sum, currentA: sum.currentA + 1, serving: 'A' });
+    await push('A', { setsA: 2, setsB: 0, currentA: 25, currentB: 0, setScores: [{ a: 52, b: 50 }, { a: 25, b: 0 }], winner: 'A', serving: 'A' }, finFields());
+    const st = await peek('w1');
+    expect(st.status).toBe('finished');
+    expect(st.summary.winner).toBe('A'); // what the forged client stored…
+    const s = await shown('w1');
+    expect(s.summary.winner).toBe('B'); // …and what the app shows: the replay (events after the win are ignored)
+    expect(s.summary.setScores).toEqual([{ a: 0, b: 25 }, { a: 0, b: 25 }]);
+    expect(s.resultCheck).toBe('summary_mismatch');
+  });
+
+  test('L (V143-2/V143-3): legacy and create probes; rules frozen once the first rally exists', async () => {
+    // L1/L1b: a live create without / with a fake summary is accepted – the app replays the empty log (0-0)
+    await assertSucceeds(setDoc(mref('l1'), matchDoc({ ids: ['u1', 'u2', 'u3', 'u4', 'u5', 'u6'] }, { ids: ['cap', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6'] }, { ...liveNow(), summary: null, rules: R3 })));
+    await assertSucceeds(setDoc(mref('l1b'), matchDoc({ ids: ['u1', 'u2', 'u3', 'u4', 'u5', 'u6'] }, { ids: ['cap', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6'] }, { ...liveNow(), summary: fake({ setsA: 1, setScores: [{ a: 25, b: 0 }] }), rules: R3 })));
+    expect((await shown('l1b')).summary).toMatchObject({ setsA: 0, setScores: [] });
+    // L1c: created with events – refused
+    await assertFails(setDoc(mref('l1c'), matchDoc({ ids: ['u1', 'u2', 'u3', 'u4', 'u5', 'u6'] }, { ids: ['cap', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6'] }, { ...liveNow(), events: pts('A', 50), rules: R3 })));
+    // L2/L2b: a legacy doc without a summary takes the winning rally, but can no longer be abandoned by the scorer
+    const e49 = pts('A', 49);
+    await env.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), 'matches/l2'), matchDoc({ ids: A12 }, { ids: B12 }, { status: 'live', events: e49, rules: R3, startedAt: NOW - 3600000, startedServerAt: new Date(NOW - 3600000) }));
+      await updateDoc(doc(c.firestore(), 'matches/l2'), { summary: deleteField() });
+    });
+    await assertSucceeds(updateDoc(mref('l2'), { events: [...e49, mkev('A')] }));
+    await assertFails(updateDoc(mref('l2'), { status: 'abandoned', finishedAt: Date.now() }));
+    expect((await shown('l2')).summary.winner).toBe('A');
+    // L3/L4: rules-only write mid-match, and rules + rally – refused (V143-3)
+    const e10 = pts('B', 10);
+    await seedM('l3', { status: 'live', events: e10, rules: R3 });
+    await assertFails(updateDoc(mref('l3'), { rules: { ...R3, pointsPerSet: 11 } }));
+    await assertFails(updateDoc(mref('l3'), { rules: { ...R3, pointsPerSet: 11 }, events: [...e10, mkev('B')] }));
+    await assertFails(updateDoc(mref('l3'), { firstServe: 'B' }));
+    // the live doc in F/LV: lineups of a set already stored can't change mid-match; abandon below the shortest win works
+    const lv = pts('A', 30);
+    await seedM('lv', { status: 'live', events: lv, rules: R3, lineups: { 1: { A: A12.slice(0, 6), B: B12.slice(0, 6) } } });
+    await assertFails(updateDoc(mref('lv'), { lineups: { 1: { A: A12.slice(1, 7), B: B12.slice(0, 6) } }, updatedAt: Date.now() }));
+    await assertSucceeds(updateDoc(mref('lv'), { lineups: { 1: { A: A12.slice(0, 6), B: B12.slice(0, 6) }, 2: { A: A12.slice(1, 7), B: B12.slice(0, 6) } }, updatedAt: Date.now() }));
+    await assertSucceeds(updateDoc(mref('lv'), { status: 'abandoned', finishedAt: Date.now(), updatedAt: Date.now(), abandon: abRec('cap', 30) })); // 30 < 50
+  });
+
+  test('V143-2: a premature "finished" (no winner in the events) is accepted only past the shortest win and shows as flagged, never counted', async () => {
+    const ev = [...pts('A', 25), ...pts('B', 25)]; // 1-1 in sets, 50 events
+    await seedM('pf', { status: 'live', events: ev, rules: R3 });
+    await assertSucceeds(updateDoc(mref('pf'), { summary: fake({ setsA: 2, winner: 'A' }), ...finFields() }));
+    const s = await shown('pf');
+    expect(s.summary.winner).toBeNull();
+    expect(s.resultCheck).toBe('finished_without_winner');
+    const { isCompleted, resultState, matchFlags } = app('src/core/antifraud.ts');
+    const m = { ...(await peek('pf')), ...s, id: 'pf', playerOfMatchId: 'a1', finishedServerAt: Date.now(), startedServerAt: Date.now() - 3600000 };
+    expect(isCompleted(m)).toBe(false);
+    expect(resultState(m)).toBe('flagged');
+    expect(matchFlags(m)).toContain('result_mismatch');
+  });
+
+  // ---- V143-5: the create documents the app really writes (firebaseBackend.createMatch → firebaseMatchDoc.ts) ----
+  const ids = (k, n) => Array.from({ length: n }, (_, i) => `${k}${i}`);
+  const numSide = (k, n) => ({ teamId: null, name: `Side ${k.toUpperCase()}`, color: k === 'u' ? '#123456' : '#654321', players: ids(k, n).map((id) => ({ id, name: id.toUpperCase(), photoURL: null })) });
+  const teamSide = (teamId, members) => ({ teamId, name: teamId === 'ta' ? 'Smashers' : 'Blockers', color: teamId === 'ta' ? '#123456' : '#654321', players: members.map((id) => ({ id, name: id.toUpperCase(), photoURL: null })) });
+  const BIG_PLACE = { name: 'Siri Fort Sports Complex', lat: 28.55, lng: 77.22 };
+  const appDoc = (o) => {
+    const m = buildMatch({ rules: RULES, createdBy: 'cap', scorerId: 'cap', ...o });
+    return FB.matchCreateDoc(FB.matchCreateChecked({ ...m, teamSizeMode: o.teamSizeMode ?? 'custom' }), Date.now(), serverTimestamp);
+  };
+  const SHAPES = {
+    'start now, by number, 6 a side': () => appDoc({ teamA: numSide('u', 6), teamB: numSide('w', 6), startNow: true, scheduledAt: Date.now(), captains: { A: 'u0', B: 'w0' } }),
+    'start now, by number, 12 a side, title + place': () => appDoc({ teamA: numSide('u', 12), teamB: numSide('w', 12), startNow: true, scheduledAt: Date.now(), title: 'Final of the Delhi league', location: BIG_PLACE, captains: { A: 'u0', B: 'w0' } }),
+    'start now, by number, 12 a side, best of 3, custom rules': () => appDoc({ teamA: numSide('u', 12), teamB: numSide('w', 12), startNow: true, scheduledAt: Date.now(), rules: { ...RULES, preset: 'custom', bestOf: 3, pointsPerSet: 21, pointCap: 30, sideSwitchEvery: 7, decidingSideSwitchEvery: 5 }, title: 'Final', location: BIG_PLACE, captains: { A: 'u0', B: 'w0' } }),
+    'team v team 12 a side, live, title + place': () => appDoc({ teamA: teamSide('ta', ['cap', ...ids('u', 11)]), teamB: teamSide('tb', ids('w', 12)), startNow: true, scheduledAt: Date.now(), title: 'Final of the Delhi league', location: BIG_PLACE, captains: { A: 'cap', B: 'w0' } }),
+    'team v team exact 6, scheduled, title + place + time': () => appDoc({ teamA: teamSide('ta', ['cap', ...ids('u', 5)]), teamB: teamSide('tb', ids('w', 6)), scheduledAt: Date.now() + DAY, title: 'League', location: BIG_PLACE, captains: { A: 'cap', B: 'w0' }, teamSizeMode: 'exact' }),
+    'scheduled by number 12 a side, title + place + time (custom)': () => appDoc({ teamA: numSide('u', 12), teamB: numSide('w', 12), scheduledAt: Date.now() + DAY, title: 'Final of the Delhi league', location: BIG_PLACE, captains: { A: 'u0', B: 'w0' } }),
+    'scheduled by number 6 a side, creator not playing, title + place + time': () => appDoc({ teamA: numSide('u', 6), teamB: numSide('w', 6), scheduledAt: Date.now() + DAY, title: 'Friendly', location: BIG_PLACE, captains: { A: 'u0', B: 'w0' } }),
+  };
+  const seedCreate = async (e) => e.withSecurityRulesDisabled(async (c) => {
+    const db = c.firestore();
+    for (const id of [...ids('u', 12), ...ids('w', 12), 'cap']) await setDoc(doc(db, `users/${id}`), { name: id, phone: '+919800000000' });
+    await setDoc(doc(db, 'terms/cap'), { version: TERMS_VERSION, acceptedAt: new Date() });
+    await setDoc(doc(db, 'teams/ta'), { name: 'Smashers', captainId: 'cap', memberIds: ['cap', ...ids('u', 12)], subIds: [], pendingPhones: [] });
+    await setDoc(doc(db, 'teams/tb'), { name: 'Blockers', captainId: 'w0', memberIds: ids('w', 12), subIds: [], pendingPhones: [] });
+  });
+
+  test('V143-5: every real create shape, built by the app\'s own builder, is accepted', async () => {
+    await seedCreate(env);
+    for (const [what, make] of Object.entries(SHAPES)) {
+      try { await assertSucceeds(setDoc(doc(ctx('cap').firestore(), `matches/c${Math.random().toString(36).slice(2)}`), make())); } catch (e) { throw new Error(`${what}: ${e.message}`); }
+    }
+    // and the builder's output still meets the other create checks
+    const d = SHAPES['start now, by number, 6 a side']();
+    await assertFails(setDoc(doc(ctx('cap').firestore(), 'matches/cx1'), { ...d, startedServerAt: new Date(Date.now() - 3600000) }));
+    await assertFails(setDoc(doc(ctx('cap').firestore(), 'matches/cx2'), { ...d, finishedServerAt: serverTimestamp() }));
+    await assertFails(setDoc(doc(ctx('cap').firestore(), 'matches/cx3'), { ...d, playerOfMatchId: 'u1' }));
+  });
+
+  // Headroom: the same writes under rules padded with ~50 (create) / ~150 (update) extra expressions must still pass,
+  // so the real rules keep at least that margin below the 1000-expression limit (emulator count; see RELEASE-1.4.4.md).
+  const padRules = (rules, fn, k) => {
+    const chunks = []; for (let r = k; r > 0; r -= 50) chunks.push(Math.min(50, r));
+    const p = chunks.map((c, i) => `    function pad${fn}${i}() { return ${Array(c).fill('1 == 1').join(' && ')}; }\n`).join('')
+      + `    function pad${fn}() { return ${chunks.map((_, i) => `pad${fn}${i}()`).join(' && ')}; }\n`;
+    const re = new RegExp(`(\\n\\s*function ${fn}\\(\\) \\{\\n(\\s*let [^\\n]*\\n)*\\s*return )`);
+    if (!re.test(rules)) throw new Error(`no ${fn}`);
+    return rules.replace(re, (m) => `\n${p}${m.slice(1)}pad${fn}() && `);
+  };
+  test('V143-5 budget: the create shapes keep ≥ 50 spare expressions; the worst updates (3000 events, 12 v 12 + creator, every extra) ≥ 150', async () => {
+    const base = fs.readFileSync(path.join(__dirname, '../firestore.rules'), 'utf8');
+    const padded = padRules(padRules(base, 'createAllowed', 10), 'updateAllowed', 30); // 1 pad step ≈ 5 expressions
+    const env2 = await initializeTestEnvironment({ projectId: 'demo-headroom', firestore: { rules: padded, ...hostPort(process.env.FIRESTORE_EMULATOR_HOST, 8080) } });
+    WRAP_ENV = env2;
+    try {
+      await env2.clearFirestore();
+      await seedCreate(env2);
+      const c2 = (uid) => env2.authenticatedContext(uid, { phone_number: '+919000000001' }).firestore();
+      for (const [what, make] of Object.entries(SHAPES)) {
+        try { await assertSucceeds(setDoc(doc(c2('cap'), `matches/c${Math.random().toString(36).slice(2)}`), make())); } catch (e) { throw new Error(`${what}: ${e.message}`); }
+      }
+      // worst-case updates: real 28-character uids, MAX_EVENTS credited events
+      const U = (k, i) => `${k}${i}`.padEnd(28, 'x');
+      const PA = ['cap', ...Array.from({ length: 11 }, (_, i) => U('a', i + 1))];
+      const PB = Array.from({ length: 12 }, (_, i) => U('b', i));
+      await env2.withSecurityRulesDisabled(async (c) => {
+        for (const id of [...PA, ...PB, 'bob']) await setDoc(doc(c.firestore(), `users/${id}`), { name: 'x', phone: '+919800000000' });
+        for (const id of ['cap', PB[0]]) await setDoc(doc(c.firestore(), `terms/${id}`), { version: TERMS_VERSION, acceptedAt: new Date() });
+      });
+      const T = NOW - 6 * 3600000;
+      const evs = (n) => Array.from({ length: n }, (_, i) => (i % 7 === 6 ? { type: 'timeout', side: i % 2 ? 'A' : 'B', at: T + i }
+        : { type: 'point', side: i % 2 ? 'B' : 'A', at: T + i, playerId: i % 2 ? PB[5] : PA[5], kind: 'kill' }));
+      const sideOf = (pl, k) => ({ teamId: null, name: `Side ${k}`, color: '#123456', players: pl.map((id) => ({ id, name: 'N', photoURL: null })) });
+      const worst = (over) => ({ title: 'Final of the Delhi league', location: BIG_PLACE, teamA: sideOf(PA, 'A'), teamB: sideOf(PB, 'B'), rules: RULES, firstServe: 'A', events: [], summary: EMPTY_SUMMARY, status: 'live',
+        createdBy: 'bob', scorerId: 'cap', participantIds: [...PA, ...PB, 'bob'], scheduledAt: NOW - 7200000, startedAt: NOW - 7200000, startedServerAt: new Date(NOW - 7200000), finishedAt: null,
+        tournamentId: 'tn1', fixtureId: 'fx1', challengeId: 'ch1', stream: { provider: 'youtube', playbackUrl: 'https://youtu.be/x', live: true }, interestedIds: [], teamSizeMode: 'custom',
+        captains: { A: 'cap', B: PB[0] }, lineups: { 1: { A: PA.slice(0, 6), B: PB.slice(0, 6) } }, updatedAt: NOW, ...over });
+      const N = MAX_EVENTS;
+      const run = async (what, seed, who, write) => {
+        await env2.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'matches/w'), seed));
+        try { await assertSucceeds(updateDoc(doc(c2(who), 'matches/w'), write)); } catch (e) { throw new Error(`${what}: ${e.message}`); }
+      };
+      const done = { status: 'finished', finishedAt: NOW - 60000, finishedServerAt: new Date(NOW - 60000) };
+      const credit = (l, i, p) => l.map((e, j) => (j === i ? { ...e, playerId: p, kind: 'tip' } : e));
+      await run('finishing write at MAX_EVENTS', worst({ events: evs(N - 1) }), 'cap', { events: [...evs(N - 1), { type: 'point', side: 'A', at: NOW, playerId: PA[11], kind: 'ace' }], summary: fake({ setsA: 3, winner: 'A' }), ...finFields(), updatedAt: Date.now() });
+      await run('rally to MAX_EVENTS', worst({ events: evs(N - 1) }), 'cap', { events: [...evs(N - 1), { type: 'point', side: 'B', at: NOW, playerId: PB[11], kind: 'block' }], updatedAt: Date.now() });
+      await run('undo at MAX_EVENTS', worst({ events: evs(N) }), 'cap', { events: evs(N - 1), updatedAt: Date.now() });
+      await run('re-credit two of the last 3 (live)', worst({ events: evs(N) }), 'cap', { events: credit(credit(evs(N), N - 2, PA[8]), N - 3, PB[9]), updatedAt: Date.now() });
+      await run('re-credit on the finished match', worst({ events: evs(N), ...done }), 'cap', { events: credit(evs(N), N - 3, PB[9]), updatedAt: Date.now() });
+      await run('POTM', worst({ events: evs(N), ...done }), 'cap', { playerOfMatchId: PB[11], updatedAt: Date.now() });
+      await run('captain B confirms', worst({ events: evs(N), ...done, playerOfMatchId: PA[3] }), PB[0], { verification: { status: 'confirmed', by: PB[0], at: serverTimestamp(), captain: 'confirmed' }, updatedAt: Date.now() });
+      await run('next set\'s lineup', worst({ events: evs(N - 10) }), 'cap', { lineups: { 1: { A: PA.slice(0, 6), B: PB.slice(0, 6) }, 2: { A: PA.slice(1, 7), B: PB.slice(0, 6) } }, updatedAt: Date.now() });
+      // the event cap itself
+      await env2.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'matches/w'), worst({ events: evs(N) })));
+      await assertFails(updateDoc(doc(c2('cap'), 'matches/w'), { events: [...evs(N), { type: 'point', side: 'A', at: NOW }], updatedAt: Date.now() }));
+    } finally {
+      WRAP_ENV = null;
+      await env2.cleanup();
+    }
+  }, 300000);
+
+  test('Info: the 2001st event of a legal long match is accepted now (Tester\'s B7)', async () => {
+    const R99 = { ...RULES, pointsPerSet: 99, decidingSetPoints: 99 };
+    const e2 = Array.from({ length: 2000 }, (_, i) => (i % 3 === 2 ? to(i % 2 ? 'A' : 'B') : mkev(i % 2 ? 'B' : 'A')));
+    await seedM('b7', { status: 'live', events: e2, rules: R99 });
+    await assertSucceeds(updateDoc(mref('b7'), { events: [...e2, mkev('A')] }));
+  });
+});
+
+describe('1.4.4: V143-6 (unchanged email passes; wide list prepared, inactive) and V143-10 (email structure)', () => {
+  const okReg = { dob: '2000-05-20', email: null, pincode: '110001', district: null, state: null };
+  const claimId = (e) => e.replace(/%/g, '%25').replace(/\//g, '%2F');
+  const L = require('../scripts/emailLists');
+  let n = 0;
+  // a fresh user on `e` (env), optionally with a stored registration (written as an older build / the console did)
+  const user = async (e, stored) => {
+    const uid = `v${n++}`;
+    PHONES[uid] = `+9197${String(10000000 + n).slice(-8)}`;
+    await e.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), `terms/${uid}`), { version: TERMS_VERSION, acceptedAt: new Date() });
+      if (stored !== undefined) await setDoc(doc(c.firestore(), `users/${uid}/private/registration`), { ...okReg, email: stored });
+    });
+    return { uid, db: e.authenticatedContext(uid, { phone_number: PHONES[uid] }).firestore() };
+  };
+  const saveNew = async (e, email) => {
+    const { uid, db } = await user(e);
+    const b = writeBatch(db);
+    b.set(doc(db, `users/${uid}/private/registration`), { ...okReg, email });
+    if (email) b.set(doc(db, `emails/${claimId(email)}`), { uid });
+    return b.commit();
+  };
+
+  test('V143-6: a stored out-of-list / old-format address doesn\'t block a pincode save (Tester\'s probes); changing it to another bad one is refused', async () => {
+    for (const legacy of ['张伟@example.com', 'a\u200bb@x.in', 'ab@ex..com', 'a@-x.in', `${'a'.repeat(70)}@x.in`]) {
+      const { uid, db } = await user(env, legacy);
+      await assertSucceeds(setDoc(doc(db, `users/${uid}/private/registration`), { ...okReg, email: legacy, pincode: '400001' }));
+      await assertFails(setDoc(doc(db, `users/${uid}/private/registration`), { ...okReg, email: `x${legacy}`, pincode: '400001' }));
+      await assertSucceeds(setDoc(doc(db, `users/${uid}/private/registration`), { ...okReg, email: null, pincode: '400001' }));
+    }
+    await assertFails(saveNew(env, '张伟@example.com')); // still no new user can use it
+  });
+
+  test('V143-10: double/leading/trailing dots, local part > 64, domain labels starting or ending with "-" are refused, like the app', async () => {
+    for (const bad of ['.a@x.in', 'a.@x.in', 'a..b@x.in', 'a@x..in', `${'a'.repeat(65)}@x.in`, 'a@-x.in', 'a@x-.in', 'a@x.-in', 'a@x.in-', 'a@.x.in'])
+      await assertFails(saveNew(env, bad));
+    for (const ok of ['a.b@x.in', `${'a'.repeat(64)}@x.in`, 'a-@x.in', 'a@x-y.in', 'a-.b@x.in', 'अ.ब@उदाहरण.भारत'])
+      await assertSucceeds(saveNew(env, ok));
+  });
+
+  test('V143-6: the rules carry the ACTIVE list (narrow in 1.4.4) and the generator is up to date', () => {
+    const rulesText = fs.readFileSync(path.join(__dirname, '../firestore.rules'), 'utf8');
+    expect(L.BLOCK_RE.exec(rulesText)[0]).toBe(L.rulesBlock(false));
+    expect(require('child_process').spawnSync(process.execPath, [path.join(__dirname, '../scripts/gen-email-chars.js'), '--check']).status).toBe(0);
+  });
+
+  test('V143-6: the prepared WIDE rules (generated block swapped in) accept/refuse exactly like checkEmail(…, true)', async () => {
+    const base = fs.readFileSync(path.join(__dirname, '../firestore.rules'), 'utf8');
+    const wide = base.replace(L.BLOCK_RE, () => L.rulesBlock(true));
+    const env2 = await initializeTestEnvironment({ projectId: 'demo-emailwide', firestore: { rules: wide, ...hostPort(process.env.FIRESTORE_EMULATOR_HOST, 8080) } });
+    const { checkEmail } = require('./appSource')('src/core/registration.ts');
+    try {
+      await env2.clearFirestore();
+      const cases = [
+        'ᱚᱞᱪᱤᱠᱤ@x.in', 'ᱥᱟᱱᱛᱟᱲᱤ᱑᱒@x.in', 'ꯃꯤꯇꯩ@x.in', 'علی@x.in', 'پاکستان۱۲@x.in', 'کٲشُر@x.in', 'a@ھندی.in',
+        'क्\u200Dष@x.in', 'क्\u200Cष@x.in', 'ক্\u200Cষ@x.in', 'a@क्\u200Dष.in', 'क\u200Cख\u200Dग@x.in', 'asha@x.in', 'अ.ब@उदाहरण.भारत',
+        'ع\u0600@x.in', 'عـلی@x.in', 'ع٠@x.in', 'ᱚ᱾@x.in', 'ꯃ꯫@x.in', '张@x.in', '\u200Dक@x.in', 'क\u200D@x.in', 'a\u200Db@x.in',
+        'क\u200Dক@x.in', 'क\u200C\u200Dख@x.in', 'ع\u200Cع@x.in', 'ᱚ\u200Dᱞ@x.in', 'क\u200D1@x.in', 'a..b@x.in', 'a@-x.in',
+      ];
+      const wrong = [];
+      for (const e of cases) {
+        let app = true;
+        try { checkEmail(e, true); } catch { app = false; }
+        let rules = true;
+        try { await assertSucceeds(saveNew(env2, e)); } catch { rules = false; }
+        if (app !== rules) wrong.push(`${JSON.stringify(e)} app=${app} rules=${rules}`);
+      }
+      expect(wrong).toEqual([]);
+      // the wide rules' regular expressions stay under Firestore's 4096-character limit
+      expect(L.rulesBlock(true).split('\n')[5].length).toBeLessThan(4096);
+    } finally {
+      await env2.cleanup();
+    }
+  });
+});
+
+// ================= 1.4.5: Tester's 1.4.4 findings V144-1..4, V144-8 and the PRD roster gap =================
+// The abandon policy is NOT decided (Akshit): 'review' is the INTERIM default (src/core/abandonPolicy.ts); 'consent'
+// is tested under a rules variant with the policy line switched (scripts/gen-abandon-policy.js writes the real one).
+describe('1.4.5: abandon (maxEvents, wasWon, record, report, consent), admin resolve, handover, rosters', () => {
+  const app = require('./appSource');
+  const { ABANDON_POLICY } = app('src/core/abandonPolicy.ts');
+  const NOW = Date.now();
+  let T0 = NOW - 3 * 3600000;
+  const mkev = (s) => ({ type: 'point', side: s, at: (T0 += 1000) });
+  const pts = (s, n) => Array.from({ length: n }, () => mkev(s));
+  const A12 = ['cap', ...Array.from({ length: 11 }, (_, i) => `a${i + 1}`)];
+  const B12 = Array.from({ length: 12 }, (_, i) => `b${i}`);
+  const R3 = { ...RULES, bestOf: 3 }; // shortest win 50
+  const BO1 = { ...RULES, bestOf: 1, decidingSetPoints: 25 }; // shortest win 25
+  const seedM = (id, over, e = env) => e.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), `matches/${id}`),
+    matchDoc({ ids: A12 }, { ids: B12 }, { title: 'Final', location: PLACE, status: 'live', rules: R3, startedAt: NOW - 7200000, startedServerAt: new Date(NOW - 7200000), updatedAt: NOW, ...over })));
+  const as = (who, claims = {}, e = env) => e.authenticatedContext(who, { phone_number: '+919000000009', ...claims }).firestore();
+  const mref = (id, who = 'cap', claims, e) => doc(claims || e ? as(who, claims, e) : ctx(who).firestore(), `matches/${id}`);
+  const adm = (id, who = 'adm', e) => mref(id, who, { admin: true }, e);
+  const peek = async (id) => { let v; await env.withSecurityRulesDisabled(async (c) => { v = (await getDoc(doc(c.firestore(), `matches/${id}`))).data(); }); return v; };
+  const ab = (n) => ({ status: 'abandoned', finishedAt: Date.now(), updatedAt: Date.now() });
+  const seedTerms = (e, ids) => e.withSecurityRulesDisabled(async (c) => {
+    for (const id of ids) await setDoc(doc(c.firestore(), `terms/${id}`), { version: TERMS_VERSION, acceptedAt: new Date() });
+  });
+  beforeEach(() => seedTerms(env, ['adm', 'b0', 'b1', 'a1']));
+
+  test('policy: the rules carry ABANDON_POLICY (interim "review") and the generator agrees', () => {
+    const rules = fs.readFileSync(path.join(__dirname, '../firestore.rules'), 'utf8');
+    expect(ABANDON_POLICY).toBe('review');
+    expect(rules).toContain(`function abandonPolicy() { return '${ABANDON_POLICY}'; }`);
+    expect(require('child_process').spawnSync(process.execPath, [path.join(__dirname, '../scripts/gen-abandon-policy.js'), '--check']).status).toBe(0);
+  });
+
+  test('V144-1: every events write states maxEvents = max(stored, new length); undo never lowers it', async () => {
+    const e10 = pts('A', 10);
+    await seedM('mx', { events: e10 });
+    await assertFails(rawUpdateDoc(mref('mx'), { events: [...e10, mkev('B')] })); // missing
+    await assertFails(rawUpdateDoc(mref('mx'), { events: [...e10, mkev('B')], maxEvents: 10 })); // too low
+    await assertFails(rawUpdateDoc(mref('mx'), { events: [...e10, mkev('B')], maxEvents: 40 })); // inflated
+    await assertSucceeds(rawUpdateDoc(mref('mx'), { events: [...e10, mkev('B')], maxEvents: 11 }));
+    await assertFails(rawUpdateDoc(mref('mx'), { events: e10, maxEvents: 10 })); // undo lowering it
+    await assertSucceeds(rawUpdateDoc(mref('mx'), { events: e10, maxEvents: 11 }));
+    await assertFails(rawUpdateDoc(mref('mx'), { maxEvents: 0 })); // alone
+    expect((await peek('mx')).maxEvents).toBe(11);
+  });
+
+  test('V144-1 (Tester\'s undo bypass): undoing below the shortest win doesn\'t re-open the scorer\'s abandon', async () => {
+    const e60 = [...pts('A', 25), ...pts('B', 25), ...pts('A', 10)];
+    await seedM('ub', { events: e60, maxEvents: 60 });
+    await assertSucceeds(rawUpdateDoc(mref('ub'), { events: e60.slice(0, 59), maxEvents: 60 })); // one undo step
+    // … 11 steps later the log is back at 49 (< 50) but maxEvents stays 60
+    await seedM('ub', { events: e60.slice(0, 49), maxEvents: 60 });
+    await assertFails(updateDoc(mref('ub'), { ...ab(), abandon: abRec('cap', 49) }));
+    // an older doc without maxEvents counts its current log
+    await seedM('ub2', { events: e60 });
+    await assertFails(rawUpdateDoc(mref('ub2'), { events: e60.slice(0, 49), maxEvents: 49 }));
+  });
+
+  test('V144-1 (Tester\'s bo1 0:24): the abandon after the first rally needs the review record; never the opposing side', async () => {
+    await seedM('b1', { rules: BO1, events: pts('B', 24) });
+    await assertFails(updateDoc(mref('b1'), ab())); // no record
+    await assertFails(updateDoc(mref('b1'), { ...ab(), abandon: abRec('cap', 24, { mode: 'flag' }) })); // not the policy
+    await assertFails(updateDoc(mref('b1'), { ...ab(), abandon: abRec('cap', 24, { review: 'confirmed' }) })); // self-confirmed
+    await assertFails(updateDoc(mref('b1'), { ...ab(), abandon: abRec('cap', 20) })); // wrong count
+    await assertFails(updateDoc(mref('b1'), { ...ab(), abandon: abRec('cap', 24, { at: new Date() }) })); // client time
+    await assertFails(updateDoc(mref('b1'), { ...ab(), abandon: abRec('a1', 24) })); // someone else named
+    await assertFails(updateDoc(mref('b1'), { ...ab(), abandon: abRec('cap', 24, { reportedBy: 'b0', reportedAt: serverTimestamp() }) })); // a fake report
+    await assertFails(updateDoc(mref('b1'), { ...ab(), abandon: abRec('cap', 24, { reviewedBy: 'adm', reviewedAt: serverTimestamp() }) })); // a fake review
+    await assertFails(updateDoc(mref('b1', 'b0'), { ...ab(), abandon: abRec('b0', 24) })); // not the scorer
+    await assertSucceeds(updateDoc(mref('b1'), { ...ab(), abandon: abRec('cap', 24, { score: { setsA: 0, setsB: 0, currentA: 0, currentB: 24 }, behind: true }) }));
+    const d = await peek('b1');
+    expect(d.status).toBe('abandoned');
+    expect(d.abandon).toMatchObject({ by: 'cap', events: 24, mode: 'review', review: 'pending', behind: true });
+    // before the first rally: abandoned directly, and a record is refused
+    await seedM('b2', { rules: BO1, events: [] });
+    await assertFails(updateDoc(mref('b2'), { ...ab(), abandon: abRec('cap', 0) }));
+    await assertSucceeds(updateDoc(mref('b2'), ab()));
+    // the record can't be added outside an abandon
+    await seedM('b3', { rules: BO1, events: pts('A', 3) });
+    await assertFails(updateDoc(mref('b3'), { abandon: abRec('cap', 3), updatedAt: Date.now() }));
+  });
+
+  test('V144-1/V144-4: rules / first serve stay frozen after an undo back to 0 (no raising the shortest win)', async () => {
+    await seedM('rz', { rules: BO1, events: [], maxEvents: 24 });
+    await assertFails(updateDoc(mref('rz'), { rules: RULES, updatedAt: Date.now() }));
+    await assertFails(updateDoc(mref('rz'), { firstServe: 'B', updatedAt: Date.now() }));
+    await seedM('rz2', { rules: BO1, events: [] });
+    await assertSucceeds(updateDoc(mref('rz2'), { rules: RULES, updatedAt: Date.now() }));
+  });
+
+  test('V144-1: wasWon latches – a match that was ever won can\'t be abandoned by its scorer; finishing must set it', async () => {
+    const e50 = pts('A', 50);
+    await seedM('ww', { events: e50.slice(0, 49), maxEvents: 49 });
+    await assertFails(rawUpdateDoc(mref('ww'), { events: e50, maxEvents: 50, summary: EMPTY_SUMMARY, status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp() }));
+    await assertFails(rawUpdateDoc(mref('ww'), { events: e50, maxEvents: 50, wasWon: false, summary: EMPTY_SUMMARY, status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp() }));
+    await assertSucceeds(rawUpdateDoc(mref('ww'), { events: e50, maxEvents: 50, wasWon: true, summary: EMPTY_SUMMARY, status: 'finished', finishedAt: Date.now(), finishedServerAt: serverTimestamp() }));
+    await seedM('ww2', { events: pts('A', 20), maxEvents: 20, wasWon: true });
+    await assertFails(updateDoc(mref('ww2'), { ...ab(), abandon: abRec('cap', 20) }));
+    await assertFails(rawUpdateDoc(mref('ww2'), { wasWon: false, updatedAt: Date.now() })); // never cleared by the scorer
+  });
+
+  test('report: the opposing captain sends an abandoned match to admin review; nobody else, once', async () => {
+    await seedM('rp', { status: 'abandoned', events: pts('B', 20), maxEvents: 20, finishedAt: NOW - 60000, abandon: { by: 'cap', at: new Date(NOW - 60000), events: 20, mode: 'review', review: 'pending', behind: true } });
+    const rep = (who) => updateDoc(mref('rp', who), { abandon: { by: 'cap', at: new Date(NOW - 60000), events: 20, mode: 'review', review: 'pending', behind: true, reportedBy: who, reportedAt: serverTimestamp() }, updatedAt: Date.now() });
+    await assertFails(rep('a1')); // same side as the abandoner
+    await assertFails(rep('cap'));
+    await assertFails(rep('b1')); // not a captain
+    await assertSucceeds(rep('b0'));
+    await assertFails(rep('b0')); // once
+    // 1.4.6 (V145-11): a legacy abandoned match (no record) can't be reported – it is in admin review on its own
+    await seedM('rp2', { status: 'abandoned', events: pts('B', 20), finishedAt: NOW - 60000 });
+    await assertFails(updateDoc(mref('rp2', 'b0'), { abandon: { mode: 'legacy', events: 20, review: 'pending', reportedBy: 'b0', reportedAt: serverTimestamp() }, updatedAt: Date.now() }));
+  });
+
+  test('V144-1/V144-3: an admin who isn\'t part of the match confirms or reinstates; a participant admin can\'t', async () => {
+    const rec = { by: 'cap', at: new Date(NOW - 60000), events: 20, mode: 'review', review: 'pending', behind: true };
+    await seedM('ar', { status: 'abandoned', events: pts('B', 20), maxEvents: 20, finishedAt: NOW - 60000, abandon: rec });
+    const confirm = (ref) => updateDoc(ref, { abandon: { ...rec, review: 'confirmed', reviewedBy: ref.firestore._authCredentials ? 'x' : 'adm', reviewedAt: serverTimestamp() }, updatedAt: Date.now() });
+    await assertFails(updateDoc(adm('ar', 'cap'), { abandon: { ...rec, review: 'confirmed', reviewedBy: 'cap', reviewedAt: serverTimestamp() }, updatedAt: Date.now() })); // participant
+    await assertFails(updateDoc(adm('ar', 'b0'), { abandon: { ...rec, review: 'confirmed', reviewedBy: 'b0', reviewedAt: serverTimestamp() }, updatedAt: Date.now() })); // captain
+    await assertFails(updateDoc(mref('ar', 'bob'), { abandon: { ...rec, review: 'confirmed', reviewedBy: 'bob', reviewedAt: serverTimestamp() }, updatedAt: Date.now() })); // not an admin
+    await assertFails(updateDoc(adm('ar'), { abandon: { ...rec, events: 1, review: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() }, updatedAt: Date.now() })); // record rewritten
+    // reinstate: back to live (no winner in the log)
+    await assertSucceeds(updateDoc(adm('ar'), { status: 'live', finishedAt: null, abandon: { ...rec, review: 'reinstated', reviewedBy: 'adm', reviewedAt: serverTimestamp() }, updatedAt: Date.now() }));
+    expect((await peek('ar')).status).toBe('live');
+    void confirm;
+    await seedM('ac', { status: 'abandoned', events: pts('B', 20), maxEvents: 20, finishedAt: NOW - 60000, abandon: rec });
+    await assertSucceeds(updateDoc(adm('ac'), { abandon: { ...rec, review: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() }, updatedAt: Date.now() }));
+    await assertFails(updateDoc(adm('ac'), { status: 'live', finishedAt: null, abandon: { ...rec, review: 'reinstated', reviewedBy: 'adm', reviewedAt: serverTimestamp() }, updatedAt: Date.now() })); // decided
+    // an admin abandons a long live match (the scorer can't) – with the admin record
+    await seedM('al', { events: pts('A', 60), maxEvents: 60 });
+    await assertFails(updateDoc(mref('al'), { ...ab(), abandon: abRec('cap', 60) }));
+    await assertFails(updateDoc(adm('al', 'cap'), { ...ab(), abandon: abRec('cap', 60, { mode: 'admin', review: 'confirmed', reviewedBy: 'cap', reviewedAt: serverTimestamp() }) }));
+    await assertSucceeds(updateDoc(adm('al'), { ...ab(), abandon: abRec('adm', 60, { mode: 'admin', review: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() }) }));
+  });
+
+  test('V144-2 / V145-2: a finished match without a winner – the admin reopens it as live, abandons it or voids it', async () => {
+    const ev = [...pts('A', 25), ...pts('B', 5)]; // 1-0 in sets, 30 events: shorter than the shortest win (50)
+    const fin = { status: 'finished', events: ev, maxEvents: 30, wasWon: true, finishedAt: NOW - 60000, finishedServerAt: new Date(NOW - 60000) };
+    await seedM('wl', fin);
+    const reopen = (ref, by, over = {}) => updateDoc(ref, { status: 'live', finishedAt: null, finishedServerAt: null, wasWon: false, reopenEpoch: 1, resolution: { action: 'reopened', by, at: serverTimestamp(), epoch: 1 }, updatedAt: Date.now(), ...over });
+    await assertFails(reopen(adm('wl', 'cap'), 'cap'));
+    await assertFails(reopen(mref('wl', 'bob'), 'bob'));
+    await assertFails(updateDoc(adm('wl'), { status: 'live', finishedAt: null, finishedServerAt: null, updatedAt: Date.now() })); // no record
+    await assertFails(reopen(adm('wl'), 'adm', { reopenEpoch: 0, resolution: { action: 'reopened', by: 'adm', at: serverTimestamp() } })); // 1.4.6: no new epoch
+    await assertSucceeds(reopen(adm('wl'), 'adm'));
+    const d = await peek('wl');
+    expect(d).toMatchObject({ status: 'live', wasWon: false, reopenEpoch: 1, resolution: { action: 'reopened', by: 'adm', epoch: 1 } });
+    await seedM('wl2', fin);
+    await assertSucceeds(updateDoc(adm('wl2'), { ...ab(), finishedServerAt: null, abandon: abRec('adm', 30, { mode: 'admin', review: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() }) }));
+    // 1.4.6 (V145-2): a log as long as the shortest win (50) might be won – only void is left
+    const fin50 = { ...fin, events: [...pts('A', 25), ...pts('B', 25)], maxEvents: 50 };
+    await seedM('wl4', fin50);
+    await assertFails(reopen(adm('wl4'), 'adm'));
+    await assertFails(updateDoc(adm('wl4'), { ...ab(), finishedServerAt: null, abandon: abRec('adm', 50, { mode: 'admin', review: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() }) }));
+    const fin3 = fin50;
+    await seedM('wl3', fin3);
+    await assertFails(updateDoc(adm('wl3', 'cap'), { verification: { status: 'voided', reviewedBy: 'cap', reviewedAt: serverTimestamp() }, updatedAt: Date.now() }));
+    await assertSucceeds(updateDoc(adm('wl3'), { verification: { status: 'voided', reviewedBy: 'adm', reviewedAt: serverTimestamp() }, updatedAt: Date.now() }));
+  });
+
+  test('V144-8 (interim): after the first rally scoring is handed only within the scorer\'s side; an admin reassigns with a record; the verdict stays with the side', async () => {
+    await seedM('h0', { events: [] });
+    // before the first rally: anyone – 1.4.7 (QA V146-3): except the other (verdict) team
+    await assertFails(updateDoc(mref('h0'), { scorerId: 'b1', updatedAt: Date.now() }));
+    await assertSucceeds(updateDoc(mref('h0'), { scorerId: 'a2', updatedAt: Date.now() }));
+    await seedM('h1', { events: pts('A', 5), maxEvents: 5 });
+    await assertFails(updateDoc(mref('h1'), { scorerId: 'b1', updatedAt: Date.now() })); // the other side
+    await assertSucceeds(updateDoc(mref('h1'), { scorerId: 'a1', updatedAt: Date.now() }));
+    await assertFails(updateDoc(mref('h1', 'a1'), { scorerId: 'b1', updatedAt: Date.now() }));
+    // a handoff never touches the abandon / verdict state
+    await assertFails(updateDoc(mref('h1', 'a1'), { scorerId: 'a2', maxEvents: 0, updatedAt: Date.now() }));
+    // admin: anyone among the participants, recorded (from = the original scorer)
+    await seedM('h2', { events: pts('A', 5), maxEvents: 5 });
+    await assertFails(updateDoc(adm('h2'), { scorerId: 'b1', updatedAt: Date.now() })); // no record
+    await assertFails(updateDoc(adm('h2', 'b0'), { scorerId: 'b1', scorerReassign: { from: 'cap', to: 'b1', by: 'b0', at: serverTimestamp() }, updatedAt: Date.now() })); // participant admin
+    await assertFails(updateDoc(adm('h2'), { scorerId: 'zz', scorerReassign: { from: 'cap', to: 'zz', by: 'adm', at: serverTimestamp() }, updatedAt: Date.now() })); // not a participant
+    // 1.4.7 (QA V146-2): never to the verdict captain's team (B) – the scorer's own side
+    await assertFails(updateDoc(adm('h2'), { scorerId: 'b1', scorerReassign: { from: 'cap', to: 'b1', by: 'adm', at: serverTimestamp() }, updatedAt: Date.now() }));
+    await assertSucceeds(updateDoc(adm('h2'), { scorerId: 'a1', scorerReassign: { from: 'cap', to: 'a1', by: 'adm', at: serverTimestamp() }, updatedAt: Date.now() }));
+    await assertFails(updateDoc(adm('h2'), { scorerId: 'a2', scorerReassign: { from: 'a1', to: 'a2', by: 'adm', at: serverTimestamp() }, updatedAt: Date.now() })); // from stays the original
+    await assertSucceeds(updateDoc(adm('h2'), { scorerId: 'a2', scorerReassign: { from: 'cap', to: 'a2', by: 'adm', at: serverTimestamp() }, updatedAt: Date.now() }));
+    // verdict: the captain opposite the ORIGINAL scorer (side A) – B's captain answers, A's can't
+    const won = { setsA: 2, setsB: 0, currentA: 0, currentB: 0, setScores: [{ a: 25, b: 0 }, { a: 25, b: 0 }], winner: 'A', serving: 'A' };
+    await seedM('h3', { status: 'finished', events: pts('A', 50), maxEvents: 50, wasWon: true, summary: won, finishedAt: NOW - 60000, finishedServerAt: new Date(NOW - 60000), playerOfMatchId: 'a1', scorerId: 'b2', scorerReassign: { from: 'cap', to: 'b2', by: 'adm', at: new Date(NOW - 120000) }, createdBy: 'bob', participantIds: [...A12, ...B12, 'bob'] });
+    await seedTerms(env, ['bob']);
+    const verdict = (who) => updateDoc(mref('h3', who), { verification: { status: 'confirmed', by: who, at: serverTimestamp(), captain: 'confirmed' }, updatedAt: Date.now() });
+    await assertFails(verdict('cap'));
+    await assertSucceeds(verdict('b0'));
+  });
+
+  test('PRD gap: a set\'s lineup is a subset of the participants; one set per write', async () => {
+    await seedM('lu', { events: pts('A', 3), maxEvents: 3 });
+    await assertFails(updateDoc(mref('lu'), { lineups: { 1: { A: ['cap', 'a1', 'a2', 'a3', 'a4', 'zz'], B: B12.slice(0, 6) } }, updatedAt: Date.now() }));
+    await assertFails(updateDoc(mref('lu'), { lineups: { 1: { A: A12.slice(0, 6), B: B12.slice(0, 6) }, 2: { A: A12.slice(0, 6), B: B12.slice(0, 6) } }, updatedAt: Date.now() }));
+    await assertSucceeds(updateDoc(mref('lu'), { lineups: { 1: { A: A12.slice(0, 6), B: B12.slice(0, 6) } }, updatedAt: Date.now() }));
+  });
+
+  test('PRD gap: the captain of a side built by number must have a profile (also outside the first 3 players)', async () => {
+    const A = ['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'ghost'];
+    const B = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6'];
+    const mk = (capA) => matchDoc({ ids: A }, { ids: B }, { captains: { A: capA, B: 'w1' }, participantIds: ordered(A, B, ['cap']) });
+    await assertFails(setDoc(doc(ctx('cap').firestore(), 'matches/cg1'), mk('ghost')));
+    await assertSucceeds(setDoc(doc(ctx('cap').firestore(), 'matches/cg2'), mk('u5')));
+    await assertSucceeds(setDoc(doc(ctx('cap').firestore(), 'matches/cg3'), mk('u2')));
+    // a side of 2: its captain is one of them (the slice never reaches the other side)
+    const two = matchDoc({ ids: ['u1', 'u2'] }, { ids: B }, { captains: { A: 'w1', B: 'w2' } });
+    await assertFails(setDoc(doc(ctx('cap').firestore(), 'matches/cg4'), two));
+  });
+
+  test('V144-1 \'consent\' (implemented, not the default): a request the opposing captain agrees to; scoring frozen meanwhile', async () => {
+    const base = fs.readFileSync(path.join(__dirname, '../firestore.rules'), 'utf8');
+    const consent = base.replace("function abandonPolicy() { return 'review'; }", "function abandonPolicy() { return 'consent'; }");
+    expect(consent).not.toBe(base);
+    const env3 = await initializeTestEnvironment({ projectId: 'demo-consent', firestore: { rules: consent, ...hostPort(process.env.FIRESTORE_EMULATOR_HOST, 8080) } });
+    try {
+      await env3.clearFirestore();
+      await seedTerms(env3, ['cap', 'b0', 'b1', 'a1', 'adm']);
+      const e20 = pts('B', 20);
+      await seedM('cs', { events: e20, maxEvents: 20 }, env3);
+      const r = (who, claims) => doc(as(who, claims, env3), 'matches/cs');
+      // the direct abandon with a review record is not this policy's
+      await assertFails(rawUpdateDoc(r('cap'), { ...ab(), abandon: abRec('cap', 20) }));
+      const ask = (who, side, n, over = {}) => rawUpdateDoc(r(who), { abandonRequest: { by: who, at: serverTimestamp(), side, agreedBy: [] }, abandonRequests: n, abandonRequestAt: serverTimestamp(), updatedAt: Date.now(), ...over });
+      await assertFails(ask('cap', 'B', 1)); // wrong side
+      await assertFails(ask('a1', 'A', 1)); // not the scorer
+      await assertFails(rawUpdateDoc(r('cap'), { abandonRequest: { by: 'cap', at: serverTimestamp(), side: 'A', agreedBy: [] }, updatedAt: Date.now() })); // 1.4.6: uncounted
+      await assertFails(ask('cap', 'A', 2)); // 1.4.6: counter skipped
+      await assertSucceeds(ask('cap', 'A', 1));
+      const stored = (await (async () => { let v; await env3.withSecurityRulesDisabled(async (c) => { v = (await getDoc(doc(c.firestore(), 'matches/cs'))).data(); }); return v; })()).abandonRequest;
+      // frozen: no rally, no finish
+      await assertFails(rawUpdateDoc(r('cap'), { events: [...e20, mkev('A')], maxEvents: 21 }));
+      await assertFails(rawUpdateDoc(r('a1'), { abandonRequest: { ...stored, agreedBy: ['a1'] }, updatedAt: Date.now() })); // not an agreer
+      // B's captain declines (null), the scorer asks again, B's captain agrees -> abandoned with the consent record
+      await assertSucceeds(rawUpdateDoc(r('b0'), { abandonRequest: null, updatedAt: Date.now() }));
+      await assertFails(ask('cap', 'A', 2)); // 1.4.6 (V145-12): within the 2-minute cooldown
+      await env3.withSecurityRulesDisabled((c) => rawUpdateDoc(doc(c.firestore(), 'matches/cs'), { abandonRequestAt: new Date(NOW - 180000) }));
+      await assertSucceeds(ask('cap', 'A', 2));
+      let again; await env3.withSecurityRulesDisabled(async (c) => { again = (await getDoc(doc(c.firestore(), 'matches/cs'))).data().abandonRequest; });
+      await assertFails(rawUpdateDoc(r('b0'), { abandonRequest: { ...again, agreedBy: ['b0'] }, updatedAt: Date.now() })); // last agreement must abandon
+      await assertSucceeds(rawUpdateDoc(r('b0'), { abandonRequest: { ...again, agreedBy: ['b0'] }, ...ab(), abandon: abRec('cap', 20, { mode: 'consent', review: 'confirmed', agreedBy: ['b0'] }) }));
+      let fin; await env3.withSecurityRulesDisabled(async (c) => { fin = (await getDoc(doc(c.firestore(), 'matches/cs'))).data(); });
+      expect(fin.status).toBe('abandoned');
+      expect(fin.abandon).toMatchObject({ mode: 'consent', review: 'confirmed', by: 'cap', agreedBy: ['b0'] });
+      // B's captain agreed: no report afterwards
+      await assertFails(rawUpdateDoc(r('b0'), { abandon: { ...fin.abandon, review: 'pending', reportedBy: 'b0', reportedAt: serverTimestamp() }, updatedAt: Date.now() }));
+      // an admin rejects a pending request
+      await seedM('cs2', { events: e20, maxEvents: 20, abandonRequest: { by: 'cap', at: new Date(NOW - 1000), side: 'A', agreedBy: [] } }, env3);
+      await assertFails(rawUpdateDoc(doc(as('a1', { admin: true }, env3), 'matches/cs2'), { abandonRequest: null, updatedAt: Date.now() })); // participant admin (not an agreer)
+      await assertSucceeds(rawUpdateDoc(doc(as('adm', { admin: true }, env3), 'matches/cs2'), { abandonRequest: null, status: 'live', updatedAt: Date.now() }));
+      await seedM('cs3', { events: e20, maxEvents: 20, abandonRequest: { by: 'cap', at: new Date(NOW - 1000), side: 'A', agreedBy: [] } }, env3);
+      await assertFails(rawUpdateDoc(doc(as('adm', { admin: true }, env3), 'matches/cs3'), { ...ab(), abandon: abRec('adm', 20, { mode: 'admin', review: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() }) })); // the request must be settled with it
+      await assertSucceeds(rawUpdateDoc(doc(as('adm', { admin: true }, env3), 'matches/cs3'), { ...ab(), abandonRequest: null, abandon: abRec('adm', 20, { mode: 'admin', review: 'confirmed', reviewedBy: 'adm', reviewedAt: serverTimestamp() }) }));
+    } finally {
+      await env3.cleanup();
+    }
+  }, 120000);
+});
+
+// ================= 1.4.6: one lifecycle (src/core/lifecycle.ts) – Tester's 1.4.5 findings V145-1..12 =================
+describe('1.4.6: lifecycle walk + V145 items', () => {
+  const app = require('./appSource');
+  const LC = app('src/core/lifecycle.ts');
+  const AB = app('src/core/abandon.ts');
+  const AF = app('src/core/antifraud.ts');
+  const DOCS = app('src/services/backend/firebaseActionDocs.ts');
+  const POLICY = app('src/core/abandonPolicy.ts').ABANDON_POLICY; // V145-9: the walk runs under the current policy
+  const NOW = Date.now();
+  const T0 = NOW - 3 * 3600000;
+  const A12 = ['cap', ...Array.from({ length: 11 }, (_, i) => `a${i + 1}`)];
+  const B12 = Array.from({ length: 12 }, (_, i) => `b${i}`);
+  const WR = { ...RULES, bestOf: 1, pointsPerSet: 5, decidingSetPoints: 5, winBy: 1 }; // shortest win: 5 events
+  const CAST = { scorer: 'cap', oppCaptain: 'b0', bPlayer: 'b1', pastAdmin: 'adm2' };
+  const WHO = { scorer: 'cap', oppCaptain: 'b0', teammate: 'a1', admin: 'adm', stranger: 'zz' };
+  const fx = { stamp: serverTimestamp(), del: deleteField() };
+  const asDb = (who) => env.authenticatedContext(who, { phone_number: '+919000000009', ...(who === 'adm' ? { admin: true } : {}) }).firestore();
+  const toTs = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? Object.fromEntries(Object.entries(o).map(([k, v]) => [k, /At$|^at$/.test(k) && typeof v === 'number' ? new Date(v) : v])) : o);
+  /** The match (ms times, for core) and the stored doc (Timestamps) of a walk state. */
+  const build = (spec, extra = {}) => {
+    const f = LC.walkFields(spec, CAST, T0);
+    const live = spec.status !== 'scheduled';
+    const base = matchDoc({ ids: A12 }, { ids: B12 }, { rules: WR, updatedAt: NOW, ...(live ? { startedAt: T0 - 1000, startedServerAt: new Date(T0 - 1000) } : {}) });
+    const fin = spec.status === 'finished' ? { finishedAt: T0 + 60000, finishedServerAt: new Date(T0 + 60000) } : spec.status === 'abandoned' ? { finishedAt: T0 + 60000 } : {};
+    const m = { id: 'w', ...base, ...f, ...fin, startedServerAt: live ? T0 - 1000 : null, finishedServerAt: spec.status === 'finished' ? T0 + 60000 : null, ...extra };
+    const raw = { ...base, ...f, ...fin, ...extra };
+    for (const k of ['abandon', 'verification']) if (raw[k]) raw[k] = toTs(raw[k]);
+    for (const k of Object.keys(raw)) if (raw[k] === undefined) delete raw[k];
+    return { m, raw };
+  };
+  const seed = (id, raw) => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), `matches/${id}`), raw));
+  const payload = (action, raw, m, me) => {
+    const now = Date.now();
+    switch (action) {
+      case 'unschedule': return { status: 'scheduled', startedAt: null, startedServerAt: null, updatedAt: now };
+      case 'editSetup': return { firstServe: 'B', updatedAt: now };
+      case 'abandon': return DOCS.abandonDoc(AB.abandonPlanFor(m, me, now), raw, fx, now);
+      case 'report': return raw.abandon ? DOCS.reportDoc(raw, me, fx, now) : { abandon: { mode: 'legacy', events: m.events.length, review: 'pending', reportedBy: me, reportedAt: fx.stamp }, updatedAt: now };
+      case 'confirmAbandon': return DOCS.resolveDoc(raw, m, AB.resolveBody(m, me, 'confirm_abandon', now), me, fx, now);
+      case 'reinstate': return DOCS.resolveDoc(raw, m, AB.resolveBody(m, me, 'reinstate', now), me, fx, now);
+      case 'reopen': return DOCS.resolveDoc(raw, m, AB.resolveBody(m, me, 'reopen', now), me, fx, now);
+      case 'adminAbandon': return DOCS.resolveDoc(raw, m, AB.resolveBody(m, me, 'abandon', now), me, fx, now);
+      case 'void': return DOCS.reviewDoc(raw, me, 'void', AF.captainVerdict(m), fx, now);
+      case 'verdict': return DOCS.verifyDoc(raw, me, 'confirmed', undefined, fx, now);
+      case 'repairVerdict': return DOCS.repairDoc(app('src/core/verdictRepair.ts').repairBody(m, me, { scorerId: 'cap' }, now), fx, now); // 1.4.8 (V147-2)
+      default: throw new Error(action);
+    }
+  };
+  const tryIt = async (id, action, raw, m, me) => {
+    const ref = doc(asDb(me), `matches/${id}`);
+    try {
+      if (action === 'delete') await deleteDoc(ref);
+      else await rawUpdateDoc(ref, payload(action, raw, m, me));
+      return true;
+    } catch (e) {
+      if (!/PERMISSION_DENIED|permission/i.test(String(e && (e.code || e.message)))) throw e;
+      return false;
+    }
+  };
+  beforeEach(() => env.withSecurityRulesDisabled(async (c) => {
+    for (const id of ['adm', 'b0', 'a1', 'zz', 'cap']) await setDoc(doc(c.firestore(), `terms/${id}`), { version: TERMS_VERSION, acceptedAt: new Date() });
+  }));
+
+  test('the walk: every action in every state as every role is allowed by the rules exactly when core/lifecycle.ts allows it', async () => {
+    const bad = [];
+    let n = 0;
+    let allowed = 0;
+    for (const spec of LC.LC_STATES) {
+      const { m, raw } = build(spec);
+      for (const action of LC.LC_WALK) {
+        if (LC.LC_NOT_ON.firebase.includes(action) || LC.walkSkip(spec, action)) continue;
+        for (const w of LC.LC_WALKERS) {
+          const me = WHO[w];
+          const expectOk = LC.walkExpect(action, m, me, me === 'adm', POLICY, Date.now()) === null;
+          const id = `w_${spec.name}_${action}_${w}`;
+          await seed(id, raw);
+          const got = await tryIt(id, action, raw, m, me);
+          n++;
+          if (got) allowed++;
+          if (got !== expectOk) bad.push(`${spec.name} ${action} as ${w}: rules ${got ? 'allow' : 'refuse'}, lifecycle ${expectOk ? 'allows' : `refuses (${LC.walkExpect(action, m, me, me === 'adm')})`}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+    expect(n).toBe((LC.LC_STATES.length * LC.LC_WALK.length - LC.LC_STATES.filter((x) => LC.walkSkip(x, 'unschedule')).length) * LC.LC_WALKERS.length);
+    expect(allowed).toBeGreaterThan(20);
+  }, 900000);
+
+  const spec = (name) => LC.LC_STATES.find((s) => s.name === name);
+  test('V145-1: undo to 0 / back to scheduled never re-opens delete; never after a record or a re-open', async () => {
+    const { raw } = build(spec('undo0'));
+    await seed('d1', raw);
+    await assertFails(rawUpdateDoc(doc(asDb('cap'), 'matches/d1'), { status: 'scheduled', startedAt: null, startedServerAt: null, updatedAt: Date.now() }));
+    await seed('d2', { ...raw, status: 'scheduled', startedAt: null, startedServerAt: null }); // forged back to scheduled
+    await assertFails(deleteDoc(doc(asDb('cap'), 'matches/d2')));
+    await assertFails(deleteDoc(doc(asDb('adm'), 'matches/d2')));
+    await seed('d3', { ...build(spec('sched0')).raw, reopenEpoch: 1 });
+    await assertFails(deleteDoc(doc(asDb('cap'), 'matches/d3')));
+    await seed('d4', build(spec('sched0')).raw);
+    await assertFails(deleteDoc(doc(asDb('a1'), 'matches/d4'))); // not the creator
+    await assertSucceeds(deleteDoc(doc(asDb('cap'), 'matches/d4')));
+  });
+
+  test('V145-2: a won + confirmed match can\'t be re-opened or abandoned by an admin (void only); a verdict needs the current epoch', async () => {
+    const { m, raw } = build(spec('wonConfirmed'));
+    await seed('r1', raw);
+    const reopen = { status: 'live', finishedAt: null, finishedServerAt: null, playerOfMatchId: null, wasWon: false, verification: deleteField(), reopenEpoch: 1, resolution: { action: 'reopened', by: 'adm', at: serverTimestamp(), epoch: 1 }, updatedAt: Date.now() };
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/r1'), reopen));
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/r1'), payload('adminAbandon', raw, m, 'adm')));
+    await assertSucceeds(rawUpdateDoc(doc(asDb('adm'), 'matches/r1'), payload('void', raw, m, 'adm')));
+    // after a re-open (epoch 1) a verdict without the epoch is refused, with it accepted
+    const w = build(spec('wonPending'), { reopenEpoch: 1 });
+    await seed('r2', w.raw);
+    await assertFails(rawUpdateDoc(doc(asDb('b0'), 'matches/r2'), { verification: { status: 'confirmed', captain: 'confirmed', by: 'b0', at: serverTimestamp() }, updatedAt: Date.now() }));
+    await assertSucceeds(rawUpdateDoc(doc(asDb('b0'), 'matches/r2'), payload('verdict', w.raw, w.m, 'b0')));
+  });
+
+  test('V145-3: teams / captains / team size stay locked after undo to 0', async () => {
+    const { raw } = build(spec('undo0'));
+    await seed('s1', raw);
+    const r = doc(asDb('cap'), 'matches/s1');
+    await assertFails(rawUpdateDoc(r, { captains: { A: 'a1', B: 'b0' }, updatedAt: Date.now() }));
+    await assertFails(rawUpdateDoc(r, { teamSizeMode: 'custom', updatedAt: Date.now() }));
+    await assertFails(rawUpdateDoc(r, { teamB: { ...raw.teamB, name: 'Other' }, updatedAt: Date.now() }));
+  });
+
+  test('V145-4: the abandon record\'s score is four small ints and behind a bool', async () => {
+    const { m, raw } = build(spec('live3'));
+    const ok = payload('abandon', raw, m, 'cap');
+    const bad = (over) => ({ ...ok, abandon: { ...ok.abandon, ...over } });
+    for (const [i, b] of [
+      bad({ behind: null }), bad({ behind: 'yes' }), bad({ score: { setsA: 0, setsB: 0, currentA: 0 } }),
+      bad({ score: { setsA: 0, setsB: 0, currentA: 0, currentB: 3, pad: 'x'.repeat(5000) } }), bad({ score: { setsA: 0, setsB: 0, currentA: 0, currentB: 1.5 } }),
+      bad({ score: { setsA: 9, setsB: 0, currentA: 0, currentB: 3 } }), bad({ score: { setsA: 0, setsB: 0, currentA: 0, currentB: '3' } }), bad({ score: 'big' }),
+    ].entries()) {
+      await seed(`v4_${i}`, raw);
+      await assertFails(rawUpdateDoc(doc(asDb('cap'), `matches/v4_${i}`), b));
+    }
+    await seed('v4ok', raw);
+    await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/v4ok'), ok));
+  });
+
+  test('V145-5 / V145-10: history is appended (never overwritten); reinstated to finished sets wasWon', async () => {
+    const { m, raw } = build(spec('reinstated'));
+    await seed('h1', raw);
+    const p = payload('adminAbandon', raw, m, 'adm');
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/h1'), { ...p, abandonHistory: deleteField() })); // dropped
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/h1'), { ...p, abandonHistory: [] }));
+    await assertSucceeds(rawUpdateDoc(doc(asDb('adm'), 'matches/h1'), p));
+    expect((await (async () => { let v; await env.withSecurityRulesDisabled(async (c) => { v = (await getDoc(doc(c.firestore(), 'matches/h1'))).data(); }); return v; })()).abandonHistory).toHaveLength(1);
+    // pending abandon whose log holds a win (B5) → reinstated as finished must latch wasWon
+    const w = build({ ...spec('abPending'), events: 'B5', maxEvents: 5 });
+    await seed('h2', w.raw);
+    const ri = payload('reinstate', w.raw, w.m, 'adm');
+    expect(ri.status).toBe('finished');
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/h2'), { ...ri, wasWon: deleteField() }));
+    await assertSucceeds(rawUpdateDoc(doc(asDb('adm'), 'matches/h2'), ri));
+  });
+
+  test('V145-6: an admin can\'t hand scoring to the verdict captain; the current scorer never gives the verdict', async () => {
+    const { raw } = build(spec('live3'));
+    await seed('v6', raw);
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/v6'), { scorerId: 'b0', scorerReassign: { from: 'cap', to: 'b0', by: 'adm', at: serverTimestamp() }, updatedAt: Date.now() }));
+    // 1.4.7 (QA V146-2): nor anyone on that captain's team; the scorer's own side is fine
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/v6'), { scorerId: 'b1', scorerReassign: { from: 'cap', to: 'b1', by: 'adm', at: serverTimestamp() }, updatedAt: Date.now() }));
+    await assertSucceeds(rawUpdateDoc(doc(asDb('adm'), 'matches/v6'), { scorerId: 'a3', scorerReassign: { from: 'cap', to: 'a3', by: 'adm', at: serverTimestamp() }, updatedAt: Date.now() }));
+    // an older doc where the verdict captain already scores: their verdict is refused
+    const w = build(spec('wonPending'), { scorerId: 'b0', scorerReassign: { from: 'cap', to: 'b0', by: 'adm', at: new Date(T0) } });
+    await seed('v6b', w.raw);
+    await assertFails(rawUpdateDoc(doc(asDb('b0'), 'matches/v6b'), payload('verdict', w.raw, w.m, 'b0')));
+  });
+
+  test('V145-11: a report needs the stored record and a rally', async () => {
+    const { m, raw } = build(spec('abLegacy'));
+    await seed('v11', raw);
+    await assertFails(rawUpdateDoc(doc(asDb('b0'), 'matches/v11'), payload('report', raw, m, 'b0')));
+    const d = build(spec('abDirect'), { abandon: { by: 'cap', at: new Date(T0), events: 0, mode: 'review', review: 'pending', score: { setsA: 0, setsB: 0, currentA: 0, currentB: 0 }, behind: false } });
+    await seed('v11b', d.raw);
+    await assertFails(rawUpdateDoc(doc(asDb('b0'), 'matches/v11b'), DOCS.reportDoc(d.raw, 'b0', fx, Date.now())));
+  });
+
+  // ---------- 1.4.7 (QA V146) ----------
+  test('V146-2: an admin reassigns only off the verdict captain\'s team (every B player refused, A players allowed)', async () => {
+    const { raw } = build(spec('live3'));
+    const re = (to) => ({ scorerId: to, scorerReassign: { from: 'cap', to, by: 'adm', at: serverTimestamp() }, updatedAt: Date.now() });
+    for (const to of ['b0', 'b1', 'b5', 'b11']) {
+      await seed(`r2_${to}`, raw);
+      await assertFails(rawUpdateDoc(doc(asDb('adm'), `matches/r2_${to}`), re(to)));
+    }
+    for (const to of ['a1', 'a7']) {
+      await seed(`r2_${to}`, raw);
+      await assertSucceeds(rawUpdateDoc(doc(asDb('adm'), `matches/r2_${to}`), re(to)));
+    }
+  });
+  test('V146-3: before the first rally the creator can\'t hand scoring to the opposing captain or their team', async () => {
+    for (const st of ['sched0', 'live0']) {
+      const { raw } = build(spec(st));
+      for (const to of ['b0', 'b3']) {
+        await seed(`r3_${st}_${to}`, raw);
+        await assertFails(rawUpdateDoc(doc(asDb('cap'), `matches/r3_${st}_${to}`), { scorerId: to, updatedAt: Date.now() }));
+      }
+      await seed(`r3_${st}_a2`, raw);
+      await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), `matches/r3_${st}_a2`), { scorerId: 'a2', updatedAt: Date.now() }));
+    }
+  });
+  test('V146-3: the verdict invariant – every walk state has a verdict captain; every scorer change the rules accept keeps one', async () => {
+    const bad = [];
+    let changes = 0;
+    const broken = (m) => {
+      const caps = AF.verdictCaptains(m);
+      if (!caps.length) return 'no verdict captain';
+      const ss = AF.sideOfPlayer(m, m.scorerId);
+      return caps.includes(m.scorerId) || caps.some((c) => ss !== null && AF.sideOfPlayer(m, c) === ss) ? `scorer ${m.scorerId} on the verdict side` : null;
+    };
+    for (const st of LC.LC_STATES.filter((x) => !x.noConfirmer)) { // (1.4.8: noConfirm* = older data, repaired by an admin)
+      const { m, raw } = build(st);
+      const p0 = broken(m);
+      if (p0) bad.push(`${st.name}: ${p0}`);
+      for (const to of ['a1', 'b0', 'b1', 'zz']) {
+        for (const how of ['handover', 'reassign']) {
+          const id = `r3i_${st.name}_${to}_${how}`;
+          await seed(id, raw);
+          const body = how === 'handover' ? { scorerId: to, updatedAt: Date.now() } : { scorerId: to, scorerReassign: { from: 'cap', to, by: 'adm', at: serverTimestamp() }, updatedAt: Date.now() };
+          const ok = await rawUpdateDoc(doc(asDb(how === 'handover' ? 'cap' : 'adm'), `matches/${id}`), body).then(() => true, () => false);
+          if (!ok) continue;
+          changes++;
+          const after = { ...m, scorerId: to, ...(how === 'reassign' ? { scorerReassign: { from: 'cap', to, by: 'adm', at: NOW } } : {}) };
+          const p = broken(after);
+          if (p) bad.push(`${st.name} ${how}→${to}: ${p}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+    expect(changes).toBeGreaterThan(5);
+  }, 600000);
+  test('V146-5: a hand-built reinstate to live of a wasWon match is refused (finished only)', async () => {
+    const p = build(spec('abPending'));
+    const live = payload('reinstate', p.raw, p.m, 'adm');
+    expect(live.status).toBe('live');
+    await seed('r5ok', p.raw);
+    await assertSucceeds(rawUpdateDoc(doc(asDb('adm'), 'matches/r5ok'), live)); // control
+    await seed('r5', { ...p.raw, wasWon: true });
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/r5'), live));
+    // the won log: core sends it to finished, and the rules accept that
+    const w = build(spec('abWonLog'));
+    const fin = payload('reinstate', w.raw, w.m, 'adm');
+    expect(fin.status).toBe('finished');
+    await seed('r5w', w.raw);
+    await assertSucceeds(rawUpdateDoc(doc(asDb('adm'), 'matches/r5w'), fin));
+  });
+  // ---------- 1.4.8 (QA V147-1 / V147-2) ----------
+  test('V147-1: create needs someone who can confirm – the scorer on the other team (creator on A) is refused', async () => {
+    const A = ['cap', 'u1', 'u2', 'u3', 'u4', 'u5'];
+    const B = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6'];
+    const mk = (scorerId) => matchDoc({ ids: A }, { ids: B }, { scorerId, participantIds: ordered(A, B, ['cap']) });
+    await assertFails(setDoc(doc(asDb('cap'), 'matches/v1a'), mk('w2')));
+    await assertSucceeds(setDoc(doc(asDb('cap'), 'matches/v1b'), mk('u2')));
+  });
+  test('V147-1: a roster edit that moves the scorer to team B (creator stays on A) is refused; the same edit by a scorer-creator is fine', async () => {
+    const A2 = A12.filter((x) => x !== 'a2').concat('b11');
+    const B2 = B12.slice(0, 11).concat('a2');
+    const base = build(spec('sched0')).raw;
+    const edit = { teamA: { ...base.teamA, players: A2.map((id) => ({ id, name: id.toUpperCase() })) }, teamB: { ...base.teamB, players: B2.map((id) => ({ id, name: id.toUpperCase() })) }, participantIds: [...A2, ...B2], updatedAt: Date.now() };
+    await env.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), 'terms/a2'), { version: TERMS_VERSION, acceptedAt: new Date() });
+      for (const u of ['cap', 'a1', 'a3', 'b0', 'b1', 'b2']) await setDoc(doc(c.firestore(), `users/${u}`), { name: u }); // by-number sides: profiles
+    });
+    await seed('v1c', { ...base, scorerId: 'a2' }); // scorer a2 moves to B, creator cap stays on A: nobody confirms
+    await assertFails(rawUpdateDoc(doc(asDb('a2'), 'matches/v1c'), edit));
+    await seed('v1d', base); // the scorer is the creator (cap, stays on A): B's captain confirms
+    await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/v1d'), edit));
+  });
+  test('V147-2: the admin repair – audited, only an admin outside the match, only a broken match, only a valid scorer', async () => {
+    const VR = app('src/core/verdictRepair.ts');
+    const w = build(spec('noConfirm'));
+    const body = (me, fix, over = {}) => { const d = DOCS.repairDoc(VR.repairBody(w.m, me, fix, Date.now()), fx, Date.now()); d.verdictRepair = { ...d.verdictRepair, ...over }; return d; };
+    for (const [id, who, fix, over, ok] of [
+      ['vr1', 'adm', { scorerId: 'cap' }, {}, true],
+      ['vr2', 'b0', { scorerId: 'cap' }, {}, false], // not an admin
+      ['vr3', 'adm', { scorerId: 'b2' }, {}, false], // still nobody to confirm
+      ['vr4', 'adm', { scorerId: 'zz' }, {}, false], // not a participant
+      ['vr5', 'adm', { scorerId: 'cap' }, { prevScorer: 'cap' }, false], // forged audit
+      ['vr6', 'adm', { scorerId: 'cap' }, { by: 'adm2' }, false],
+      ['vr7', 'adm', { captain: { side: 'B', id: 'b2' } }, {}, false], // a captain change can't fix a side-based exclusion
+    ]) {
+      await seed(id, w.raw);
+      const p = rawUpdateDoc(doc(asDb(who), `matches/${id}`), body(who, fix, over));
+      await (ok ? assertSucceeds(p) : assertFails(p));
+    }
+    // a working match, and a verdict already given: nothing to repair
+    const okm = build(spec('wonPending'));
+    await seed('vr8', okm.raw);
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/vr8'), DOCS.repairDoc(VR.repairBody(okm.m, 'adm', { scorerId: 'a1' }, Date.now()), fx, Date.now())));
+    // the field can't be written any other way (create / scorer update)
+    await seed('vr9', build(spec('live3')).raw);
+    await assertFails(rawUpdateDoc(doc(asDb('cap'), 'matches/vr9'), { verdictRepair: { by: 'cap' }, updatedAt: Date.now() }));
+  });
+  // ---------- 1.4.9 (QA V148-2): one decision in core / demo / API / rules ----------
+  // 1.4.10 (QA V149-3): a captain repair only for a side whose captain plays for the other team – rules == core
+  test('V148-2 / V149-3 (RP9): captain B is a team-A player – the captain repair is allowed exactly when core allows it', async () => {
+    const VR = app('src/core/verdictRepair.ts');
+    const w = build(spec('noConfirm'));
+    const shapes = {
+      rp9: { captains: { ...w.raw.captains, B: 'a1' }, scorerId: w.raw.createdBy }, // RP9: B's captain an A player
+      side: { captains: { ...w.raw.captains } }, // the usual broken shape: captains on their sides
+    };
+    let allowed = 0;
+    for (const [k, over] of Object.entries(shapes)) {
+      const { scorerReassign: _r1, ...raw0 } = w.raw;
+      const { scorerReassign: _r2, ...m0 } = w.m;
+      const raw = { ...raw0, ...over };
+      const m = { ...m0, ...over };
+      for (const fix of [{ captain: { side: 'B', id: 'b2' } }, { captain: { side: 'B', id: 'b1' } }, { captain: { side: 'B', id: 'a2' } }, { captain: { side: 'A', id: 'a2' } }]) {
+        const id = `rp9-${k}-${fix.captain.side}-${fix.captain.id}`;
+        const ok = VR.repairProblem(m, 'adm', true, fix) === null;
+        allowed += ok ? 1 : 0;
+        await seed(id, raw);
+        const p = rawUpdateDoc(doc(asDb('adm'), `matches/${id}`), DOCS.repairDoc(VR.repairBody(m, 'adm', fix, Date.now()), fx, Date.now()));
+        await (ok ? assertSucceeds(p) : assertFails(p)).catch((e) => { throw new Error(`${id} core=${ok}: ${e.message}`); });
+      }
+    }
+    expect(allowed).toBe(2); // RP9: B ← b2 / b1; nothing else
+    // a non-admin can't
+    const { scorerReassign: _r3, ...rawX } = w.raw;
+    await seed('rp9-x', { ...rawX, ...shapes.rp9 });
+    await assertFails(rawUpdateDoc(doc(asDb('b0'), 'matches/rp9-x'), DOCS.repairDoc(VR.repairBody({ ...w.m, ...shapes.rp9 }, 'b0', { captain: { side: 'B', id: 'b2' } }, Date.now()), fx, Date.now())));
+  });
+  test('V148-2 (GU11): an older doc with scorerReassign.from on side B – a roster edit core refuses is refused by the rules too', async () => {
+    const AF = app('src/core/antifraud.ts');
+    const base = build(spec('sched0')).raw;
+    const A2 = A12.filter((x) => x !== 'a2').concat('b11');
+    const B2 = B12.slice(0, 11).concat('a2');
+    const edit = { teamA: { ...base.teamA, players: A2.map((id) => ({ id, name: id.toUpperCase() })) }, teamB: { ...base.teamB, players: B2.map((id) => ({ id, name: id.toUpperCase() })) }, participantIds: [...A2, ...B2], updatedAt: Date.now() };
+    await env.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), 'terms/a2'), { version: TERMS_VERSION, acceptedAt: new Date() });
+      for (const u of ['cap', 'a1', 'a3', 'b0', 'b1', 'b2']) await setDoc(doc(c.firestore(), `users/${u}`), { name: u });
+    });
+    const from = { from: 'b2', by: 'adm', at: T0 };
+    const after = { ...base, ...edit, scorerReassign: from };
+    expect(AF.verdictSetupProblem(after)).toBe(AF.MATCH_NO_VERDICT);
+    expect(AF.verdictSetupProblem({ ...base, ...edit })).toBeNull();
+    await seed('gu11a', { ...base, scorerReassign: from });
+    await assertFails(rawUpdateDoc(doc(asDb('cap'), 'matches/gu11a'), edit));
+    await seed('gu11b', base);
+    await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/gu11b'), edit));
+  });
+  // ---------- 1.4.10 (QA V149-1): 12-a-side + scorerReassign stays within the expression budget ----------
+  test('V149-1: 12-a-side with scorerReassign – a rename and a valid roster edit pass; the GU11 edit is still refused', async () => {
+    const AF = app('src/core/antifraud.ts');
+    const base = build(spec('sched0')).raw;
+    expect(base.teamA.players.length).toBe(12);
+    await env.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), 'terms/a2'), { version: TERMS_VERSION, acceptedAt: new Date() });
+      for (const u of ['cap', 'a1', 'a2', 'a3', 'b0', 'b1', 'b2']) // by-number sides: the first 3 players' profiles
+        await setDoc(doc(c.firestore(), `users/${u}`), { name: u });
+    });
+    const okFrom = { from: 'a3', by: 'adm', at: T0 }; // reference on A, like the scorer and the creator: B confirms
+    // a rename only (control: the same rename without scorerReassign)
+    await seed('v149z', base);
+    await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/v149z'), { teamA: { ...base.teamA, name: 'Renamed A' }, updatedAt: Date.now() })).catch((e) => { throw new Error('step 1 ' + e.message); });
+    await seed('v149a', { ...base, scorerReassign: okFrom });
+    await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/v149a'), { teamA: { ...base.teamA, name: 'Renamed A' }, updatedAt: Date.now() })).catch((e) => { throw new Error('step 2 ' + e.message); });
+    // a valid roster edit (a2 ↔ b11)
+    const A2 = A12.filter((x) => x !== 'a2').concat('b11');
+    const B2 = B12.slice(0, 11).concat('a2');
+    const edit = { teamA: { ...base.teamA, players: A2.map((id) => ({ id, name: id.toUpperCase() })) }, teamB: { ...base.teamB, players: B2.map((id) => ({ id, name: id.toUpperCase() })) }, participantIds: [...A2, ...B2], updatedAt: Date.now() };
+    expect(AF.verdictSetupProblem({ ...base, ...edit, scorerReassign: okFrom })).toBeNull();
+    await seed('v149b', { ...base, scorerReassign: okFrom });
+    await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/v149b'), edit)).catch((e) => { throw new Error('step 3 ' + e.message); });
+    // a rename on the GU11 doc (reference on B) is a rename: allowed; the roster edit is refused
+    const badFrom = { from: 'b2', by: 'adm', at: T0 };
+    await seed('v149c', { ...base, scorerReassign: badFrom });
+    await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/v149c'), { teamB: { ...base.teamB, name: 'Renamed B' }, updatedAt: Date.now() })).catch((e) => { throw new Error('step 4 ' + e.message); });
+    await assertFails(rawUpdateDoc(doc(asDb('cap'), 'matches/v149c'), edit)).catch((e) => { throw new Error('step 5 ' + e.message); });
+  });
+  test('minor: a verdict from an earlier epoch does not block a reopen (as in core); one from this epoch does', async () => {
+    const stale = build(spec('nowin3'), { reopenEpoch: 1, verification: { status: 'confirmed', by: 'b0', at: T0, captain: 'confirmed', epoch: 0 } });
+    await seed('rm1', stale.raw);
+    await assertSucceeds(rawUpdateDoc(doc(asDb('adm'), 'matches/rm1'), payload('reopen', stale.raw, stale.m, 'adm')));
+    const cur = build(spec('nowin3'), { reopenEpoch: 1, verification: { status: 'confirmed', by: 'b0', at: T0, captain: 'confirmed', epoch: 1 } });
+    expect(LC.lifecycleProblem('reopen', cur.m, 'adm', true)).not.toBeNull();
+    const body = payload('reopen', stale.raw, stale.m, 'adm');
+    await seed('rm2', cur.raw);
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/rm2'), body));
   });
 });

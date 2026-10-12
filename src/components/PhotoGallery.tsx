@@ -10,7 +10,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { Modal } from './AppModal'; // 1.4.0 (V139-7): holds the review prompt while open
 import type { MatchPhoto } from '../core/types';
 import { colors } from '../theme';
 import { bottomPadding, useInsets } from './SafeFooter';
@@ -94,12 +95,13 @@ export function PhotoGrid({
   const w = columns === 4 ? '23.2%' : columns === 2 ? '48.2%' : '31.5%';
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -3 }} testID={testID}>
+      {/* 1.4.1 (V140-11): role "button" – "imagebutton" renders no role on web */}
       {shown.map((p, i) => (
         <Pressable
           key={p.id}
           onPress={() => onOpen(i)}
           testID={`${testID}-${i}`}
-          accessibilityRole="imagebutton"
+          accessibilityRole="button"
           accessibilityLabel={t('photos.open', { n: i + 1, total: photos.length })}
           style={{ width: w, aspectRatio: 1, margin: '0.9%' }}
         >

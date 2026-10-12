@@ -35,6 +35,8 @@ export const COLOR_INVALID_CODE = 'color_invalid';
 export const TEAM_NAME_MISMATCH_CODE = 'team_name_mismatch';
 export const PLACE_INVALID_CODE = 'place_invalid';
 export const EVENTS_INVALID_CODE = 'events_invalid';
+/** 1.4.1 (V140-10): a time that is not epoch ms (string, NaN, fraction, negative). */
+export const TIME_INVALID_CODE = 'time_invalid';
 
 /** Cleaned text (NFC, no zero-width, trimmed), or throws. Optional + empty gives undefined. */
 export function checkText(field: string, raw: unknown, key: LimitKey, opts: { multiline?: boolean } = {}): string | undefined {
@@ -71,6 +73,11 @@ export function checkRules(r: RuleSet): RuleSet {
     throw new ValidationError(RULES_INVALID_CODE, 'rules');
   }
 }
+
+/** 1.4.2 (QA V141-7): a new scheduled time is at most 2 years ahead. */
+export const MAX_SCHEDULE_AHEAD_MS = 2 * 366 * 86_400_000;
+/** Epoch ms that is a safe, non-negative integer within the JS Date range (8.64e15). */
+export const scheduleMsOk = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= 8.64e15;
 
 /** QA G9: a new start time can't already be over (PAST_GRACE_MS grace). */
 export function checkNotPast(field: string, ts: number | null | undefined, now = Date.now()) {
@@ -109,7 +116,7 @@ export function checkCourtFields<T extends { name?: string; location?: Place }>(
 export function checkMatchFields<T extends {
   title?: string | null; teamA?: { name: string; color?: string }; teamB?: { name: string; color?: string }; rules?: RuleSet; location?: Place | null;
   startedAt?: number | null; finishedAt?: number | null; scheduledAt?: number | null; status?: string; events?: unknown[];
-}>(m: T, opts: { now?: number; scheduleChanged?: boolean } = {}): T {
+}>(m: T, opts: { now?: number; scheduleChanged?: boolean; status?: string } = {}): T {
   const out = { ...m };
   if (m.title !== undefined) out.title = (checkText('title', m.title, 'matchTitle') ?? null) as T['title'];
   if (m.teamA) out.teamA = { ...m.teamA, name: checkText('teamA.name', m.teamA.name, 'sideName')! };
@@ -120,7 +127,15 @@ export function checkMatchFields<T extends {
   if (m.location !== undefined) out.location = checkPlace('location', m.location, false) as T['location'];
   if (m.events && m.events.length > MAX_EVENTS) throw new ValidationError(EVENTS_INVALID_CODE, 'events', { max: MAX_EVENTS });
   checkOrder('finishedAt', m.startedAt, m.finishedAt);
-  if (opts.scheduleChanged && m.status === 'scheduled') checkNotPast('scheduledAt', m.scheduledAt, opts.now);
+  // 1.4.1 (QA V140-10): a scheduled time is epoch ms (a whole number) on every status – the demo stored "1" (a
+  // string) and NaN on live matches; the API answers 400 for those
+  // 1.4.2 (QA V141-7): and a sane one – a safe integer (1e300 and 2^53 were accepted), and a newly set time at
+  // most 2 years ahead. time_invalid is answered before time_in_past.
+  if (m.scheduledAt != null && !scheduleMsOk(m.scheduledAt)) throw new ValidationError(TIME_INVALID_CODE, 'scheduledAt');
+  if (opts.scheduleChanged && m.scheduledAt != null && m.scheduledAt > (opts.now ?? Date.now()) + MAX_SCHEDULE_AHEAD_MS)
+    throw new ValidationError(TIME_INVALID_CODE, 'scheduledAt');
+  // (a patch without a status uses the stored one; core/matchGuards.ts guardUpdate checks it too)
+  if (opts.scheduleChanged && (m.status ?? opts.status) === 'scheduled') checkNotPast('scheduledAt', m.scheduledAt, opts.now);
   return out;
 }
 

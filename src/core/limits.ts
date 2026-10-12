@@ -29,8 +29,12 @@ export const LIMITS = {
 
 export type LimitKey = keyof typeof LIMITS;
 
-/** Match event log cap (a 5-set match is a few hundred events). */
-export const MAX_EVENTS = 2000;
+/** Match event log cap. */
+// 1.4.4 (QA info): 3000 (was 2000, which a legal long uncapped deuce match can reach – Tester's 667:667). About 2.5x
+// the longest realistic match (4 sets of 120-118 + 100-98 ≈ 1150 rallies plus timeouts). Not higher: on Firebase a
+// re-credit of a 4000-event log with real 28-character uids hit the rules' 5 MiB variable-memory limit (measured,
+// rules-tests "worst case"). firestore.rules eventsStepOk uses the same number (rules-tests check it).
+export const MAX_EVENTS = 3000;
 /** Upper bound on any stored set score (rule set fields are 1..99, deuce can run past them). */
 export const MAX_SCORE = 199;
 /** Photo uploads: more than 0 bytes and strictly below 10 MB (server, storage.rules and the app). */

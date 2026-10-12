@@ -20,7 +20,7 @@
  *
  * The win bonus (+BONUS_POINTS per BONUS_EVERY_WINS counted wins) is always derived, never stored.
  */
-import type { Match, MatchCaptains, MatchVerification, VerificationStatus } from './types';
+import type { Match, MatchCaptains, MatchVerification, VerificationStatus, ResultCheck } from './types';
 import { computeState, type Side } from './scoring';
 import { rankingPoints, totalsFromMatches, type PlayerTotals, type RankableMatch } from './ranking';
 
@@ -78,13 +78,36 @@ export type CountableMatch = RankableMatch &
     playerOfMatchId?: string | null;
     /** Precomputed winner (API server: from the stored summary) – skips replaying the event log. */
     winner?: Side | null;
+    /** 1.4.4 (Firebase): the stored summary/status disagree with the replay (core/replay.ts). */
+    resultCheck?: ResultCheck | null;
+    /**
+     * 1.4.5 (Firebase, PRD gap): players of the match without a user profile (made-up ids – firestore.rules can only
+     * check the captains and the first 3 players of a side). Filled on read; the match is flagged 'unknown_players'
+     * and these ids never get points, wins or POTM credit (also after an admin's approval).
+     */
+    unknownPlayerIds?: string[] | null;
+    /** 1.4.5 (QA V144-8): an admin reassigned scoring – the verdict follows the scorer before it. */
+    scorerReassign?: Match['scorerReassign'];
+    /** 1.4.6 (QA V145-2): a verdict counts only in the current re-open epoch (currentVerification). */
+    reopenEpoch?: number | null;
   };
 
-export const verificationStatus = (m: { verification?: MatchVerification | null }): VerificationStatus => m.verification?.status ?? 'pending';
+/**
+ * 1.4.6 (QA V145-2): the verification of the CURRENT epoch – null when it was given before the latest admin re-open
+ * (verification.epoch != reopenEpoch; both missing = 0). A re-open also clears it on every backend; this keeps a stale
+ * verdict from counting even if a document still carries one (core/lifecycle.ts).
+ */
+export function currentVerification(m: { verification?: MatchVerification | null; reopenEpoch?: number | null }): MatchVerification | null {
+  const v = m.verification;
+  if (!v) return null;
+  return (v.epoch ?? 0) === (m.reopenEpoch ?? 0) ? v : null;
+}
+type Verifiable = { verification?: MatchVerification | null; reopenEpoch?: number | null };
+export const verificationStatus = (m: Verifiable): VerificationStatus => currentVerification(m)?.status ?? 'pending';
 
 /** 1.3.7: the opposing captain's verdict, whatever an admin did afterwards (older data: from the status). */
-export function captainVerdict(m: { verification?: MatchVerification | null }): 'confirmed' | 'rejected' | null {
-  const v = m.verification;
+export function captainVerdict(m: Verifiable): 'confirmed' | 'rejected' | null {
+  const v = currentVerification(m);
   if (v?.captain) return v.captain;
   const st = verificationStatus(m);
   if (st === 'confirmed') return 'confirmed';
@@ -110,9 +133,9 @@ export const LEGACY_VERDICT_BEFORE = Date.UTC(2026, 9, 11, 10, 0, 0);
 export const isLegacyAnswer = (v: { at?: number | null }) => typeof v.at === 'number' && v.at < LEGACY_VERDICT_BEFORE;
 
 /** 1.3.9 (V138-11): when the opposing captain confirmed (null = not confirmed). Never one of the match's own times. */
-export function confirmedAtOf(m: { confirmedAt?: number | null; verification?: MatchVerification | null }): number | null {
-  if (m.confirmedAt != null) return m.confirmedAt;
-  return captainVerdict(m) === 'confirmed' ? m.verification?.at ?? null : null;
+export function confirmedAtOf(m: { confirmedAt?: number | null; verification?: MatchVerification | null; reopenEpoch?: number | null }): number | null {
+  if (captainVerdict(m) !== 'confirmed') return null;
+  return m.confirmedAt ?? m.verification?.at ?? null;
 }
 
 /**
@@ -144,7 +167,8 @@ export function awaitingPotm(m: CountableMatch): boolean {
   return m.status === 'finished' && !m.playerOfMatchId;
 }
 
-export type FraudFlag = 'too_short' | 'no_server_times' | 'disputed';
+// 1.4.4 (QA V143-1): 'result_mismatch' – the stored result (Firebase) disagrees with the replay of the events.
+export type FraudFlag = 'too_short' | 'no_server_times' | 'disputed' | 'result_mismatch' | 'unknown_players';
 
 /** Automatic flags (derived on every read, never stored). */
 export function matchFlags(m: CountableMatch): FraudFlag[] {
@@ -154,6 +178,8 @@ export function matchFlags(m: CountableMatch): FraudFlag[] {
   if (st == null || fin == null) out.push('no_server_times');
   else if (fin - st < MIN_MATCH_MS) out.push('too_short');
   if (verificationStatus(m) === 'disputed') out.push('disputed');
+  if (m.resultCheck) out.push('result_mismatch');
+  if (m.unknownPlayerIds?.length) out.push('unknown_players');
   return out;
 }
 
@@ -176,6 +202,8 @@ export type ResultState = 'not_finished' | 'awaiting_potm' | 'awaiting_confirmat
 export function resultState(m: CountableMatch): ResultState {
   if (m.status === 'abandoned') return 'abandoned';
   if (m.status !== 'finished') return 'not_finished';
+  // 1.4.4 (QA V143-1): 'finished' by the client, but the events have no winner: shown flagged, never counts
+  if (matchWinner(m) === null) return 'flagged';
   if (!m.playerOfMatchId) return 'awaiting_potm';
   const v = verificationStatus(m);
   if (v === 'voided') return 'voided';
@@ -242,7 +270,9 @@ export function countMatches(matches: readonly CountableMatch[]): CountResult {
     pairWeek.set(pk, n + 1);
     const day = istDayKey(at);
     const ok = new Set<string>();
+    const unknown = new Set(m.unknownPlayerIds ?? []);
     for (const p of new Set(playersOf(m))) {
+      if (unknown.has(p)) continue; // 1.4.5: a made-up id never gets credit
       const k = `${p}#${day}`;
       const c = playerDay.get(k) ?? 0;
       if (c >= ANTI_FRAUD.MAX_COUNTED_PER_PLAYER_PER_DAY) playerExcluded.add(`${m.id}|${p}`);
@@ -427,24 +457,53 @@ export function confirmProblem(m: CountableMatch, uid: string): ConfirmProblem |
   if (!m.captains) return 'no_captains';
   const side: Side | null = m.captains.A === uid ? 'A' : m.captains.B === uid ? 'B' : null;
   if (!side) return 'not_captain';
-  if (uid === m.scorerId || uid === m.createdBy) return 'scoring_side';
-  if (sideOfPlayer(m, m.scorerId) === side || sideOfPlayer(m, m.createdBy) === side) return 'scoring_side';
+  // 1.4.5 (QA V144-8): the scorer as at the first rally (an admin reassignment doesn't move the verdict)
+  const scorer = m.scorerReassign?.from ?? m.scorerId;
+  // 1.4.6 (QA V145-6): and whoever scores NOW never gives the verdict either
+  if (uid === scorer || uid === m.scorerId || uid === m.createdBy) return 'scoring_side';
+  if (sideOfPlayer(m, scorer) === side || sideOfPlayer(m, m.createdBy) === side) return 'scoring_side';
   const st = verificationStatus(m);
   // 1.3.8 (V137-1): an answer recorded in the older fields (1.3.6: `by` without a verdict) counts as answered
   if (st !== 'pending' && !(st === 'approved' && captainVerdict(m) === null)) return 'already_reviewed';
   return null;
 }
 
-/** Captain who should confirm (for the UI), or null when nobody can. */
-export function expectedConfirmer(m: Pick<CountableMatch, 'captains' | 'teamA' | 'teamB' | 'scorerId' | 'createdBy'>): string | null {
-  if (!m.captains) return null;
+/**
+ * Captains who may give the verdict (firestore.rules verdictCapt): not the scorer as at the first rally
+ * (scorerReassign.from) or the creator, and not on either one's side. Usually exactly one; both when the scorer and the
+ * creator play on neither side.
+ */
+export function verdictCaptains(m: Pick<CountableMatch, 'captains' | 'teamA' | 'teamB' | 'scorerId' | 'createdBy' | 'scorerReassign'>): string[] {
+  if (!m.captains) return [];
+  const scorer = m.scorerReassign?.from ?? m.scorerId;
+  const out: string[] = [];
   for (const side of ['A', 'B'] as Side[]) {
     const c = m.captains[side];
-    if (c === m.scorerId || c === m.createdBy) continue;
-    if (sideOfPlayer(m, m.scorerId) === side || sideOfPlayer(m, m.createdBy) === side) continue;
-    return c;
+    if (c === scorer || c === m.createdBy) continue;
+    if (sideOfPlayer(m, scorer) === side || sideOfPlayer(m, m.createdBy) === side) continue;
+    out.push(c);
   }
+  return out;
+}
+/**
+ * 1.4.8 (QA V147-1): the verdict invariant on the match ITSELF – checked at create and on every roster / captain /
+ * participant edit (core guardCreate / guardUpdate, API writeMatch, demo, firestore.rules scorerTargetOk on create and
+ * on the scorer's roster write). A match with captains must have a verdict captain, and the scorer is never that
+ * captain or on their team (e.g. the scorer moving himself to team B). Matches without captains: nothing to check.
+ */
+export const MATCH_NO_VERDICT = 'match_no_verdict';
+export const MATCH_NO_VERDICT_MESSAGE = 'Nobody could confirm the result: the other team’s captain must confirm it, so the scorer and the creator can’t play for that team';
+export function verdictSetupProblem(m: Pick<CountableMatch, 'captains' | 'teamA' | 'teamB' | 'scorerId' | 'createdBy' | 'scorerReassign'>): string | null {
+  if (!m.captains) return null;
+  const caps = verdictCaptains(m);
+  if (!caps.length) return MATCH_NO_VERDICT;
+  const side = sideOfPlayer(m, m.scorerId);
+  if (caps.includes(m.scorerId) || caps.some((c) => side !== null && sideOfPlayer(m, c) === side)) return MATCH_NO_VERDICT;
   return null;
+}
+/** Captain who should confirm (for the UI), or null when nobody can. */
+export function expectedConfirmer(m: Pick<CountableMatch, 'captains' | 'teamA' | 'teamB' | 'scorerId' | 'createdBy' | 'scorerReassign'>): string | null {
+  return verdictCaptains(m)[0] ?? null;
 }
 
 /** Terminal: abandoned, or completed (finished + POTM). Nothing about the score/status changes after. */
@@ -455,16 +514,17 @@ export const isTerminal = (m: Pick<Match, 'status' | 'playerOfMatchId'>): boolea
  * Allowed status moves (anything else is refused). finished -> live only while awaiting POTM (undo);
  * live -> scheduled only before the first rally (the start time is cleared again).
  */
-export function statusMoveOk(before: Pick<Match, 'status' | 'playerOfMatchId'> & { events?: readonly unknown[] }, next: Match['status']): boolean {
+export function statusMoveOk(before: Pick<Match, 'status' | 'playerOfMatchId'> & { events?: readonly unknown[]; maxEvents?: number | null }, next: Match['status']): boolean {
   if (before.status === next) return true;
   if (isTerminal(before)) return false;
   switch (before.status) {
     case 'scheduled':
       return next === 'live' || next === 'abandoned';
     case 'live':
-      return next === 'finished' || next === 'abandoned' || (next === 'scheduled' && !(before.events?.length ?? 0));
+      // 1.4.6 (QA V145-1): back to scheduled only if the match NEVER had a rally (maxEvents – undo to 0 doesn't count)
+      return next === 'finished' || next === 'abandoned' || (next === 'scheduled' && !Math.max(before.maxEvents ?? 0, before.events?.length ?? 0));
     case 'finished':
-      return next === 'live';
+      return false; // 1.4.2 (QA V141-8): a finished match never goes back to live (no undo after the end)
     default:
       return false;
   }

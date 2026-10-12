@@ -1,24 +1,27 @@
-import { checkFeedback } from '../../core/reviewPrompt';
-import { BUNDLED_DAILY_ITEMS, checkDailyItem, type DailyItem } from '../../core/dailyItems';
+import { checkFeedback, REVIEW_LAST_ASKED_PREFIX } from '../../core/reviewPrompt';
+import { BUNDLED_DAILY_ITEMS, checkDailyItem, dailyTombstone, type DailyItem } from '../../core/dailyItems';
 /**
  * Demo backend: an in-memory database with sample data, persisted to
  * AsyncStorage. Lets you try every screen without a Firebase project.
  * OTP code is always 123456.
  */
-import { checkRegistrationUpdate, demoPincodeLookup, fullName, hasStoredRegistration, sentRegistration } from '../../core/registration';
+import { checkRegistrationUpdate, demoPincodeLookup, emailKey, fullName, hasStoredRegistration, sentRegistration } from '../../core/registration';
 import { MIN_AGE } from '../config';
+import { repairPatch, type RepairFix } from '../../core/verdictRepair';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEMO_ADMIN_UIDS, DEMO_MODE, DEMO_OTP } from '../config';
 import { addPoint, computeState, summarize, type Side } from '../../core/scoring';
-import { assertRoster, ROSTER_LOCKED_MESSAGE, TEAM_SIZE_MODES, canonicalParticipants, challengeProblem, isAbandonOnly, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, teamCanPlay, TEAM_TOO_SMALL_MESSAGE, TOURNAMENT_ORGANIZER_MESSAGE, tournamentTeamsProblem } from '../../core/roster';
+import { assertRoster, TEAM_SIZE_MODES, canonicalParticipants, challengeProblem, isAbandonOnly, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, teamCanPlay, TEAM_TOO_SMALL_MESSAGE, TOURNAMENT_ORGANIZER_MESSAGE, tournamentTeamsProblem } from '../../core/roster';
 import type { Challenge, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
 import { DEMO_QA_ADMIN, DemoDB, demoPhotoUrl, demoQaAdminProfile, makeSeed, refreshSeedColours, SEED_PHOTO_SCENES } from './demoSeed';
 import i18next from 'i18next';
 import type { AuthUser, Backend, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
-import { byMatchDateDesc, CONFIRM_MESSAGES, captainVerdict, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
-import { guardCreate, guardProgress, guardUpdate, stampTimes } from '../../core/matchGuards';
+import { byMatchDateDesc, CONFIRM_MESSAGES, captainVerdict, currentVerification, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
+import { GUARD_MESSAGES, guardCreate, guardProgress, guardUpdate, MATCH_STATUS_MOVE, matchOver, rulesEndProblem, stampTimes } from '../../core/matchGuards';
+import { abandonPatch, answerAbandon, needsAdminAction, nextMaxEvents, planAbandon, reportAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../core/abandon';
+import { eligibleHandoffAdmins, HANDOVER_MESSAGES, handoverProblem, reassignProblem, reassignRecord } from '../../core/scorerHandoff';
 import { TERMS_NOT_ACCEPTED, TERMS_NOT_ACCEPTED_MESSAGE, TERMS_VERSION, TERMS_VERSION_MISMATCH, termsAccepted, type TermsAcceptance } from '../../core/terms';
 import { checkText } from '../../core/validate';
 import { canAddMatchPhoto } from '../../core/photos';
@@ -151,9 +154,10 @@ export class DemoBackend implements Backend {
       const st = computeState(m.rules, events, m.firstServe);
       if (st.finished) {
         // keep the demo alive: restart instead of finishing
-        this.db.matches['match_live'] = { ...m, events: [], summary: summarize(computeState(m.rules, [], m.firstServe)), updatedAt: Date.now() };
+        // (1.4.5: a fresh simulated match – its latches start again)
+        this.db.matches['match_live'] = { ...m, events: [], maxEvents: 0, wasWon: false, summary: summarize(computeState(m.rules, [], m.firstServe)), updatedAt: Date.now() };
       } else {
-        this.db.matches['match_live'] = { ...m, events, summary: summarize(st), updatedAt: Date.now() };
+        this.db.matches['match_live'] = { ...m, events, maxEvents: Math.max(m.maxEvents ?? m.events.length, events.length), summary: summarize(st), updatedAt: Date.now() };
       }
       this.changed();
     }, 7000);
@@ -245,6 +249,24 @@ export class DemoBackend implements Backend {
     if (this.terms[id]?.version !== version) this.terms[id] = { version, acceptedAt: Date.now() };
     this.changed();
   }
+  /** 1.4.6 (QA V145-17): the demo admins (DEMO_ADMIN_UIDS + this phone's QA admin) with a profile. */
+  async handoffAdmins(matchId: string) {
+    const m = this.db.matches[matchId];
+    if (!m) throw new CodedError('not_found', 'Match not found');
+    const me = this.authUser?.uid ?? '';
+    if (me !== m.createdBy && me !== m.scorerId) throw new CodedError('forbidden', 'Only the creator or the scorer can hand scoring over');
+    const admins: { id: string; name: string }[] = [];
+    for (const u of Object.values(this.db.users)) if (await this.isHandoffAdmin(u.id)) admins.push({ id: u.id, name: u.name });
+    return eligibleHandoffAdmins(m, admins).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  /**
+   * 1.4.7 (QA V146-9): who counts as an admin for the scorer handoff. 1.4.6 used isAdmin, true for the demo admin
+   * account only while THIS phone had switched admin mode on – so on the scorer's phone the list was empty although
+   * the hint promised "or an admin". The demo admin account is the demo's admin, as ADMIN_UIDS on the API.
+   */
+  async isHandoffAdmin(id: string) {
+    return (await this.isAdmin(id)) || this.canBeDemoAdmin(id);
+  }
   async isAdmin(id: string) {
     return DEMO_ADMIN_UIDS.includes(id) || this.isDemoAdmin(id);
   }
@@ -302,6 +324,11 @@ export class DemoBackend implements Backend {
     let p: UserProfile;
     if (sentRegistration(p0)) {
       const f = checkRegistrationUpdate(p0, stored, MIN_AGE);
+      // 1.4.0 (QA V139-3): one email per account, like the API (case/spaces only, NFC).
+      // 1.4.1 (V140-3): the account's own unchanged address (up to normalisation) is never refused.
+      const key = emailKey(f.email);
+      if (key && key !== emailKey(stored?.email) && Object.values(this.db.users).some((u) => u.id !== p0.id && emailKey(u.email) === key))
+        throw Object.assign(new CodedError('email_taken', 'This email is already used by another account.'), { field: 'email' });
       const found = demoPincodeLookup(f.pincode);
       if (found.status === 'invalid') throw new CodedError('pincode_unknown', 'Unknown pincode');
       p = checkProfileFields({ ...p0, ...f, name: fullName(f.firstName, f.lastName), district: found.status === 'ok' ? found.district : null, state: found.status === 'ok' ? found.state : null });
@@ -435,7 +462,13 @@ export class DemoBackend implements Backend {
     if (!m) throw new Error('Match not found');
     if (this.authUser && m.scorerId !== this.authUser.uid) throw new Error('Only the assigned scorer can change the score');
     // 1.3.0: closed after the POTM / abandon; one-way statuses; times are the backend's own clock.
-    guardProgress(m, p.status);
+    // 1.4.3 (QA V142-7, API parity): the status follows the events – the winning rally makes the match finished
+    // (a client that still says "live" can't keep it open to abandon or edit it later)
+    if (computeState(m.rules, p.events, m.firstServe).finished) p = { ...p, status: 'finished' };
+    // 1.4.4 (QA V143-8, API parity): 'finished' without a winner in the events is ignored – the match stays live
+    // (the API derives the status from the events the same way)
+    else if (p.status === 'finished') p = { ...p, status: 'live' };
+    guardProgress(m, p.status, p.events); // 1.4.2 (V141-8): a finished match's score never changes
     this.checkRoster({ ...m, ...p });
     checkMatchFields({ events: p.events });
     // 1.3.2 parity with the API (validateEvents) and firestore.rules (creditIn): a point may only be
@@ -454,7 +487,68 @@ export class DemoBackend implements Backend {
     // totals the client sent are ignored.
     const summary = summarize(computeState(m.rules, p.events, m.firstServe));
     const { startedAt: _s, finishedAt: _f, playerOfMatchId: _p, summary: _clientSummary, ...rest } = p;
-    this.db.matches[id] = { ...m, ...rest, summary, ...stampTimes(m, p.status, Date.now()), updatedAt: Date.now() };
+    // 1.4.5 (QA V144-1): maxEvents only grows (undo never lowers it); wasWon latches once finished
+    const marks = { maxEvents: nextMaxEvents(m, p.events), wasWon: !!m.wasWon || p.status === 'finished' };
+    this.db.matches[id] = { ...m, ...rest, ...marks, summary, ...stampTimes(m, p.status, Date.now()), updatedAt: Date.now() };
+    this.changed();
+  }
+  // ---------- 1.4.5 (QA V144-1/2/3): abandon, consent request, admin resolution (src/core/abandon.ts) ----------
+  private applyAction(id: string, m: Match, patch: Partial<Match>) {
+    const now = Date.now();
+    const times: Partial<Match> = {};
+    if (patch.status === 'finished') Object.assign(times, { finishedAt: now, finishedServerAt: now, wasWon: true });
+    else if (patch.status === 'live') Object.assign(times, { finishedAt: null, finishedServerAt: null });
+    else if (patch.status === 'abandoned') Object.assign(times, { finishedAt: now, finishedServerAt: null });
+    this.db.matches[id] = { ...m, ...patch, ...times, updatedAt: now };
+    this.changed();
+  }
+  async abandonMatch(matchId: string) {
+    await this.ready;
+    const m = this.db.matches[matchId];
+    if (!m) throw new Error('Match not found');
+    this.requireTerms();
+    const plan = planAbandon(m, this.authUser?.uid ?? '', Date.now());
+    this.applyAction(matchId, m, abandonPatch(plan, Date.now()));
+    return plan.kind === 'request' ? ('requested' as const) : ('abandoned' as const);
+  }
+  async answerAbandonRequest(matchId: string, action: AbandonAnswer) {
+    await this.ready;
+    const m = this.db.matches[matchId];
+    if (!m) throw new Error('Match not found');
+    this.requireTerms();
+    this.applyAction(matchId, m, answerAbandon(m, this.authUser?.uid ?? '', action, Date.now()));
+  }
+  async resolveMatch(matchId: string, action: ResolveAction) {
+    await this.ready;
+    const me = this.authUser?.uid ?? '';
+    const m = this.db.matches[matchId];
+    if (!m) throw new Error('Match not found');
+    this.applyAction(matchId, m, resolvePatch(m, me, await this.isAdmin(me), action, Date.now()));
+  }
+  async reportAbandon(matchId: string) {
+    await this.ready;
+    const m = this.db.matches[matchId];
+    if (!m) throw new Error('Match not found');
+    this.requireTerms();
+    this.applyAction(matchId, m, reportAbandon(m, this.authUser?.uid ?? '', Date.now()));
+  }
+  async reassignScorer(matchId: string, scorerId: string) {
+    await this.ready;
+    const me = this.authUser?.uid ?? '';
+    const m = this.db.matches[matchId];
+    if (!m) throw new Error('Match not found');
+    const p = reassignProblem(m, me, await this.isAdmin(me), scorerId);
+    if (p) throw new CodedError(p, HANDOVER_MESSAGES[p] ?? GUARD_MESSAGES[p] ?? p);
+    const rec = reassignRecord(m, me, scorerId, Date.now());
+    this.db.matches[matchId] = { ...m, scorerId, ...(rec ? { scorerReassign: rec } : {}), updatedAt: Date.now() };
+    this.changed();
+  }
+  async repairVerdict(matchId: string, fix: RepairFix) {
+    await this.ready;
+    const me = this.authUser?.uid ?? '';
+    const m = this.db.matches[matchId];
+    if (!m) throw new Error('Match not found');
+    this.db.matches[matchId] = { ...m, ...repairPatch(m, me, await this.isAdmin(me), fix, Date.now()), updatedAt: Date.now() };
     this.changed();
   }
   async setPlayerOfMatch(matchId: string, playerId: string) {
@@ -471,23 +565,51 @@ export class DemoBackend implements Backend {
     if (!m) throw new Error('Match not found');
     const interestedOnly = Object.keys(patch).every((k) => k === 'interestedIds' || k === 'updatedAt');
     if (!interestedOnly) this.requireTerms();
+    // 1.4.5 (QA V144-1): {status: 'abandoned'} is the abandon action (records who, when, the score; policy switch)
+    if (patch.status === 'abandoned' && (m.status === 'live' || m.status === 'scheduled')) {
+      if (Object.keys(patch).some((k) => k !== 'status' && k !== 'updatedAt')) throw new CodedError(MATCH_STATUS_MOVE, GUARD_MESSAGES[MATCH_STATUS_MOVE]);
+      await this.abandonMatch(id);
+      return;
+    }
     guardUpdate(m, patch);
+    // 1.4.6 (QA V145, API parity – decideMatchUpdate / firestore.rules): only the scorer edits a match; the creator or
+    // the scorer may hand scoring over (that field only); anyone may toggle their own "I want to play".
+    const me = this.authUser?.uid;
+    if (me && !interestedOnly && me !== m.scorerId) {
+      const handover = Object.keys(patch).every((k) => k === 'scorerId' || k === 'updatedAt') && me === m.createdBy;
+      if (!handover) throw new CodedError('forbidden', 'Only the scorer can change this match');
+    }
+    // 1.4.5 (QA V144-8, interim): after the first rally scoring goes only to the scorer's own side (or an admin)
+    if (patch.scorerId !== undefined && patch.scorerId !== m.scorerId) {
+      const hp = handoverProblem(m, patch.scorerId, { targetIsAdmin: await this.isHandoffAdmin(patch.scorerId) });
+      if (hp) throw new CodedError(hp, HANDOVER_MESSAGES[hp]);
+    }
+    // 1.4.4 (QA V143-8, API parity): new rules / first serve can't turn a live match into a won one
+    const rulesEnd = rulesEndProblem(m, patch);
+    if (rulesEnd) throw new CodedError(rulesEnd, GUARD_MESSAGES[rulesEnd]);
     if (patch.teamA || patch.teamB || patch.participantIds) patch = { ...patch, participantIds: canonicalParticipants({ ...m, ...patch }) };
-    patch = checkMatchFields(patch, { scheduleChanged: patch.scheduledAt !== undefined && patch.scheduledAt !== m.scheduledAt });
+    patch = checkMatchFields(patch, { scheduleChanged: patch.scheduledAt !== undefined && patch.scheduledAt !== m.scheduledAt, status: m.status });
     checkOrder('finishedAt', patch.startedAt ?? m.startedAt, patch.finishedAt ?? m.finishedAt);
     const next = { ...m, ...patch };
     // 1.3.7 (R136-4/5, API parity): players and the team size mode are fixed after the first rally.
-    const ids = (t: Match['teamA']) => JSON.stringify(t.players.map((x) => x.id));
-    const rosterChanged = (patch.teamA && ids(patch.teamA) !== ids(m.teamA)) || (patch.teamB && ids(patch.teamB) !== ids(m.teamB));
-    const modeChanged = patch.teamSizeMode !== undefined && (patch.teamSizeMode ?? null) !== (m.teamSizeMode ?? null);
-    if ((rosterChanged || modeChanged) && m.events.length > 0) throw new CodedError('roster_locked', ROSTER_LOCKED_MESSAGE);
+    // 1.4.6 (QA V145-3): teams, participants, captains and team size are part of guardUpdate's set-up lock
+    // (match_setup_locked once maxEvents > 0, also after undo to 0) – the same check on every backend.
     // A legacy match short of players may still be abandoned (only the status changes).
     const abandoning = isAbandonOnly(Object.keys(patch), next.status);
     if (patch.teamA || patch.teamB || patch.status || patch.teamSizeMode !== undefined) this.checkRoster(next, !abandoning && (next.status === 'live' || next.events.length > 0));
     if (patch.teamA || patch.teamB || patch.participantIds) this.checkParticipants(next);
+    // 1.4.3 (QA V142-3, API parity): the summary is never taken from the client – it is recomputed from the
+    // events whenever they, the rules or the first serve change (a finished match can't change any of them:
+    // guardUpdate → finishedFreezeProblem), and 'finished' needs a winner in the event log.
+    const { summary: _clientSummary, ...rest } = patch;
+    const summary = rest.events || rest.rules || rest.firstServe ? summarize(computeState(next.rules, next.events, next.firstServe)) : m.summary;
+    if (next.status === 'finished' && (rest.status || rest.events || rest.rules || rest.firstServe) && !computeState(next.rules, next.events, next.firstServe).winner)
+      throw new CodedError('match_no_winner', 'A match can only finish when a team has won the required sets');
     const now = Date.now();
     const times = patch.status && patch.status !== m.status ? { ...stampTimes(m, patch.status, now), ...(patch.status === 'abandoned' ? { finishedAt: now } : {}) } : {};
-    this.db.matches[id] = { ...m, ...patch, ...times, id, updatedAt: now };
+    // 1.4.6 (QA V145-7): every write path keeps the latches – maxEvents only grows, wasWon only latches (also here)
+    const marks = { maxEvents: nextMaxEvents(m, next.events), wasWon: !!m.wasWon || next.status === 'finished' };
+    this.db.matches[id] = { ...m, ...rest, summary, ...times, ...marks, id, updatedAt: now };
     this.changed();
   }
   watchLiveMatches(cb: (m: Match[]) => void) {
@@ -596,12 +718,14 @@ export class DemoBackend implements Backend {
     const problem = confirmProblem(m, me);
     if (problem) throw new CodedError(problem, CONFIRM_MESSAGES[problem]);
     // 1.3.7 (F135-1): after an admin cleared the flag the status stays 'approved'; the captain's verdict decides.
-    const prev = m.verification;
+    // 1.4.6 (QA V145-2): only the verdict of the current re-open epoch counts; a new one carries the epoch
+    const prev = currentVerification(m);
+    const epoch = m.reopenEpoch ?? 0;
     const captain = status === 'confirmed' ? ('confirmed' as const) : ('rejected' as const);
     const verification =
       prev?.status === 'approved'
-        ? { ...prev, captain, by: me, at: Date.now(), ...(reason ? { reason } : {}) }
-        : { status, captain, by: me, at: Date.now(), ...(reason ? { reason } : {}) };
+        ? { ...prev, captain, by: me, at: Date.now(), epoch, ...(reason ? { reason } : {}) }
+        : { status, captain, by: me, at: Date.now(), epoch, ...(reason ? { reason } : {}) };
     // 1.3.9 (V138-11): the confirmation time goes to confirmedAt; the match's own times are never touched
     this.db.matches[matchId] = { ...m, verification, ...(status === 'confirmed' ? { confirmedAt: verification.at } : {}), updatedAt: Date.now() };
     this.changed();
@@ -622,11 +746,13 @@ export class DemoBackend implements Backend {
     const m = this.db.matches[matchId];
     if (!m) throw new Error('Match not found');
     const v = verificationStatus(m);
-    if (!isCompleted(m)) throw new CodedError('not_completed', CONFIRM_MESSAGES.not_completed);
+    // 1.4.5 (QA V144-2): a match stored as finished without a winner can be voided too (no POTM needed)
+    const winnerless = m.status === 'finished' && !matchOver({ ...m, status: 'live' });
+    if (!isCompleted(m) && !(winnerless && decision === 'void')) throw new CodedError('not_completed', CONFIRM_MESSAGES.not_completed);
     if (v === 'approved' || v === 'voided') throw new CodedError('already_reviewed', CONFIRM_MESSAGES.already_reviewed);
     if (ownMatchReview(m, me)) throw new CodedError(OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE);
     // 1.3.8 (V137-1): keep the captain's verdict explicitly (also one only recorded in the older fields)
-    this.db.matches[matchId] = { ...m, verification: { ...(m.verification ?? { status: 'pending' }), captain: captainVerdict(m), status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: Date.now() }, updatedAt: Date.now() };
+    this.db.matches[matchId] = { ...m, verification: { ...(currentVerification(m) ?? { status: 'pending' }), captain: captainVerdict(m), status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: Date.now(), epoch: m.reopenEpoch ?? 0 }, updatedAt: Date.now() };
     this.changed();
   }
   // ---------- 1.3.7 feedback + fact of the day (local) ----------
@@ -652,25 +778,46 @@ export class DemoBackend implements Backend {
   }
   async listDailyItems(opts?: { all?: boolean }) {
     await this.ready;
-    return this.dailyItems.filter((x) => opts?.all || x.active).map((x) => ({ ...x }));
+    // 1.4.1 (V140-7): admins see everything but deleted tombstones; the public list also carries the items
+    // that are off / deleted (only their timestamps), which keep their slots in started rotation cycles.
+    return opts?.all
+      ? this.dailyItems.filter((x) => !x.deleted).map((x) => ({ ...x }))
+      : this.dailyItems.filter((x) => x.active || x.removedAt != null).map((x) => (x.active ? { ...x } : dailyTombstone(x))); // as the API
   }
   async saveDailyItem(item: Partial<DailyItem>) {
     await this.ready;
     if (!(await this.isAdmin(this.authUser?.uid ?? ''))) throw new CodedError('admin_only', 'Admins only');
     const c = checkDailyItem(item);
-    const id = item.id ?? 'd_' + uid();
-    const i = this.dailyItems.findIndex((x) => x.id === id);
+    const i = item.id ? this.dailyItems.findIndex((x) => x.id === item.id && !x.deleted) : -1;
     if (item.id && i < 0) throw new Error('Item not found');
-    // 1.3.9 (V138-7): createdAt (phone clock in the demo) – a new item joins the daily rotation tomorrow
-    if (i >= 0) this.dailyItems[i] = { ...c, id, createdAt: this.dailyItems[i].createdAt ?? null };
-    else this.dailyItems.push({ ...c, id, createdAt: Date.now() });
+    const now = Date.now();
+    // createdAt (phone clock in the demo): a new item leads the next rotation cycle (core/dailyItems.ts pickDaily).
+    // 1.4.1 (V140-7): turning an item off stamps removedAt once; turning it back on creates a copy (new id,
+    // new createdAt) and leaves the old one as a deleted tombstone, so started cycles never change.
+    if (i >= 0) {
+      const old = this.dailyItems[i];
+      if (!old.active && c.active) {
+        this.dailyItems[i] = { ...dailyTombstone(old), deleted: true, removedAt: old.removedAt ?? null }; // pre-1.4.1 off items stay out of the cycles; 1.4.2 (V141-6): no text kept
+        const id = 'd_' + uid();
+        this.dailyItems.push({ ...c, id, createdAt: now, removedAt: null });
+        this.changed();
+        return id;
+      }
+      const removedAt = old.active ? (c.active ? null : now) : old.removedAt ?? null;
+      this.dailyItems[i] = { ...c, id: old.id, createdAt: old.createdAt ?? null, removedAt };
+      this.changed();
+      return old.id;
+    }
+    const id = 'd_' + uid();
+    this.dailyItems.push({ ...c, id, createdAt: now, removedAt: c.active ? null : now });
     this.changed();
     return id;
   }
   async deleteDailyItem(id: string) {
     await this.ready;
     if (!(await this.isAdmin(this.authUser?.uid ?? ''))) throw new CodedError('admin_only', 'Admins only');
-    this.db.dailyItems = this.dailyItems.filter((x) => x.id !== id);
+    // 1.4.1 (V140-7): a tombstone (keeps its slot in the cycles that had started), never listed again
+    this.db.dailyItems = this.dailyItems.map((x) => (x.id === id && !x.deleted ? { ...dailyTombstone(x), active: false, deleted: true, removedAt: x.active ? Date.now() : x.removedAt ?? null } : x)); // 1.4.2 (V141-6): no text kept
     this.changed();
   }
   /** 1.3.6: bundled sample only – the demo makes no network calls. */
@@ -680,7 +827,8 @@ export class DemoBackend implements Backend {
   async listFlagged() {
     await this.ready;
     if (!(await this.isAdmin(this.authUser?.uid ?? ''))) return [];
-    return Object.values(this.db.matches).filter(needsReview).sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0));
+    // 1.4.5: plus abandoned matches waiting for review, finished without a winner, pending abandon requests
+    return Object.values(this.db.matches).filter((m) => needsReview(m) || needsAdminAction(m)).sort((a, b) => (b.finishedAt ?? b.updatedAt ?? 0) - (a.finishedAt ?? a.updatedAt ?? 0));
   }
 
   // ---------- challenges ----------
@@ -771,6 +919,14 @@ export class DemoBackend implements Backend {
     await AsyncStorage.removeItem(QA_ADMIN_KEY).catch(() => {});
     connectivity.setSimulatedOffline(false);
     await AsyncStorage.removeItem(SIM_OFFLINE_KEY).catch(() => {});
+    // 1.4.1 (QA V140-13): the review prompt's 60-day "last asked" is per user on this phone; a demo reset
+    // starts over, so it is cleared too (it used to survive and silently block the prompt after a reset)
+    try {
+      const keys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(REVIEW_LAST_ASKED_PREFIX));
+      if (keys.length) await AsyncStorage.multiRemove(keys);
+    } catch {
+      // storage unavailable: nothing to clear
+    }
     this.changed();
     await this.signOut();
   }

@@ -29,7 +29,7 @@ async function countableMatches(db: Trx): Promise<CountableMatch[]> {
     .where('status', 'finished')
     .whereNotNull('player_of_match_id')
     .whereIn('verification_status', ['confirmed', 'approved'])
-    .select('id', 'status', 'summary', 'created_by', 'scorer_id', 'player_of_match_id', 'captain_a', 'captain_b', 'verification_status', 'captain_verdict', 'verified_by', 'verified_at', 'dispute_reason', 'started_server_at', 'finished_at');
+    .select('id', 'status', 'summary', 'created_by', 'scorer_id', 'player_of_match_id', 'captain_a', 'captain_b', 'verification_status', 'captain_verdict', 'verified_by', 'verified_at', 'dispute_reason', 'started_server_at', 'finished_at', 'reopen_epoch', 'verdict_epoch');
   if (!rows.length) return [];
   const ids = rows.map((r: { id: string }) => r.id);
   const [sides, players] = await Promise.all([
@@ -57,7 +57,9 @@ async function countableMatches(db: Trx): Promise<CountableMatch[]> {
       captains: r.captain_a && r.captain_b ? { A: r.captain_a as string, B: r.captain_b as string } : null,
       // 1.3.8 (V137-1): by/reason too, so an answer kept only in the older fields is recognised
       // (1.3.9, V138-3: and `at` – only an answer from before 1.3.7 may lack the verdict)
-      verification: { status: r.verification_status as 'confirmed' | 'approved', captain: (r.captain_verdict as 'confirmed' | 'rejected' | null) ?? null, by: (r.verified_by as string | null) ?? null, at: toMs(r.verified_at as Date | null), reason: (r.dispute_reason as string | null) ?? null },
+      verification: { status: r.verification_status as 'confirmed' | 'approved', captain: (r.captain_verdict as 'confirmed' | 'rejected' | null) ?? null, by: (r.verified_by as string | null) ?? null, at: toMs(r.verified_at as Date | null), reason: (r.dispute_reason as string | null) ?? null, epoch: Number(r.verdict_epoch ?? 0) },
+      // 1.4.6 (QA V145-2): a verdict counts only in the current re-open epoch (core/antifraud.ts currentVerification)
+      reopenEpoch: Number(r.reopen_epoch ?? 0),
       startedServerAt: toMs(r.started_server_at as Date | null),
       finishedServerAt: toMs(r.finished_at as Date | null),
       winner: summary?.winner ?? null,

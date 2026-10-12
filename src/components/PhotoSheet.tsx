@@ -8,7 +8,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal } from './AppModal'; // 1.4.0 (V139-7): holds the review prompt while open
 import type { MatchPhoto } from '../core/types';
 import { hasCameraButton } from '../services/camera';
 import { backend } from '../services/backend';

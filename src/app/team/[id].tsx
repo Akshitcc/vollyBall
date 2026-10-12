@@ -95,10 +95,10 @@ export default function TeamPage() {
         </View>
         {isCaptain && uid !== me.id && (
           <>
-            <Pressable onPress={() => toggleSub(uid)} hitSlop={8} style={{ marginRight: 14 }}>
+            <Pressable accessibilityRole="button" onPress={() => toggleSub(uid)} hitSlop={8} style={{ marginRight: 14 }}>
               <Text style={{ color: colors.ink, fontWeight: '800', fontSize: 12 }}>{team.subIds.includes(uid) ? t('team.makeStarter') : t('team.makeSub')}</Text>
             </Pressable>
-            <Pressable onPress={() => remove(uid)} hitSlop={8}>
+            <Pressable accessibilityRole="button" onPress={() => remove(uid)} hitSlop={8}>
               <Ionicons name="close-circle" size={22} color={colors.danger} />
             </Pressable>
           </>
@@ -157,7 +157,7 @@ export default function TeamPage() {
                 <Text style={{ flex: 1, marginLeft: 8, fontWeight: '700' }}>{maskPhone(p)}</Text>
                 {isCaptain && (
                   <>
-                    <Pressable onPress={() => backend.updateTeam(team.id, { pendingPhones: team.pendingPhones.filter((x) => x !== p) })}>
+                    <Pressable accessibilityRole="button" onPress={() => backend.updateTeam(team.id, { pendingPhones: team.pendingPhones.filter((x) => x !== p) })}>
                       <Ionicons name="trash-outline" size={20} color={colors.danger} />
                     </Pressable>
                   </>

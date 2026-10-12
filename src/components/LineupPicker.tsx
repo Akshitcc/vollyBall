@@ -6,7 +6,8 @@
  */
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal } from './AppModal'; // 1.4.0 (V139-7): holds the review prompt while open
 import { COURT_SIZE, assignPosition, courtGrid, defaultLineup, type SideLineups, type Slot } from '../core/rotation';
 import type { Side } from '../core/scoring';
 import type { Match } from '../core/types';
@@ -81,7 +82,7 @@ export default function LineupPicker({ visible, match, setNumber, initial, scree
                             const id = slots[pos - 1];
                             const active = sel?.side === side && sel.pos === pos;
                             return (
-                              <Pressable
+                              <Pressable accessibilityRole="button"
                                 key={pos}
                                 testID={`lineup-${side}-p${pos}`}
                                 onPress={() => setSel(active ? null : { side, pos })}
@@ -106,7 +107,7 @@ export default function LineupPicker({ visible, match, setNumber, initial, scree
                     {team.players.map((p) => {
                       const at = slots.indexOf(p.id);
                       return (
-                        <Pressable
+                        <Pressable accessibilityRole="button"
                           key={p.id}
                           testID={`lineup-${side}-player-${p.id}`}
                           onPress={() => pick(side, p.id)}

@@ -8,10 +8,11 @@ import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { AccessibilityInfo, StyleSheet, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
-import { ADMIN_APPROVAL, ANTI_FRAUD, confirmProblem, expectedConfirmer, matchFlags, resultState, verificationStatus, type FraudFlag, type ResultState } from '../core/antifraud';
+import { ADMIN_APPROVAL, ANTI_FRAUD, captainVerdict, confirmProblem, expectedConfirmer, matchFlags, resultState, verificationStatus, type FraudFlag, type ResultState } from '../core/antifraud';
 import type { Match } from '../core/types';
 import { translateError } from '../i18n/format';
 import { backend } from '../services/backend';
+import { confirmAsk } from '../services/dialogs';
 import { colors, radius, type } from '../theme';
 import { Button } from './ui';
 
@@ -88,11 +89,24 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
     }
   };
   // 1.3.8: from the stored status (an approved match can now show as 'confirmed')
+  // 1.4.1 (QA V140-12): the opposing captain's answer is part of the stored match, so it is shown from the match
+  // every time – not only in the 5-second notice after pressing Confirm, which a reload lost. Shown when the badge
+  // says something else (a flagged, voided or admin-approved result); 'confirmed' / 'approved_rejected' already say it.
+  const verdict = captainVerdict(match);
+  const verdictLine = verdict && (state === 'flagged' || state === 'voided' || state === 'approved') ? verdict : null;
   const reviewable = isAdmin && match.playerOfMatchId && !['approved', 'voided'].includes(verificationStatus(match));
   return (
     <View style={{ marginBottom: 10 }} testID="result-panel">
       <ResultBadge match={match} />
-      {notice && !(noticeKind === 'confirmed' && state === 'confirmed') ? (
+      {verdictLine ? (
+        <View style={s.notice} accessible testID={`result-verdict-${verdictLine}`}>
+          <Ionicons name={verdictLine === 'confirmed' ? 'checkmark-circle' : 'close-circle'} size={16} color={verdictLine === 'confirmed' ? colors.successStrong : colors.lossText} />
+          <Text style={[type.body, { color: verdictLine === 'confirmed' ? colors.successStrong : colors.lossText, fontWeight: '700', flex: 1 }]}>
+            {verdictLine === 'confirmed' ? t('verify.confirmed') : t('verify.opponentRejected')}
+          </Text>
+        </View>
+      ) : null}
+      {notice && !(noticeKind === 'confirmed' && (state === 'confirmed' || verdictLine === 'confirmed')) ? (
         <View style={s.notice} accessibilityRole="alert" accessibilityLiveRegion="polite" testID="result-notice">
           <Ionicons name="checkmark-circle" size={16} color={colors.successStrong} />
           <Text style={[type.body, { color: colors.successStrong, fontWeight: '700', flex: 1 }]}>{notice}</Text>
@@ -147,6 +161,7 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
             onVoid={() => void run(() => backend.reviewMatch(match.id, 'void'), t('verify.reviewedToast'))}
             approveID="admin-approve"
             voidID="admin-void"
+            score={reviewScoreText(match, t)}
           />
         </View>
       ) : null}
@@ -166,7 +181,10 @@ const s = StyleSheet.create({
  * 1.3.9 (V138-14): the admin's Approve / Void pair. Short button text ("Approve" / "मंज़ूर करें") with what it
  * does as a subtitle underneath, so nothing clips at 360 px in Hindi. Used on the match screen and in admin-review.
  */
-export function AdminReviewButtons({ busy, onApprove, onVoid, approveID, voidID, style }: { busy?: boolean; onApprove: () => void; onVoid: () => void; approveID: string; voidID: string; style?: StyleProp<ViewStyle> }) {
+/** 1.4.10 (QA V149-5): the final score as the review card shows it ("2–1 · 25-20  20-25  15-10"), or null. */
+export const reviewScoreText = (m: Pick<Match, 'summary'>, t: TFunction): string | null =>
+  m.summary ? t('verify.reviewScore', { a: m.summary.setsA, b: m.summary.setsB, sets: m.summary.setScores.map((x) => `${x.a}-${x.b}`).join('  ') }) : null;
+export function AdminReviewButtons({ busy, onApprove, onVoid, approveID, voidID, style, score }: { busy?: boolean; onApprove: () => void; onVoid: () => void; approveID: string; voidID: string; style?: StyleProp<ViewStyle>; score?: string | null }) {
   const { t } = useTranslation();
   const approveSub = t(ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN ? 'verify.approveSubCounts' : 'verify.approveSubClears');
   return (
@@ -176,7 +194,14 @@ export function AdminReviewButtons({ busy, onApprove, onVoid, approveID, voidID,
         <Text style={[type.caption, { color: colors.muted, marginTop: 4, textAlign: 'center' }]} testID={`${approveID}-sub`}>{approveSub}</Text>
       </View>
       <View style={{ flex: 1 }}>
-        <Button title={t('verify.voidShort')} variant="danger" loading={busy} onPress={onVoid} testID={voidID} />
+        {/* 1.4.9 (QA V148-5): Void is final – it asks first, like reinstate (every screen using these buttons) */}
+        <Button
+          title={t('verify.voidShort')}
+          variant="danger"
+          loading={busy}
+          onPress={() => void confirmAsk(score ? t('verify.voidAskScore', { score }) : t('verify.voidAsk'), { title: t('verify.voidShort'), confirmLabel: t('verify.voidShort'), cancelLabel: t('common.cancel') }).then((ok) => ok && onVoid())}
+          testID={voidID}
+        />
         <Text style={[type.caption, { color: colors.muted, marginTop: 4, textAlign: 'center' }]} testID={`${voidID}-sub`}>{t('verify.voidSub')}</Text>
       </View>
     </View>

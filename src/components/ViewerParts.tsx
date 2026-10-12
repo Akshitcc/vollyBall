@@ -12,7 +12,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { forwardRef, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Platform, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
 import Animated, { Easing, FadeIn, runOnJS, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import type { MatchState, Side } from '../core/scoring';
 import { useReduceMotion } from '../hooks/useReduceMotion';
@@ -122,7 +122,12 @@ export const LiveScoreboard = forwardRef<View, {
   /** Scorer only: tap a team's panel → team point (no player credit). */
   onTeamPoint?: (side: Side) => boolean | void;
   disabled?: boolean;
-}>(function LiveScoreboard({ teamA, teamB, st, setsNeeded, live, left = 'A', scoreRefs, testID = 'live-scoreboard', onTeamPoint, disabled }, ref) {
+  /**
+   * 1.4.5 (QA V144-6): show the points of the set in progress although the match isn't live – an ABANDONED match
+   * shows the replayed score at the moment it was abandoned (it showed the sets, 0–0, next to "Points 0–10").
+   */
+  showCurrent?: boolean;
+}>(function LiveScoreboard({ teamA, teamB, st, setsNeeded, live, left = 'A', scoreRefs, testID = 'live-scoreboard', onTeamPoint, disabled, showCurrent }, ref) {
   const { t } = useTranslation();
   const reduce = useReduceMotion();
   const [bump, setBump] = useState<{ side: Side; k: number } | null>(null);
@@ -132,7 +137,7 @@ export const LiveScoreboard = forwardRef<View, {
     return () => clearTimeout(tm);
   }, [bump]);
   const order: Side[] = left === 'A' ? ['A', 'B'] : ['B', 'A'];
-  const score = (side: Side) => (live ? (side === 'A' ? st.current.a : st.current.b) : side === 'A' ? st.setsWon.A : st.setsWon.B);
+  const score = (side: Side) => (live || showCurrent ? (side === 'A' ? st.current.a : st.current.b) : side === 'A' ? st.setsWon.A : st.setsWon.B);
   const lead = score('A') === score('B') ? null : score('A') > score('B') ? 'A' : 'B';
   return (
     <View ref={ref} style={st2.row} testID={testID}>
@@ -178,8 +183,21 @@ export const LiveScoreboard = forwardRef<View, {
                       <View key={k} style={[st2.pip, k < won && { backgroundColor: colors.primary }]} />
                     ))}
                   </View>
-                  {serving ? <ServingPill testID={`serving-${side}`} /> : <View style={{ height: 38 }} />}
-                  {onTeamPoint && (
+                  {/* 1.4.5 (QA V144-7): the Serving badge is information only – on the scorer's panel a press on it is caught
+                      here (the innermost responder wins) and never reaches the panel, so it can't score a point */}
+                  {serving ? (
+                    onTeamPoint ? (
+                      <Pressable onPress={() => {}} accessible={false} focusable={false} testID={`serving-guard-${side}`} style={{ cursor: 'auto' } as object}>
+                        <ServingPill testID={`serving-${side}`} />
+                      </Pressable>
+                    ) : (
+                      <ServingPill testID={`serving-${side}`} />
+                    )
+                  ) : (
+                    <View style={{ height: 38 }} />
+                  )}
+                  {/* 1.4.4 (QA V143-12): no "Tap · team +1" once the match is over (the panels no longer score) */}
+                  {onTeamPoint && !st.finished && (
                     <View style={[st2.hint, pressed && { backgroundColor: 'rgba(255,255,255,0.14)' }]} testID={`team-panel-hint-${side}`}>
                       <Ionicons name="add-circle" size={14} color={colors.white} />
                       <Text style={st2.hintText} numberOfLines={1}>

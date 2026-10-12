@@ -17,7 +17,7 @@
 -- This version pins utf8mb4 / utf8mb4_0900_ai_ci on the table (like every other table), compares with an
 -- explicit COLLATE utf8mb4_bin, and every step is re-runnable, so it completes from that half-applied
 -- state (or after any other failure) and a second run changes nothing. A database that recorded the
--- 1.3.8 version (QA test databases only) keeps the 1.3.8 index: recreate those test databases.
+-- 1.3.8 version is repaired by 0014_email_index_repair.sql (1.4.0, QA V139-1) – no need to recreate it.
 -- Needs the runner to run a file on one connection (src/db/migrate.ts, 1.3.9) for the guarded steps.
 CREATE TABLE IF NOT EXISTS email_duplicates_0013 (
   user_id      VARCHAR(128) NOT NULL PRIMARY KEY,

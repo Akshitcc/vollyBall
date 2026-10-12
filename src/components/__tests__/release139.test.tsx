@@ -98,13 +98,15 @@ describe('V138-12: one "Result confirmed by the opposing captain" message', () =
     expect(screen.queryByTestId('result-notice')).toBeNull();
     expect(count(msg)).toBe(1);
   });
-  it('still flagged after confirming: the notice is the only place that says it', async () => {
+  // 1.4.1 (V140-12): it is now said from the stored verdict (survives a reload), and still only once
+  it('still flagged after confirming: one line says it, from the match itself', async () => {
     const short = { finishedAt: 8 * 60_000, finishedServerAt: 8 * 60_000 } as Partial<Match>;
     const view = await render(<ResultPanel match={mkMatch(short)} meId="b1" isAdmin={false} nameOf={nameOf} />);
     await act(async () => fireEvent.press(screen.getByTestId('confirm-result')));
     await view.rerender(<ResultPanel match={mkMatch({ ...short, verification: { status: 'confirmed', captain: 'confirmed', by: 'b1', at: 1 } } as Partial<Match>)} meId="b1" isAdmin={false} nameOf={nameOf} />);
     expect(screen.getByTestId('result-flagged')).toBeTruthy();
-    expect(screen.getByTestId('result-notice')).toHaveTextContent('Result confirmed by the opposing captain');
+    expect(screen.queryByTestId('result-notice')).toBeNull();
+    expect(screen.getByTestId('result-verdict-confirmed')).toHaveTextContent('Result confirmed by the opposing captain');
     expect(count('Result confirmed by the opposing captain')).toBe(1);
   });
 });
@@ -157,7 +159,7 @@ describe('V138-14: admin review buttons and Hindi wording', () => {
     const onApprove = jest.fn();
     await render(<AdminReviewButtons onApprove={onApprove} onVoid={jest.fn()} approveID="ap" voidID="vo" />);
     expect(screen.getByTestId('ap')).toHaveTextContent(lng === 'en' ? 'Approve' : 'मंज़ूर करें');
-    expect(screen.getByTestId('vo')).toHaveTextContent(lng === 'en' ? 'Void' : 'रद्द करें');
+    expect(screen.getByTestId('vo')).toHaveTextContent(lng === 'en' ? 'Void' : 'अमान्य करें'); // 1.4.8 (V147-5): Void ≠ Cancel
     expect(screen.getByTestId('ap-sub')).toBeTruthy();
     expect(screen.getByTestId('vo-sub')).toHaveTextContent(i18n.t('verify.voidSub'));
     await fireEvent.press(screen.getByTestId('ap'));
@@ -173,6 +175,6 @@ describe('V138-14: admin review buttons and Hindi wording', () => {
     expect(hi.score.sub).toBe('खिलाड़ी बदलें');
     expect(hi.score.sub).not.toBe(hi.newMatch.change);
     const src = require('fs').readFileSync(require('path').join(__dirname, '../../i18n/locales/hi.ts'), 'utf8') as string;
-    expect((src.match(/NEEDS REVIEW/g) ?? []).length).toBe(3); // the 3 strings nobody has reviewed yet
+    expect((src.match(/NEEDS REVIEW/g) ?? []).length).toBe(0); // 1.4.0 (V139-6): QA reviewed the last 3
   });
 });

@@ -60,6 +60,16 @@ export function playerStats(rules: RuleSet, events: readonly MatchEvent[], first
 }
 
 /**
+ * 1.4.2 (QA info): the shot-type breakdown next to a player's points – only the types that occurred
+ * ("2💥 1🎯"); nothing when the points were all credited without a type (chip-only scoring showed
+ * "0💥 0🧱 0🎯 0🪶" next to real points); '—' for a player without a line.
+ */
+export function kindBreakdown(line: PlayerLine | undefined | null): string {
+  if (!line) return '—';
+  return (Object.keys(KIND_EMOJI) as PointKind[]).filter((k) => line[k] > 0).map((k) => `${line[k]}${KIND_EMOJI[k]}`).join(' ');
+}
+
+/**
  * 1.3.2: live point count per player (the number on each court tile). The same derivation as the
  * match stats, Profile career, rankings and the Player of the Match (playerStats), so the counts
  * shown while scoring always agree with them.

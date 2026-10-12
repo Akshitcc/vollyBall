@@ -24,6 +24,7 @@ import { ageFromDob } from '../../core/registration';
 import { confirmAsk } from '../../services/dialogs';
 import { DemoBackend } from '../../services/backend/demoBackend';
 import { useAuth, useMe } from '../../state/AuthContext';
+import { placeParts } from '../../core/placeNamesHi';
 import { useWatch } from '../../state/hooks';
 import { useRankings } from '../../state/useRankings';
 import { useMemories } from '../../state/useMemories';
@@ -68,8 +69,8 @@ export function formatDob(dob: string, lang: string): string {
   const [y, m, d] = dob.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(lang === 'hi' ? 'hi-IN' : 'en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 }
-function privateLabel(me: { dob?: string | null; pincode?: string | null; district?: string | null; state?: string | null }, t: TFunction) {
-  return [t('profile.privateDetails'), me.dob ? t('profile.dobAge', { dob: me.dob, count: ageFromDob(me.dob) ?? 0 }) : null, me.pincode ? [t('profile.pinLine', { pin: me.pincode }), me.district, me.state].filter(Boolean).join(', ') : null].filter(Boolean).join('. ');
+function privateLabel(me: { dob?: string | null; pincode?: string | null; district?: string | null; state?: string | null }, t: TFunction, lang = 'en') {
+  return [t('profile.privateDetails'), me.dob ? t('profile.dobAge', { dob: me.dob, count: ageFromDob(me.dob) ?? 0 }) : null, me.pincode ? [t('profile.pinLine', { pin: me.pincode }), ...placeParts(me.district, me.state, lang)].join(', ') : null].filter(Boolean).join('. ');
 }
 
 export default function Profile() {
@@ -155,7 +156,7 @@ export default function Profile() {
 
           {/* 1.3.7 (R136-19): my own registration details – only on my own Profile tab (other players never get them) */}
           {me.dob || me.pincode ? (
-            <View style={[card, { marginTop: 10 }]} testID="profile-private" accessible accessibilityLabel={privateLabel(me, t)}>
+            <View style={[card, { marginTop: 10 }]} testID="profile-private" accessible accessibilityLabel={privateLabel(me, t, i18n.language)}>
               <Text style={{ color: colors.muted, fontSize: 12, fontWeight: '700', marginBottom: 6 }}>{t('profile.privateDetails')}</Text>
               {me.dob ? (
                 <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }} testID="profile-dob-age">
@@ -165,7 +166,8 @@ export default function Profile() {
               {me.pincode ? (
                 <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700', marginTop: 4 }} testID="profile-pin-district">
                   {t('profile.pinLine', { pin: me.pincode })}
-                  {[me.district, me.state].filter(Boolean).length ? ` · ${[me.district, me.state].filter(Boolean).join(' · ')}` : ''}
+                  {/* 1.4.2 (V141-10): Hindi names only in the Hindi UI (core/placeNamesHi.ts), never a mixed line */}
+                  {placeParts(me.district, me.state, i18n.language).length ? ` · ${placeParts(me.district, me.state, i18n.language).join(' · ')}` : ''}
                 </Text>
               ) : null}
             </View>
@@ -174,13 +176,31 @@ export default function Profile() {
           <SectionHeader
             title={t('profile.careerStats')}
             right={
-              <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 6 }} accessible accessibilityLabel={t('profile.form')} testID="profile-form">
-                {form.map((f) => (
-                  <View key={f.id} style={[st.form, f.won ? st.formW : st.formL]}>
-                    <Text style={{ fontWeight: '800', fontSize: 12, color: f.won ? colors.white : colors.lossText }}>{f.won ? t('profile.win') : t('profile.loss')}</Text>
+              /* 1.4.1 (QA V140-15): ✓ / ✗ marks (icons: no font or language needed – Hindi showed "जी हा हा"), a
+                 visible legend, and the whole strip read out as words, latest first */
+              form.length ? (
+                <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                  <View
+                    style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 6 }}
+                    accessible
+                    accessibilityRole="text"
+                    accessibilityLabel={t('profile.formLabel', { list: form.map((f) => (f.won ? t('profile.formWon') : t('profile.formLost'))).join(', ') })}
+                    testID="profile-form"
+                  >
+                    {form.map((f) => (
+                      <View key={f.id} style={[st.form, f.won ? st.formW : st.formL]} testID={`profile-form-${f.won ? 'won' : 'lost'}`}>
+                        <Ionicons name={f.won ? 'checkmark' : 'close'} size={18} color={f.won ? colors.white : colors.lossText} />
+                      </View>
+                    ))}
                   </View>
-                ))}
-              </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden testID="profile-form-legend">
+                    <Ionicons name="checkmark" size={12} color={colors.successStrong} />
+                    <Text style={st.legend}>{t('profile.formWon')}</Text>
+                    <Ionicons name="close" size={12} color={colors.lossText} style={{ marginLeft: 6 }} />
+                    <Text style={st.legend}>{t('profile.formLost')}</Text>
+                  </View>
+                </View>
+              ) : null
             }
           />
           <View style={[card, { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 4 }]} testID="career-stats">
@@ -266,4 +286,5 @@ const st = StyleSheet.create({
   form: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   formW: { backgroundColor: colors.successStrong },
   formL: { backgroundColor: colors.lossBg },
+  legend: { fontSize: 11, fontWeight: '700', color: colors.muted },
 });

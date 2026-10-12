@@ -1,5 +1,5 @@
 import type { UserProfile } from '../../../src/core/types';
-import { checkRegistrationUpdate, DEFAULT_MIN_AGE, fullName, hasStoredRegistration, isApsPincode, pincodePrefixOk, sentRegistration } from '../../../src/core/registration';
+import { checkRegistrationUpdate, DEFAULT_MIN_AGE, emailKey, fullName, hasStoredRegistration, isApsPincode, pincodePrefixOk, sentRegistration } from '../../../src/core/registration';
 import { publicFileUrl, storedFileUrl, type Services } from '../context';
 import { conflict, forbidden, HttpError, invalidInput, notFound } from '../errors';
 import { INVALID_PHONE_CODE, INVALID_PHONE_MESSAGE, isValidE164 } from '../../../src/core/phone';
@@ -156,8 +156,15 @@ export async function saveProfile(
   // 1.3.7 (R136-9): one email address per account. Case-insensitive only (emails are stored lower-case);
   // 1.3.9 (V138-2): accents and widths count (josé@ ≠ jose@, straße@ ≠ strasse@), compared byte for byte.
   // Same expression as the 0013 unique index (EMAIL_NORM_SQL), so MySQL can use it.
-  if (f.email && (await s.db('users').whereRaw(`${EMAIL_NORM_SQL} = ?`, [f.email]).whereNot({ id: p.id }).first('id')))
+  // 1.4.1 (QA V140-3): an UNCHANGED address (the stored one, up to normalisation) is never refused. A legacy
+  // account stored it decomposed (NFD, before 1.4.0) and another account may since hold the composed form
+  // (MySQL compares bytes): then the stored value is kept exactly as it is, so the profile still saves and
+  // the unique index (which also compares bytes) is not hit. Otherwise it is stored normalised.
+  const unchangedEmail = !!f.email && !!existing?.email && (emailKey(existing.email) === f.email || existing.email === f.email); // 1.4.4 (V143-6): an out-of-list stored address is returned as stored
+  const heldElsewhere = f.email ? await s.db('users').whereRaw(`${EMAIL_NORM_SQL} = ?`, [f.email]).whereNot({ id: p.id }).first('id') : null;
+  if (heldElsewhere && !unchangedEmail)
     throw new HttpError(409, 'email_taken', 'Invalid request: email – this email belongs to another account', { field: 'email' });
+  if (heldElsewhere && unchangedEmail) f = { ...f, email: existing!.email! };
   // Unchanged pincode: keep the stored district/state (no new lookup); otherwise look it up. Only a
   // lookup result is stored (1.3.7, R136-13: a client-sent district is never trusted).
   let place: { district: string | null; state: string | null };

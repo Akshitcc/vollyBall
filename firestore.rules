@@ -126,37 +126,39 @@ service cloud.firestore {
     function maxPlayers() { return 12; }
     function idOk(id) { return id is string && id.matches('^[A-Za-z0-9_-]{1,128}$'); }
     function sideOk(t) {
-      return t.players is list && t.players.size() <= maxPlayers()
+      // (1.4.4: no `is list` – a non-list fails rosterIdsOk's p[i].id, which denies the write)
+      return t.players.size() <= maxPlayers()
         && t.name.size() <= 40 && t.name.matches(nameRe())
-        && t.get('color', '#000000').matches('^#[0-9A-Fa-f]{6}$')
+        && t.color.matches('^#[0-9A-Fa-f]{6}$')
         && (t.get('teamId', null) == null || idOk(t.teamId));
     }
     // Player ids of a team (sizes above maxPlayers() are rejected before this runs). Unrolled
     // by size (a binary split keeps it cheap) because rules have no loops and stop after
     // 1000 evaluated expressions.
     function playerIds(p) {
-      return (p.size() <= 6
-        ? (p.size() <= 3
-          ? (p.size() <= 1
-            ? (p.size() <= 0
+      let n = p.size();
+      return (n <= 6
+        ? (n <= 3
+          ? (n <= 1
+            ? (n <= 0
               ? []
               : [p[0].id])
-            : (p.size() <= 2
+            : (n <= 2
               ? [p[0].id, p[1].id]
               : [p[0].id, p[1].id, p[2].id]))
-          : (p.size() <= 5
-            ? (p.size() <= 4
+          : (n <= 5
+            ? (n <= 4
               ? [p[0].id, p[1].id, p[2].id, p[3].id]
               : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id])
             : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id]))
-        : (p.size() <= 9
-          ? (p.size() <= 8
-            ? (p.size() <= 7
+        : (n <= 9
+          ? (n <= 8
+            ? (n <= 7
               ? [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id]
               : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id, p[7].id])
             : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id, p[7].id, p[8].id])
-          : (p.size() <= 11
-            ? (p.size() <= 10
+          : (n <= 11
+            ? (n <= 10
               ? [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id, p[7].id, p[8].id, p[9].id]
               : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id, p[7].id, p[8].id, p[9].id, p[10].id])
             : [p[0].id, p[1].id, p[2].id, p[3].id, p[4].id, p[5].id, p[6].id, p[7].id, p[8].id, p[9].id, p[10].id, p[11].id])));
@@ -172,45 +174,57 @@ service cloud.firestore {
     // participantIds[off .. off+n) must be exactly this team's player ids, in order.
     // participantIds is format-checked as a whole (listIdsOk), so equal ids are well-formed too.
     function playersOk(p, ids, off) {
-      return p.size() == 0 || ids[off:off + p.size()] == playerIds(p);
+      let n = p.size();
+      return n == 0 || ids[off:off + n] == playerIds(p);
     }
     function participantsOk(d) {
       let n = d.teamA.players.size() + d.teamB.players.size();
       let ids = d.participantIds;
-      return ids is list && ids.size() >= n && ids.size() <= n + 2
+      return ids.size() >= n && ids.size() <= n + 2
         && ids.toSet().size() == ids.size() && listIdsOk(ids)
         && (ids.size() == n || ids[n:ids.size()].toSet().hasOnly([d.createdBy, d.scorerId]));
     }
-    function teamMembersOk(t, ids, off) {
+    // 1.4.4 (QA V143-5): each side's source is checked once, together with its captain (captainsOk), so the teamId
+    // is read once per side and a registered team's doc once: the team's memberIds hold every player of the side
+    // and its captainId is the side's captain; a side built by number names one of its own players as captain and
+    // its first 4 players must have a profile (byNumberUsersOk; see the read budget above).
+    function sourceOk(t, ids, off, cap) {
+      let s = ids[off:off + t.players.size()];
       return t.get('teamId', null) == null
-        || (exists(/databases/$(database)/documents/teams/$(t.teamId))
-            && (t.players.size() == 0
-                || get(/databases/$(database)/documents/teams/$(t.teamId)).data.memberIds
-                     .hasAll(ids[off:off + t.players.size()])));
+        // 1.4.5 (PRD gap): the captain has a profile too – byNumberUsersOk checks the first 3 players, so a captain
+        // outside them costs one more exists() (a by-number create stays within the 10 document reads:
+        // 2 x (3 + 1) + terms). s[0:3] is the side's first 3 players (or all of a smaller side).
+        ? (cap in s[0:3] ? byNumberUsersOk(t.players)
+          : cap in s && byNumberUsersOk(t.players) && exists(/databases/$(database)/documents/users/$(cap)))
+        : teamDocOk(get(/databases/$(database)/documents/teams/$(t.teamId)).data, ids, off, t.players.size(), cap);
     }
-    // First 4 players of a by-number side must be registered users (see the read budget above).
-    function userExists(id) { return exists(/databases/$(database)/documents/users/$(id)); }
-    function byNumberUsersOk(t) {
-      let p = t.players;
-      return t.get('teamId', null) != null
-        || ((p.size() <= 0 || exists(/databases/$(database)/documents/users/$(p[0].id)))
-          && (p.size() <= 1 || exists(/databases/$(database)/documents/users/$(p[1].id)))
-          && (p.size() <= 2 || exists(/databases/$(database)/documents/users/$(p[2].id)))
-          && (p.size() <= 3 || exists(/databases/$(database)/documents/users/$(p[3].id))));
+    function teamDocOk(td, ids, off, n, cap) {
+      return td.captainId == cap && (n == 0 || td.memberIds.hasAll(ids[off:off + n]));
+    }
+    // 1.4.4 (QA V143-5): the first 3 players (was 4) of a side built by number must have a profile – one exists()
+    // costs ~12 expressions and the 12-a-side create needed the room. (A side of 3+ players – every side once
+    // scoring starts – skips the size tests.)
+    function byNumberUsersOk(p) {
+      return p.size() >= 3
+        ? exists(/databases/$(database)/documents/users/$(p[0].id)) && exists(/databases/$(database)/documents/users/$(p[1].id))
+          && exists(/databases/$(database)/documents/users/$(p[2].id))
+        : (p.size() <= 0 || exists(/databases/$(database)/documents/users/$(p[0].id)))
+          && (p.size() <= 1 || exists(/databases/$(database)/documents/users/$(p[1].id)));
     }
     function scoringStarted(d) { return d.status == 'live' || d.get('events', []).size() > 0; }
     function enoughPlayers(d) {
       return !scoringStarted(d)
         || (d.teamA.players.size() >= minPlayers() && d.teamB.players.size() >= minPlayers());
     }
+    // (called only while there are no events – create, or a roster change before the first rally – so "scoring
+    // started" is the live status; 1.4.4: both sides' ids are compared with participantIds in one slice)
     function validRoster(d) {
       return sideOk(d.teamA) && sideOk(d.teamB) && participantsOk(d)
-        && playersOk(d.teamA.players, d.participantIds, 0)
-        && playersOk(d.teamB.players, d.participantIds, d.teamA.players.size())
-        && teamMembersOk(d.teamA, d.participantIds, 0)
-        && teamMembersOk(d.teamB, d.participantIds, d.teamA.players.size())
-        && byNumberUsersOk(d.teamA) && byNumberUsersOk(d.teamB)
-        && enoughPlayers(d);
+        && rosterIdsOk(d.teamA.players, d.teamB.players, d.participantIds)
+        && (d.status != 'live' || (d.teamA.players.size() >= minPlayers() && d.teamB.players.size() >= minPlayers()));
+    }
+    function rosterIdsOk(a, b, ids) {
+      return a.size() + b.size() == 0 || ids[0:a.size() + b.size()] == playerIds(a).concat(playerIds(b));
     }
     function teamCanPlay(teamId) {
       return get(/databases/$(database)/documents/teams/$(teamId)).data.memberIds.size() >= minPlayers();
@@ -240,15 +254,75 @@ service cloud.firestore {
     }
     // oldDob = the stored DOB (null on create): re-saving the same DOB only needs a real date
     // (1.3.7, R136-8: turning 101 or a raised minAge() doesn't lock the owner out of their profile).
-    function registrationOk(d, oldDob) {
+    // 1.4.0 (QA V139-3): one email per account. emails/{id} = {uid}; id = the stored email (the app stores it
+    // NFC, trimmed, lower-case: core/registration.ts emailKey) with % and / escaped (emailClaimId). The doc
+    // can only be created (never updated), so the first account to claim an address keeps it.
+    // 1.4.3 (QA V142-5/V142-6): the vetted non-ASCII letters – src/core/emailChars.ts EMAIL_LETTERS_RULES, generated
+    // by scripts/gen-email-chars.js, rules-tests check the copy. The characters themselves, not \\x{…}: Firestore
+    // refuses a regular expression longer than 4096 characters.
+    // <email-letters> GENERATED by scripts/gen-email-chars.js from src/core/emailPolicy.ts (NARROW list) – do not edit by hand
+    function emailLetters() {
+      return 'ß-öø-ÿāăąćĉċčďđēĕėęěĝğġģĥħĩīĭįıĳĵķ-ĸĺļľŀłńņň-ŉŋōŏőœŕŗřśŝşšţťŧũūŭůűųŵŷźżžƀƃƅƈƌ-ƍƒƕƙ-ƛƞơƣƥƨƪ-ƫƭưƴƶƹ-ƺƽ-ƿǆǉǌǎǐǒǔǖǘǚǜ-ǝǟǡǣǥǧǩǫǭǯ-ǰǳǵǹǻǽǿȁȃȅȇȉȋȍȏȑȓȕȗșțȝȟȡȣȥȧȩȫȭȯȱȳ-ȹȼȿ-ɀɂɇɉɋɍɏḁḃḅḇḉḋḍḏḑḓḕḗḙḛḝḟḡḣḥḧḩḫḭḯḱḳḵḷḹḻḽḿṁṃṅṇṉṋṍṏṑṓṕṗṙṛṝṟṡṣṥṧṩṫṭṯṱṳṵṷṹṻṽṿẁẃẅẇẉẋẍẏẑẓẕ-ẚẜ-ẝẟạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹỻỽỿͱͳͷͻ-ͽΐά-ρσ-ώϗϙϛϝϟϡϣϥϧϩϫϭϯϲ-ϳϸϻ-ϼἀ-ἇἐ-ἕἠ-ἧἰ-ἷὀ-ὅὐ-ὗὠ-ὧὰὲὴὶὸὺὼᾀ-ᾇᾐ-ᾗᾠ-ᾧᾰ-ᾴᾶ-ᾷῂ-ῄῆ-ῇῐ-ῒῖ-ῗῠ-ῢῤ-ῧῲ-ῴῶ-ῷа-џѡѣѥѧѩѫѭѯѱѳѵѷѹѻѽѿҁҋҍҏґғҕҗҙқҝҟҡңҥҧҩҫҭүұҳҵҷҹһҽҿӂӄӆӈӊӌӎ-ӏӑӓӕӗәӛӝӟӡӣӥӧөӫӭӯӱӳӵӷӹӻӽӿԁԃԅԇԉԋԍԏԑԓԕԗԙԛԝԟԡԣԥԧԩԫԭԯऀ-ॗॠ-ॣ०-९ॱ-ঃঅ-ঌএ-ঐও-নপ-রলশ-হ়-ৄে-ৈো-ৎৗৠ-ৣ০-ৱৼ৾ਁ-ਃਅ-ਊਏ-ਐਓ-ਨਪ-ਰਲਵਸ-ਹ਼ਾ-ੂੇ-ੈੋ-੍ੑੜ੦-ੵઁ-ઃઅ-ઍએ-ઑઓ-નપ-રલ-ળવ-હ઼-ૅે-ૉો-્ૐૠ-ૣ૦-૯ૹ-૿ଁ-ଃଅ-ଌଏ-ଐଓ-ନପ-ରଲ-ଳଵ-ହ଼-ୄେ-ୈୋ-୍୕-ୗୟ-ୣ୦-୯ୱஂ-ஃஅ-ஊஎ-ஐஒ-கங-சஜஞ-டண-தந-பம-ஹா-ூெ-ைொ-்ௐௗ௦-௯ఀ-ఌఎ-ఐఒ-నప-హ఼-ౄె-ైొ-్ౕ-ౖౘ-ౚౝౠ-ౣ౦-౯ಀ-ಃಅ-ಌಎ-ಐಒ-ನಪ-ಳವ-ಹ಼-ೄೆ-ೈೊ-್ೕ-ೖೝ-ೞೠ-ೣ೦-೯ೱ-ೳഀ-ഌഎ-ഐഒ-ൄെ-ൈൊ-ൎൔ-ൗൟ-ൣ൦-൯ൺ-ൿ';
+    }
+    function emailJoinOk(e) {
+      return true; // the narrow list has no ZWNJ/ZWJ
+    }
+    // </email-letters>
+    // a-z 0-9, the RFC 5322 atext signs (U+0027 as \\x{27}) and dots before the @; letters, digits, '-' and dots
+    // after it; a TLD of 2+ letters/digits/'-'; plus emailLetters() in all three
+    // 1.4.4 (QA V143-6): emailJoinOk – the wider list (inactive) allows ZWNJ/ZWJ only between letters of one
+    // Indic script; with the 1.4.3 list it is true. 1.4.4 (QA V143-10): the structure checks the app makes
+    // (core checkEmail): local part ≤ 64 characters without a leading, trailing or double dot; no double dot
+    // anywhere; no domain label (or the domain) starting or ending with '-' or '.'. The class allows one '@' only,
+    // so split('@') has two parts.
+    function emailOk(e) {
+      let l = emailLetters();
+      return e.matches('^[-a-z0-9!#$%&\\x{27}*+/=?^_`{|}~.' + l + ']+@[-a-z0-9.' + l + ']+[.][-a-z0-9' + l + ']{2,}$')
+        && emailJoinOk(e)
+        && emailPartsOk(e.split('@'));
+    }
+    function emailPartsOk(p) {
+      return p[0].size() <= 64 && !p[0].matches('[.].*|.*[.]') && !p[0].matches('.*[.][.].*')
+        && !p[1].matches('[-.].*|.*[-.]|.*[.][.].*|.*[.]-.*|.*-[.].*');
+    }
+    function emailClaimId(e) {
+      return e.replace('%', '%25').replace('/', '%2F');
+    }
+    function emailClaimedByMe(e) {
+      let p = /databases/$(database)/documents/emails/$(emailClaimId(e));
+      return existsAfter(p) && getAfter(p).data.uid == uid();
+    }
+    function oldClaimReleased(e) {
+      let p = /databases/$(database)/documents/emails/$(emailClaimId(e));
+      return !existsAfter(p) || getAfter(p).data.uid != uid();
+    }
+    function myEmailAfter() {
+      return getAfter(/databases/$(database)/documents/users/$(uid())/private/registration).data.get('email', null);
+    }
+    // oldEmail = the stored email: an unchanged (or removed) address needs no claim, so a 1.3.7–1.3.9
+    // account keeps its address; a new or changed one must be claimed by this user in the same write.
+    function registrationOk(d, oldDob, oldEmail) {
       return d.keys().hasOnly(['dob', 'email', 'pincode', 'district', 'state', 'updatedAt'])
+        && (d.get('email', null) == null || d.get('email', null) == oldEmail || emailClaimedByMe(d.email))
+        // 1.4.1 (QA V140-5): changing or removing the address must release this account's claim on the old one
+        // in the same write – one claim per account, so nobody can hoard addresses to block other people.
+        && (oldEmail == null || d.get('email', null) == oldEmail ? true : oldClaimReleased(oldEmail))
         && (oldDob != null && d.get('dob', null) == oldDob
             ? d.dob.matches('^(19|20)[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
             : dobOk(d.get('dob', null)))
         // 1.3.8 (V137-5): allocated India Post prefixes only (core/registration.ts PIN_PREFIX_RANGES 11-28,
         // 30-34, 36-53, 56-85, plus APS 90-99), as the API decides without a lookup
         && d.get('pincode', '').matches('^(1[1-9]|2[0-8]|3[0-4]|3[6-9]|4[0-9]|5[0-3]|5[6-9]|6[0-9]|7[0-9]|8[0-5]|9[0-9])[0-9]{4}$')
-        && (d.get('email', null) == null || (d.email is string && d.email.size() <= 254 && d.email.matches('^[^\\s@\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}-\\x{2069}\\x{FEFF}A-Z]+@[^\\s@\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{200B}-\\x{200F}\\x{202A}-\\x{202E}\\x{2060}-\\x{2069}\\x{FEFF}A-Z]+[.][^\\s@\\x{0}-\\x{1F}\\x{200B}-\\x{200F}\\x{FEFF}A-Z]{2,}$')))
+        // 1.4.3 (QA V142-5/V142-6, FB-9): an ALLOW list, not a deny list – the deny lists kept missing characters
+        // (RE2's \p{Lu} is older than the app's Unicode, format characters U+FFF9–FFFB / U+0600–0605 / U+13430…).
+        // Local part: a-z 0-9, the RFC 5322 atext signs (U+0027 is \x{27}) and dots; domain: letters, digits, '-',
+        // dots; plus the vetted letters of src/core/emailChars.ts (lower-case Latin/Greek/Cyrillic Ll, Indian
+        // scripts' letters, marks and digits; NFC-stable, already folded), copied here by scripts/gen-email-chars.js
+        // and compared by rules-tests. So no capital, no format/control/private-use/unassigned/separator character
+        // can pass, and the app (core checkEmail: same class) refuses everything this refuses, with a message.
+        // 1.4.4 (QA V143-6): the account's own unchanged stored address always passes (it was accepted when saved;
+        // a stricter list must not block a pincode or name save); a new or changed one gets every check.
+        && (d.get('email', null) == null || d.get('email', null) == oldEmail || (d.email is string && d.email.size() <= 254 && emailOk(d.email)))
         // 1.3.8 (V137-5): like the API, a district/state typed by the client is never stored (the API keeps
         // only its own India Post lookup; Firebase has no server lookup, so it stores none)
         && d.get('district', null) == null && d.get('state', null) == null;
@@ -296,7 +370,7 @@ service cloud.firestore {
       match /private/{docId} {
         allow read: if signedIn() && uid() == userId;
         allow create, update: if signedIn() && uid() == userId && ((docId == 'registration'
-          && registrationOk(request.resource.data, resource == null ? null : resource.data.get('dob', null)))
+          && registrationOk(request.resource.data, resource == null ? null : resource.data.get('dob', null), resource == null ? null : resource.data.get('email', null)))
           || (docId == 'review' && reviewClockOk(request.resource.data, resource == null ? null : resource.data)));
         allow delete: if false;
       }
@@ -318,6 +392,21 @@ service cloud.firestore {
     // Private push token per user (read by Cloud Functions with admin access).
     match /pushTokens/{userId} {
       allow read, write: if signedIn() && uid() == userId;
+    }
+
+    // 1.4.0 (QA V139-3): email claims (see emailClaimId). Read: only your own claim, or "no such claim"
+    // (the app reads it in the save transaction; someone else's claim is refused → "email already used").
+    // Created only for the email the same write stores in your registration doc; released (deleted) only by
+    // the owner when that doc no longer holds it; never updated, never listed.
+    match /emails/{claimId} {
+      allow get: if signedIn() && (resource == null || resource.data.uid == uid());
+      allow list: if false;
+      allow create: if signedIn() && termsOk()
+        && request.resource.data.keys().hasOnly(['uid']) && request.resource.data.uid == uid()
+        && myEmailAfter() != null && emailClaimId(myEmailAfter()) == claimId;
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.uid == uid()
+        && (myEmailAfter() == null || emailClaimId(myEmailAfter()) != claimId);
     }
 
     // Lookup by mobile number: exact get only, listing is forbidden.
@@ -439,8 +528,10 @@ service cloud.firestore {
     function creditIn(p, side, na, nb, ids) {
       return p in (side == 'A' ? ids[0:na] : ids[na:na + nb]);
     }
-    function sameRally(n, o, i, d) {
-      return eventOk(n[i], d) && n[i].type == o[i].type && n[i].side == o[i].side && n[i].at == o[i].at;
+    // 1.4.4: the two events are passed, not the whole logs – every function argument is a variable, and binding the
+    // long event lists for each of the last 3 rallies ran into the rules' 5 MiB variable-memory limit.
+    function sameRally(ne, oe, d) {
+      return eventOk(ne, d) && ne.type == oe.type && ne.side == oe.side && ne.at == oe.at;
     }
     // Both sides of || and && are evaluated by the rules engine (only ?: skips a branch), so the
     // step kind is picked with ?: and only its checks run. (An empty slice like l[0:0] is an
@@ -451,89 +542,307 @@ service cloud.firestore {
     }
     function recreditOk(o, n, ns, d) {
       return ns > 0 && (ns > 3 ? n[0:ns - 3] == o[0:ns - 3] : true)
-        && recreditOne(n, o, ns - 1, d) && (ns >= 2 ? recreditOne(n, o, ns - 2, d) : true) && (ns >= 3 ? recreditOne(n, o, ns - 3, d) : true);
+        && recreditOne(n[ns - 1], o[ns - 1], d) && (ns >= 2 ? recreditOne(n[ns - 2], o[ns - 2], d) : true) && (ns >= 3 ? recreditOne(n[ns - 3], o[ns - 3], d) : true);
     }
     // Only an event that actually changed is re-checked.
-    function recreditOne(n, o, i, d) {
-      return n[i] == o[i] ? true : sameRally(n, o, i, d);
+    function recreditOne(ne, oe, d) {
+      return ne == oe ? true : sameRally(ne, oe, d);
     }
     // (let: each size is evaluated once; 1.3.0 needed the room in the 1000-expression budget.)
     function eventsStepOk(o, n, d) {
       let os = o.size();
       let ns = n.size();
-      return ns <= 2000 && (ns > os ? appendOk(o, n, os, ns, d)
+      // 1.4.4 (QA info): 3000 events (was 2000, which a legal long uncapped deuce match can reach) = MAX_EVENTS in
+      // src/core/limits.ts. Not more: a re-credit of a 4000-event log (real 28-character uids) hit the rules' 5 MiB
+      // variable-memory limit (the stored and new logs plus two prefix slices); rules-tests "worst case" runs 3000.
+      return ns <= 3000 && (ns > os ? appendOk(o, n, os, ns, d)
         : ns < os ? (ns == os - 1 && (ns == 0 ? true : n == o[0:ns]))
         : recreditOk(o, n, ns, d));
     }
+    // 1.4.3 (QA V142-2): a FINISHED match is final. Its update is decided here and nowhere else (updateAllowed
+    // picks this branch on the stored status, so the finishing write of a live match doesn't pay for it):
+    //  - the scorer re-credits one of the last 3 rallies (same number of events; eventsStepOk → recreditOk:
+    //    type, side and time unchanged, the player on the side that won the rally) and nothing else changes –
+    //    no summary, rules, status, roster, title, times… (1.4.2 still let a summary-only write flip the winner
+    //    and a rules-only write erase it before the Player of the Match);
+    //  - the scorer picks the Player of the Match (potmOk), that field only;
+    //  - the captain's verdict / admin review (verificationWriteOk, checked before this branch).
+    // Everything else – "I want to play" too (offered on scheduled matches only) – is refused.
+    // (src/core/matchGuards.ts FINISHED_MATCH_WRITABLE / finishedFreezeProblem.)
+    function finishedWriteOk(d, ks) {
+      return ks.hasOnly(['events', 'updatedAt', 'serverUpdatedAt'])
+        ? isScorerOf() && d.events is list && d.events.size() == resource.data.events.size() && eventsOk(d)
+        : ks.hasOnly(['playerOfMatchId', 'updatedAt', 'serverUpdatedAt']) && potmOk(d, ks);
+    }
+    function isScorerOf() { return resource.data.scorerId == uid(); }
     function eventsOk(d) {
       return d.events is list && eventsStepOk(resource == null ? [] : resource.data.get('events', []), d.events, d);
     }
-    // Two scores 0..199 in one regex (string() of an int has no leading zeros or decimals).
-    function pts2Ok(a, b) { return (string(a) + '|' + string(b)).matches('^1?[0-9]{1,2}[|]1?[0-9]{1,2}$'); }
-    function setScoreOk(x) { return x is map && x.keys().hasOnly(['a', 'b']) && pts2Ok(x.a, x.b); }
-    // Every completed set score in range (at most 5 sets, unrolled).
-    function setScoresOk(ss) {
-      return ss is list && ss.size() <= 5
-        && (ss.size() >= 1 ? setScoreOk(ss[0]) : true) && (ss.size() >= 2 ? setScoreOk(ss[1]) : true)
-        && (ss.size() >= 3 ? setScoreOk(ss[2]) : true) && (ss.size() >= 4 ? setScoreOk(ss[3]) : true)
-        && (ss.size() >= 5 ? setScoreOk(ss[4]) : true);
+    // ---------- 1.4.4 (QA V143-1/2/3/4): the stored summary is NOT trusted on Firebase ----------
+    // 1.4.3 tied the summary to the rallies step by step (summaryStepOk/tallyOk/setDoneOk); Tester bypassed it
+    // (V143-1: a set-ending rally written as a plain +1, undo re-opening a set). Rules can't replay a match,
+    // so they no longer try: the app derives every result from the events with the shared core replay
+    // (src/core/scoring.ts computeState under the match's rules, which are frozen once the first rally exists,
+    // see rosterFrozenOk) – result page, captain confirm, POTM, wallet, leaderboard, abandon and the
+    // "finished" badge (firebaseBackend.matchFrom replaces the stored summary with the replay and flags a
+    // disagreement for admin review: src/core/replay.ts). The rules enforce what makes that replay sound:
+    //  - events change by one scorer step per write (eventsStepOk) with well-formed rallies and side A/B;
+    //  - rules, firstServe, teams and set lineups already in use can't change once the first rally exists;
+    //  - a scorer abandons only a match whose log never reached the shortest win and that was never won (1.4.5:
+    //    scorerAbandonOk, maxEvents / wasWon); an admin who isn't part of the match resolves the rest (adminResolveOk);
+    //  - once the client claims 'finished', everything is frozen except the re-credit / POTM / verdict.
+    // The summary itself only gets a cheap shape check (V143-4: numbers and the serving side are display
+    // hints; the serving side is derived from the events too).
+    function summaryShapeOk(m) {
+      return m == null || (m is map && m.keys().hasOnly(['setsA', 'setsB', 'currentA', 'currentB', 'setScores', 'winner', 'serving'])
+        && (string(m.get('setsA', 0)) + '|' + string(m.get('setsB', 0)) + '|' + string(m.get('currentA', 0)) + '|' + string(m.get('currentB', 0))
+            + '|' + string(m.get('serving', 'A')) + '|' + string(m.get('winner', null)))
+            .matches('^[0-3][|][0-3][|][0-9]{1,4}[|][0-9]{1,4}[|][AB][|](A|B|null)$')
+        // (string() of the string '5' is '5' too: the sum fails to evaluate unless all four are numbers)
+        && m.get('setsA', 0) + m.get('setsB', 0) + m.get('currentA', 0) + m.get('currentB', 0) >= 0
+        && m.get('setScores', []) is list && m.get('setScores', []).size() <= 5);
     }
-    // Rallies in the current set (a finished match's "current" repeats its last set, so 0 then).
-    function curPts(m) { return m.get('winner', null) == null ? m.get('currentA', 0) + m.get('currentB', 0) : 0; }
-    // The summary may only move as far as the event change allows (QA G1, retest 217): at most 1
-    // rally per appended event, back by at most 1 per undone event, unchanged on a credit edit.
-    // Completed sets are only added at the end (append) or removed from the end (undo), at most
-    // one per write, and everything before is compared as a whole with the stored summary; the new
-    // set's score is range-checked (summaryOk), so by induction every stored set is in range.
-    // QA NB-R1 (retest 1.1.0): a stored document without a summary is compared with the EMPTY
-    // summary (no sets, 0-0), so it can't jump to a finished 3-0 after one event. (New matches must
-    // carry the empty summary, matchCreateOk; a legacy document that has events but no summary can
-    // no longer be scored in Firebase mode, only abandoned.)
-    function summaryStepOk(m, d) {
-      let om = resource.data.get('summary', null);
-      return summaryDeltaOk(m.get('setScores', []), om == null ? [] : om.get('setScores', []),
-        curPts(m), om == null ? 0 : curPts(om), d.get('events', []).size() - resource.data.get('events', []).size());
+    // The fewest rallies any win takes: (bestOf + 1) / 2 sets of pointsPerSet points (a win through the deciding
+    // set takes more: the loser's sets count too). Timeouts are events as well, so the event count only errs
+    // towards "might be won" (abandon refused, finish allowed).
+    function minWinEvents(r) { return (r.bestOf + 1) / 2 * r.pointsPerSet; }
+    // ---------- 1.4.5 (QA V144-1/2/3): abandon (src/core/abandon.ts) ----------
+    // The policy for an abandon after the first rally – NOT DECIDED (Akshit): 'review' (INTERIM default of 1.4.5,
+    // pending decision: abandoned, waits for an admin's review; "side behind" is information only), 'flag' (the same,
+    // "abandoned while behind" as the reason) or 'consent' (a request the opposing captain(s) must agree to, or an
+    // admin decides). MUST equal ABANDON_POLICY in src/core/abandonPolicy.ts (rules-tests check it;
+    // scripts/gen-abandon-policy.js rewrites this line).
+    function abandonPolicy() { return 'review'; }
+    // The most events the log ever had: stored maxEvents (older docs: the current length). Every events write on a
+    // match that isn't finished must state maxEvents = max(that, new length) (maxEvOk), so undo never lowers it
+    // (QA V144-1: 1.4.4 compared the CURRENT length, so undoing below the shortest win re-opened the abandon).
+    function maxEv(r) { return r.get('maxEvents', r.get('events', []).size()); }
+    function maxEvOk(d) {
+      let rmx = maxEv(resource.data);
+      let ns = d.get('events', []).size();
+      return d.get('maxEvents', -1) == (rmx > ns ? rmx : ns);
     }
-    function setSum(x) { return x.a + x.b; }
-    // nss/oss: new/old completed sets; cn/co: new/old current-set rallies; k: events added (<0 undone).
-    // Append: same sets and the current set grows by 0..k, or exactly one set completes (its score
-    // plus the new current set is at most the old current set + k). Undo: same sets and the
-    // current set shrinks by at most -k, or the last completed set is re-opened.
-    function summaryDeltaOk(nss, oss, cn, co, k) {
-      let on = oss.size();
-      let nn = nss.size();
-      return k > 0
-        ? (nss == oss ? cn >= co && cn <= co + k
-            : nn == on + 1 && (on == 0 ? true : nss[0:on] == oss)
-              && cn < k && setSum(nss[on]) + cn <= co + k)
-        : k < 0
-          // undo: back within the current set, or the last completed set re-opened
-          ? (nss == oss ? cn <= co && cn >= co + k
-              : on == nn + 1 && (nn == 0 ? true : oss[0:nn] == nss))
-          : (nss == oss && cn == co);
+    // The scorer abandons (statusMoveOk): never a match that is or was finished (wasWon latch, set by the finishing
+    // write), never with a pending request, and only while the log never reached the shortest possible win (an admin
+    // decides longer ones, adminResolveOk). No rally yet: abandoned directly. After the first rally ('flag' policy) the
+    // write carries the abandon record (who, request.time, event count, review 'pending'); 'consent': a request instead.
+    // 1.4.6 (QA V145-5, core/lifecycle.ts 'abandon'): never while an abandon record exists (after an admin reinstated
+    // it, only an admin abandons again – the old record then moves to abandonHistory, adminResolveOk).
+    function scorerAbandonOk(d, ks) {
+      let r = resource.data;
+      let mx = maxEv(r);
+      return !ks.hasAny(['events', 'maxEvents', 'wasWon', 'abandonRequest']) && r.get('wasWon', false) != true
+        && r.get('abandonRequest', null) == null && r.get('abandon', null) == null
+        && mx < minWinEvents(r.rules)
+        && (mx == 0 ? !ks.hasAny(['abandon'])
+          : abandonPolicy() in ['review', 'flag'] && ks.hasAny(['abandon']) && abandonRecOk(d.abandon, r, abandonPolicy(), 'pending', uid()));
     }
-    function summaryOk(m, d) {
-      // Sets needed to win: (bestOf + 1) / 2 is right whether / truncates (ints) or not (floats);
-      // math.ceil(bestOf / 2) was 2 for best-of-5 with integer division, refusing a 3-2 result.
-      // (let: each value is read once; 1.3.0 needed the room in the 1000-expression budget.)
-      let win = (d.rules.bestOf + 1) / 2;
-      let sa = m.get('setsA', 0);
-      let sb = m.get('setsB', 0);
-      let ss = m.get('setScores', []);
-      let w = m.get('winner', null);
-      return m.keys().hasOnly(['setsA', 'setsB', 'currentA', 'currentB', 'setScores', 'winner', 'serving'])
-        && pts2Ok(sa, sb) && sa <= win && sb <= win
-        && pts2Ok(m.get('currentA', 0), m.get('currentB', 0))
-        && (w == null ? true : (w == 'A' ? sa == win : (w == 'B' && sb == win)))
-        && (m.get('serving', 'A') in ['A', 'B'])
-        && ss is list && ss.size() <= d.rules.bestOf
-        && (resource == null || resource.data.get('summary', null) == null
-              ? setScoresOk(ss)
-              : (ss.size() == 0 ? true : setScoreOk(ss[ss.size() - 1])))
-        && sa + sb == ss.size()
-        && (d.get('events', []).size() > 0 ? true
-            : (sa == 0 && sb == 0 && m.get('currentA', 0) == 0 && m.get('currentB', 0) == 0))
-        && summaryStepOk(m, d);
+    // keys: the base record plus only what this writer adds ('consent': agreedBy; admin: reviewedBy / reviewedAt) –
+    // nobody writes a report or a review into a record they create.
+    // 1.4.6 (QA V145-4): every key present (hasAll), the score a map of exactly four small ints (sets 0–3, points
+    // 0–999: one regex + a sum that only evaluates for numbers, as summaryShapeOk), `behind` a bool (null for an admin's
+    // record) – so a record is a few hundred bytes at most. The app never shows the stored score / behind: it replays
+    // the first `events` rallies (core/abandon.ts abandonFacts).
+    function abandonRecOk(a, r, mode, review, by) {
+      let ks = mode == 'consent' ? ['by', 'at', 'events', 'mode', 'review', 'score', 'behind', 'agreedBy']
+          : (mode == 'admin' ? ['by', 'at', 'events', 'mode', 'review', 'score', 'behind', 'reviewedBy', 'reviewedAt']
+            : ['by', 'at', 'events', 'mode', 'review', 'score', 'behind']);
+      let sc = a.score;
+      return a.keys().hasOnly(ks) && a.keys().hasAll(ks)
+        && a.by == by && a.at == request.time && a.events == r.get('events', []).size()
+        && a.mode == mode && a.review == review
+        && sc is map && sc.keys().hasOnly(['setsA', 'setsB', 'currentA', 'currentB']) && sc.keys().size() == 4
+        && (string(sc.setsA) + '|' + string(sc.setsB) + '|' + string(sc.currentA) + '|' + string(sc.currentB)).matches('^[0-3][|][0-3][|][0-9]{1,3}[|][0-9]{1,3}$')
+        && sc.setsA + sc.setsB + sc.currentA + sc.currentB >= 0
+        && (mode == 'admin' ? a.behind == null : a.behind is bool);
+    }
+    // Who must agree to a request: the other side's captain, or both captains when the requester plays on neither side.
+    function agreersOf(r, o) {
+      let c = r.get('captains', {});
+      return o.side == 'A' ? [c.get('B', null)] : (o.side == 'B' ? [c.get('A', null)] : [c.get('A', null), c.get('B', null)]);
+    }
+    // 'consent' policy (updateAllowed picks this when abandonRequest changes and the writer isn't an admin resolving):
+    //  - the scorer asks (live, after the first rally, never on a match that was won), naming their side;
+    //  - the requester withdraws it, or a captain who must agree declines it (abandonRequest -> null);
+    //  - a captain who must agree agrees (added to agreedBy); the last agreement abandons the match with the record
+    //    (mode 'consent', review 'confirmed', by = the requester, agreedBy).
+    // While a request is set on a live match no events / finishing write is accepted (matchUpdateOk2, finishingWriteOk).
+    function abandonRequestOk(d, ks) {
+      let r = resource.data;
+      let o = r.get('abandonRequest', null);
+      let n = d.get('abandonRequest', null);
+      // 1.4.6 (QA V145-12): a new request counts (abandonRequests + 1, at most 3 per match) and is at least 2 minutes after
+      // the previous one (abandonRequestAt = request.time); never while an abandon record exists (V145-5)
+      return r.status == 'live' && (o == null
+        ? abandonPolicy() == 'consent' && r.scorerId == uid() && ks.hasOnly(['abandonRequest', 'abandonRequests', 'abandonRequestAt', 'updatedAt'])
+          && r.get('wasWon', false) != true && maxEv(r) > 0 && maxEv(r) < minWinEvents(r.rules) && r.get('abandon', null) == null
+          && d.abandonRequests == r.get('abandonRequests', 0) + 1 && d.abandonRequests <= 3 && d.abandonRequestAt == request.time
+          && (r.get('abandonRequestAt', null) == null || request.time >= r.abandonRequestAt + duration.value(120, 's'))
+          && n.keys().hasOnly(['by', 'at', 'side', 'agreedBy']) && n.by == uid() && n.at == request.time && n.agreedBy == []
+          && (n.side == 'A' ? onSide(r, true, uid())
+            : (n.side == 'B' ? onSide(r, false, uid()) : (n.side == 'N' && !onSide(r, true, uid()) && !onSide(r, false, uid()))))
+        : (n == null
+          ? ks.hasOnly(['abandonRequest', 'updatedAt']) && (uid() == o.by || uid() in agreersOf(r, o))
+          : agreeOk(d, ks, r, o, n)));
+    }
+    function agreeOk(d, ks, r, o, n) {
+      let need = agreersOf(r, o);
+      let ag = o.agreedBy.concat([uid()]);
+      return uid() in need && !(uid() in o.agreedBy)
+        && n == {'by': o.by, 'at': o.at, 'side': o.side, 'agreedBy': ag}
+        && (ag.hasAll(need)
+          ? ks.hasOnly(['abandonRequest', 'status', 'finishedAt', 'abandon', 'updatedAt']) && d.status == 'abandoned'
+            && (d.get('finishedAt', null) == null || d.finishedAt <= nowMs() + 300000)
+            && abandonRecOk(d.abandon, r, 'consent', 'confirmed', o.by) && d.abandon.get('agreedBy', null) == ag
+          : ks.hasOnly(['abandonRequest', 'updatedAt']));
+    }
+    // An admin who is not part of the match (V144-3: not its creator, scorer, a captain or in participantIds – as
+    // reviewOk) resolves it (src/core/abandon.ts resolvePatch):
+    //  - confirm a pending abandon / reinstate it (back to live, or finished when the log can hold a win – the admin
+    //    checked the replay); an older abandoned match without a record gets one (mode 'legacy');
+    //  - abandon a scheduled / live match (also deciding a pending request) or a finished one whose events have no
+    //    winner (V144-2), with a record naming the admin;
+    //  - re-open a finished match without a winner (status live, finish times and POTM cleared, wasWon false,
+    //    resolution {action 'reopened', by, at});
+    //  - reject a pending request.
+    function ownMatch(r) {
+      return uid() == r.createdBy || uid() == r.scorerId || uid() in r.participantIds
+        || uid() in [r.get('captains', {}).get('A', null), r.get('captains', {}).get('B', null)];
+    }
+    function reviewedOk(d, r, review) {
+      let n = d.abandon;
+      let o = r.get('abandon', null);
+      return n.review == review && n.reviewedBy == uid() && n.reviewedAt == request.time
+        && (o == null
+          ? n.keys().hasOnly(['mode', 'events', 'review', 'reviewedBy', 'reviewedAt']) && n.mode == 'legacy' && n.events == r.get('events', []).size()
+            && r.get('events', []).size() > 0
+          : o.review == 'pending' && n.diff(o).affectedKeys().hasOnly(['review', 'reviewedBy', 'reviewedAt']));
+    }
+    // 1.4.5 (QA V144-8): an admin's reassignment of scoring to any participant (recorded after the first rally;
+    // `from` stays the scorer before the first reassignment – the verdict follows it, confirmOk)
+    // 1.4.6 (QA V145-6): never to a captain who gives the verdict (verdictCapt) – the scorer never confirms their own score.
+    function reassignOk(d, ks) {
+      let r = resource.data;
+      let o = r.get('scorerReassign', null);
+      let n = d.get('scorerReassign', null);
+      return r.status in ['scheduled', 'live'] && d.scorerId in r.participantIds && !verdictCapt(r, d.scorerId)
+        && scorerTargetOk(d)
+        && (maxEv(r) == 0 ? ks.hasOnly(['scorerId', 'updatedAt'])
+          : ks.hasOnly(['scorerId', 'scorerReassign', 'updatedAt']) && n.keys().hasOnly(['from', 'to', 'by', 'at'])
+            && n.from == (o == null ? r.scorerId : o.from) && n.to == d.scorerId && n.by == uid() && n.at == request.time);
+    }
+    // 1.4.5 (QA V144-8, interim): the creator / scorer hands scoring over – after the first rally only to a player of the
+    // scorer's own side (a scorer on neither side: to another participant on neither side). Never anything else.
+    function handoverOk(r, to) {
+      let fr = r.scorerId;
+      return maxEv(r) == 0 || (onSide(r, true, fr) ? onSide(r, true, to)
+        : (onSide(r, false, fr) ? onSide(r, false, to)
+          : (to in r.participantIds && !onSide(r, true, to) && !onSide(r, false, to))));
+    }
+    // 1.4.7 (QA V146-2/3, core/scorerHandoff.ts scorerTargetProblem): after any scorer change a match with captains
+    // still has a verdict captain, and the scorer is neither one nor on one's side (computed on the written doc).
+    // 1.4.8 (QA V147-1): the verdict invariant for a set-up (create / a roster edit before the first rally – no
+    // scorerReassign yet): one side has neither the scorer nor the creator on it, so its captain (a player of that side,
+    // captainsOk) confirms – core verdictSetupProblem. scorerTargetOk's cheap form (4 slices; the create budget); the
+    // creator scoring (the usual create) can only be on one side, so the other side is free.
+    function setupVerdictOk(d) {
+      return d.get('captains', null) == null || d.scorerId == d.createdBy
+        || (!onSide(d, true, d.scorerId) && !onSide(d, true, d.createdBy))
+        || (!onSide(d, false, d.scorerId) && !onSide(d, false, d.createdBy));
+    }
+    // 1.4.9 (QA V148-2, GU11): on an update, an older doc's verdict reference (scorerReassign.from) counts too, like
+    // core verdictSetupProblem – one side must have none of the scorer, the reference and the creator. (A create never
+    // carries scorerReassign, so the create keeps the cheap check above and its expression budget.)
+    // 1.4.10 (QA V149-1): skipped when the roster, captains and participants are unchanged (a rename), and the
+    // reference form binds each side's id slice once (let) instead of six onSide() slices – a 12-a-side doc with
+    // scorerReassign stayed over the 1000-expression budget.
+    function setupVerdictUpdOk(d) {
+      let r = resource.data;
+      return (d.teamA.players == r.teamA.players && d.teamB.players == r.teamB.players
+          && d.participantIds == r.participantIds && d.get('captains', null) == r.get('captains', null))
+        || d.get('captains', null) == null
+        || (d.get('scorerReassign', null) == null ? setupVerdictOk(d)
+          : setupVerdictRefOk(d, d.scorerReassign.get('from', d.scorerId)));
+    }
+    function setupVerdictRefOk(d, f) {
+      let n = d.teamA.players.size();
+      let a = d.participantIds[0:n];
+      let b = d.participantIds[n:n + d.teamB.players.size()];
+      return !(d.scorerId in a || d.createdBy in a || f in a) || !(d.scorerId in b || d.createdBy in b || f in b);
+    }
+    function scorerTargetOk(d) {
+      let c = d.get('captains', null);
+      let va = c != null && verdictCapt(d, c.A);
+      let vb = c != null && verdictCapt(d, c.B);
+      return c == null || ((va || vb)
+        && !(va && (d.scorerId == c.A || onSide(d, true, d.scorerId)))
+        && !(vb && (d.scorerId == c.B || onSide(d, false, d.scorerId))));
+    }
+    // 1.4.5: the opposing captain reports an abandoned match (core/abandon.ts reportersOf): a captain whose side the
+    // abandoner (record's `by`, else the scorer) doesn't play on; back to review 'pending' with reportedBy / reportedAt.
+    // Not after an admin decided (reviewedBy, admin abandon, reinstated), a report, or a 'consent' abandon (agreed to).
+    // 1.4.6 (QA V145-11): only with a stored record and a match that had a rally (an older abandoned match without a
+    // record goes to admin review on its own – no report record is created any more).
+    function reportOk(d, ks) {
+      let r = resource.data;
+      let o = r.get('abandon', null);
+      let n = d.abandon;
+      return ks.hasOnly(['abandon', 'updatedAt']) && o != null && maxEv(r) > 0 && r.get('captains', null) != null
+        && (uid() == r.captains.A ? !onSide(r, true, o.get('by', r.scorerId)) : (uid() == r.captains.B && !onSide(r, false, o.get('by', r.scorerId))))
+        && n.review == 'pending' && n.reportedBy == uid() && n.reportedAt == request.time
+        && o.get('reportedBy', null) == null && o.get('reviewedBy', null) == null && !(o.mode in ['admin', 'consent']) && o.review != 'reinstated'
+        && n.diff(o).affectedKeys().hasOnly(['review', 'reportedBy', 'reportedAt']);
+    }
+    // 1.4.6 (QA V145-2, core/lifecycle.ts 'reopen' / 'adminAbandon'): a FINISHED match is re-opened / abandoned only while
+    // its log is shorter than the shortest possible win (so it has no winner – the rules can't replay), without a POTM
+    // and with no verdict or review (vStatus pending); a won and confirmed match is left with void only. A scheduled /
+    // live match is abandoned only if it was never won (wasWon).
+    // 1.4.7 (QA minor): a verdict / review of an EARLIER re-open epoch doesn't block (core currentVerification)
+    function finishedResolvableOk(r) {
+      return maxEv(r) < minWinEvents(r.rules) && r.get('playerOfMatchId', null) == null
+        && (vStatus(r) == 'pending' || r.verification.get('epoch', 0) != r.get('reopenEpoch', 0));
+    }
+    // V145-5: an admin abandon of a match that already has a record (e.g. reinstated) appends that record, as stored,
+    // to abandonHistory – never overwritten.
+    function historyOk(d, ks, r) {
+      let o = r.get('abandon', null);
+      return o == null ? !ks.hasAny(['abandonHistory']) : d.get('abandonHistory', null) == r.get('abandonHistory', []).concat([o]);
+    }
+    function adminResolveOk(d, ks) {
+      let r = resource.data;
+      let from = r.status;
+      return ks.hasAny(['scorerId']) ? reassignOk(d, ks)
+        : d.status == 'abandoned'
+        ? (from == 'abandoned'
+          ? ks.hasOnly(['abandon', 'updatedAt']) && reviewedOk(d, r, 'confirmed')
+          : ks.hasOnly(['status', 'finishedAt', 'finishedServerAt', 'playerOfMatchId', 'abandon', 'abandonRequest', 'abandonHistory', 'updatedAt'])
+            && d.get('abandonRequest', null) == null
+            && (from == 'finished' ? finishedResolvableOk(r) : (from in ['scheduled', 'live'] && r.get('wasWon', false) != true))
+            && abandonRecOk(d.abandon, r, 'admin', 'confirmed', uid()) && d.abandon.get('reviewedBy', null) == uid()
+            && d.get('finishedServerAt', null) == null && d.get('playerOfMatchId', null) == null
+            && historyOk(d, ks, r)
+            && (d.get('finishedAt', null) == null || d.finishedAt <= nowMs() + 300000))
+        : (d.status == 'live'
+          ? d.get('finishedAt', null) == null && d.get('finishedServerAt', null) == null
+            && (from == 'abandoned'
+              // 1.4.7 (QA V146-5): never back to live once won (wasWon) – finished only
+              ? ks.hasOnly(['status', 'finishedAt', 'abandon', 'updatedAt']) && reviewedOk(d, r, 'reinstated') && r.get('wasWon', false) != true
+              : (from == 'finished'
+                // re-open: verdict / review removed, POTM cleared, wasWon false, a new epoch (V145-2)
+                ? ks.hasOnly(['status', 'finishedAt', 'finishedServerAt', 'playerOfMatchId', 'wasWon', 'resolution', 'verification', 'reopenEpoch', 'updatedAt'])
+                  && finishedResolvableOk(r) && d.get('verification', null) == null
+                  && d.get('playerOfMatchId', null) == null && d.get('wasWon', false) == false
+                  && d.reopenEpoch == r.get('reopenEpoch', 0) + 1
+                  && d.resolution.keys().hasOnly(['action', 'by', 'at', 'epoch']) && d.resolution.action == 'reopened'
+                  && d.resolution.by == uid() && d.resolution.at == request.time && d.resolution.epoch == d.reopenEpoch
+                : from == 'live' && ks.hasOnly(['abandonRequest', 'updatedAt']) && d.abandonRequest == null
+                  && r.get('abandonRequest', null) != null))
+          // reinstated to finished: the log can hold a win (the admin checked the replay) and wasWon latches (V145-10)
+          : d.status == 'finished' && from == 'abandoned'
+            && ks.hasOnly(['status', 'finishedAt', 'finishedServerAt', 'abandon', 'wasWon', 'updatedAt'])
+            && reviewedOk(d, r, 'reinstated') && d.finishedServerAt == request.time && d.get('wasWon', false) == true
+            && r.get('events', []).size() >= minWinEvents(r.rules)
+            && (d.get('finishedAt', null) == null || d.finishedAt <= nowMs() + 300000));
     }
     // Optional one-line text of at most 120 UTF-16 units (as the app counts): no control/zero-width/bidi characters and
     // no leading/trailing space, in ONE regex (the roster checks use most of the rules'
@@ -543,11 +852,15 @@ service cloud.firestore {
     // changed keys (update, extra = 'title'). 1.3.7: createdBy is only allowed on create, so no update can
     // change it (this replaced the scorer's createdBy comparison: the 12-a-side finishing write and the
     // 12-a-side create are at the 1000-expression budget).
+    // 1.4.1 (QA V140-8): 'createdAt' is no longer a match key – refused on create and on update at no extra
+    // expression cost (the 12-a-side create sits at the 1000-expression budget, so a time-window check didn't
+    // fit). The app stopped writing it; a match's date comes from its finish/start/scheduled time, and older
+    // docs keep the createdAt they have (it can't be changed).
     function matchKeysOk(ks, extra) {
       return ks.hasOnly([extra, 'title', 'teamA', 'teamB', 'rules', 'firstServe', 'events', 'summary', 'status',
             'scorerId', 'participantIds', 'location', 'scheduledAt', 'startedAt', 'finishedAt', 'tournamentId', 'fixtureId',
-            'challengeId', 'stream', 'interestedIds', 'lineups', 'playerOfMatchId', 'createdAt', 'updatedAt', 'serverUpdatedAt',
-            'finishedServerAt', 'captains', 'verification', 'startedServerAt', 'teamSizeMode']);
+            'challengeId', 'stream', 'interestedIds', 'lineups', 'playerOfMatchId', 'updatedAt', 'serverUpdatedAt',
+            'finishedServerAt', 'captains', 'verification', 'startedServerAt', 'teamSizeMode', 'maxEvents', 'wasWon', 'abandon']);
     }
     // 1.3.7 (1.3.6 team size): 'exact' = at most 6 per side (exactly 6 once scoring starts, with
     // enoughPlayers), 'custom' or missing (matches before 1.3.6) = up to maxPlayers().
@@ -567,52 +880,63 @@ service cloud.firestore {
     function scheduledOk(d) {
       let at = d.get('scheduledAt', null);
       // QA G9: a newly scheduled time can't already be over (15 min grace).
-      return at == null || (msOk(at) && (d.status != 'scheduled' || at >= nowMs() - 900000));
+      return at == null || (schedMsOk(at) && (d.status != 'scheduled' || at >= nowMs() - 900000));
     }
+    // 1.4.2 (QA V141-7): a newly set scheduled time is at most 2 years (2 x 366 days) ahead
+    // (src/core/validate.ts MAX_SCHEDULE_AHEAD_MS); floats such as 1e300 already fail `is int`.
+    function schedMsOk(v) { return msOk(v) && v <= nowMs() + 63244800000; }
     // Fields other than the roster and the score (title, rules, times, links, place).
     function matchMetaOk(d, ks) {
       return (ks.hasAny(['title']) ? titleOk(d.get('title', null)) : true)
         && (ks.hasAny(['rules']) ? rulesOk(d.rules) : true)
         && d.status in ['scheduled', 'live', 'finished', 'abandoned']
         // finish times (QA NB-R3) and 'finished' needs a winner (QA NB-R2, a status-only write)
-        && (ks.hasAny(['status']) ? finishTimesOk(d) && statusMoveOk(d) : !ks.hasAny(['finishedAt', 'finishedServerAt']))
+        && (ks.hasAny(['status']) ? finishTimesOk(d) && statusMoveOk(d, ks) : !ks.hasAny(['finishedAt', 'finishedServerAt']))
         && (ks.hasAny(['startedAt', 'startedServerAt']) ? startTimesOk(d) : true)
-        // (already checked with the summary when the score changed)
-        && (ks.hasAny(['summary', 'events', 'rules']) ? true : finishedWinnerOk(d))
         && d.get('firstServe', 'A') in ['A', 'B']
         && timesOk(d)
         // (?: first on the status, so a finishing write doesn't pay for the schedule check)
         && (d.status == 'scheduled' ? (ks.hasAny(['scheduledAt', 'status']) ? scheduledOk(d) : true)
-            : (ks.hasAny(['scheduledAt']) ? optMsOk(d.get('scheduledAt', null)) : true))
+            : (ks.hasAny(['scheduledAt']) ? (d.get('scheduledAt', null) == null || schedMsOk(d.scheduledAt)) : true))
         && (ks.hasAny(['location']) ? d.get('location', null) == null || placeOk(d.location) : true)
         && (ks.hasAny(['tournamentId', 'challengeId', 'fixtureId'])
             ? [d.get('tournamentId', null), d.get('challengeId', null), d.get('fixtureId', null)].removeAll([null]).join('|').matches('^[A-Za-z0-9_|-]{0,200}$')
             : true);
     }
-    // New match: no events yet, the empty summary, valid metadata.
+    // New match: no events yet, valid metadata.
+    // 1.4.4 (QA V143-5): the app's real creates (immediate start by number at 6 and 12 a side, team matches with a
+    // title and place, scheduled by-number matches with title, place and time) went over the 1000-expression budget.
+    // The create path is now cheaper (rules-tests "V143-5" build every shape with the app's own builder,
+    // src/core/buildMatch.ts + src/services/backend/firebaseMatchDoc.ts, and check the headroom):
+    //  - its own key list (matchCreateKeysOk): no finish/POTM/verification/server-update key can be sent at all,
+    //    so they need no value checks;
+    //  - the summary is not checked at create (the stored summary is untrusted, the app replays the events, and
+    //    `events == []` already says 0-0);
+    //  - a live match must carry its start (startedServerAt = request.time, startedAt within 5 min – every app
+    //    version since 1.3.0 sends both), a scheduled one carries none and a start time that isn't over (QA G9,
+    //    15 min grace) and at most 2 years ahead (schedMsOk). A live match's scheduledAt (= its start) is only
+    //    type-checked.
+    // The update rule is separate (allow update) and isn't evaluated for a create.
+    function matchCreateKeysOk(ks) {
+      return ks.hasOnly(['createdBy', 'title', 'teamA', 'teamB', 'rules', 'firstServe', 'events', 'summary', 'status',
+            'scorerId', 'participantIds', 'location', 'scheduledAt', 'startedAt', 'finishedAt', 'tournamentId', 'fixtureId',
+            'challengeId', 'stream', 'interestedIds', 'updatedAt', 'captains', 'startedServerAt', 'teamSizeMode']);
+    }
     function matchCreateOk(d) {
-      return matchKeysOk(d.keys(), 'createdBy') && teamSizeOk(d)
+      let ks = d.keys();
+      let at = d.get('scheduledAt', null);
+      return matchCreateKeysOk(ks) && teamSizeOk(d)
         && d.events == []
-        && d.status in ['scheduled', 'live']
-        && d.get('firstServe', 'A') in ['A', 'B']
-        // QA NB-R1: the empty summary is required (no sets, 0-0, no winner; every key present). One
-        // map diff instead of a check per key (create is close to the 1000-expression budget).
-        && d.summary.diff({'setsA': 0, 'setsB': 0, 'currentA': 0, 'currentB': 0, 'setScores': [], 'winner': null, 'serving': 'A'})
-             .affectedKeys().hasOnly(['serving'])
+        && d.firstServe in ['A', 'B']
+        && d.get('finishedAt', null) == null
+        && (d.status == 'live'
+          ? d.startedServerAt == request.time && d.startedAt >= nowMs() - 300000 && d.startedAt <= nowMs() + 300000
+            && (at == null || at is int)
+          : d.status == 'scheduled' && !ks.hasAny(['startedServerAt', 'startedAt'])
+            && (at == null || (schedMsOk(at) && at >= nowMs() - 900000)))
         && rulesOk(d.rules)
         && titleOk(d.get('title', null))
-        // Nothing finished, verified or timed by the client (only checked when such a key is sent).
-        && (d.keys().hasAny(['finishedAt', 'finishedServerAt', 'playerOfMatchId', 'verification', 'startedServerAt', 'startedAt']) ? createTimesOk(d) : true)
-        && scheduledOk(d)
         && (d.get('location', null) == null || placeOk(d.location));
-    }
-    // 1.3.0 server time only: a live match may carry its start = now (startedServerAt = request.time,
-    // startedAt within 5 minutes of it); no finish, POTM or verification at create (QA AF-18, AF-51).
-    function createTimesOk(d) {
-      return d.get('finishedAt', null) == null && d.get('finishedServerAt', null) == null
-        && d.get('playerOfMatchId', null) == null && d.get('verification', null) == null
-        && (d.get('startedServerAt', null) == null || (d.status == 'live' && d.startedServerAt == request.time))
-        && (d.get('startedAt', null) == null || (d.status == 'live' && d.startedAt >= nowMs() - 300000 && d.startedAt <= nowMs() + 300000));
     }
     // Update: only the groups of fields being written are checked, so a roster change or a rally
     // costs a couple of expressions here and an older document can still be scored or closed.
@@ -637,17 +961,20 @@ service cloud.firestore {
     }
     // 1.3.0 terminal statuses only move one way (src/core/antifraud.ts statusMoveOk): scheduled ->
     // live/abandoned; live -> finished/abandoned (or back to scheduled before the first rally);
-    // finished -> live only by undo while the POTM is still open (a completed match is terminal, see
-    // notTerminal()); abandoned -> nothing. (Update only: create has its own status check.)
-    function statusMoveOk(d) {
+    // finished -> nothing (1.4.2, V141-8; before: back to live by undo until the POTM was picked);
+    // abandoned -> nothing. (Update only: create has its own status check.)
+    function statusMoveOk(d, ks) {
       // (only called when the status changed)
       let from = resource.data.status;
       return d.status == 'finished' ? from == 'live'
           // scheduled -> live must stamp the server start (QA N121-3; startTimesOk checks the value)
-          : d.status == 'live' ? (from == 'scheduled' ? d.get('startedServerAt', null) == request.time : from == 'finished')
-          : d.status == 'abandoned' ? from in ['scheduled', 'live']
+          // 1.4.2 (QA V141-8): never finished -> live (no undo after the end)
+          : d.status == 'live' ? (from == 'scheduled' && d.get('startedServerAt', null) == request.time)
+          // 1.4.5 (V144-1): scorerAbandonOk (maxEvents, wasWon, the record / policy)
+          : d.status == 'abandoned' ? from in ['scheduled', 'live'] && scorerAbandonOk(d, ks)
           // live -> scheduled before the first rally clears the start
-          : (from == 'live' && resource.data.get('events', []).size() == 0 && d.get('events', []).size() == 0
+          // 1.4.6 (QA V145-1): only if the match NEVER had a rally (maxEvents – undo to 0 doesn't count)
+          : (from == 'live' && maxEv(resource.data) == 0 && d.get('events', []).size() == 0
             && d.get('startedServerAt', null) == null && d.get('startedAt', null) == null);
     }
     // Server time only (QA AF-14/AF-17): startedAt/startedServerAt are written once, when the match
@@ -660,12 +987,6 @@ service cloud.firestore {
           && d.status == 'live' && d.get('startedServerAt', null) == request.time
           && d.startedAt is int && d.startedAt >= nowMs() - 300000 && d.startedAt <= nowMs() + 300000;
     }
-    // Abandoned, or completed (finished + Player of the Match): closed for good.
-    // (a live match is never terminal; checked first because scoring writes are at the expression budget)
-    function terminal(r) {
-      let st = r.status;
-      return st == 'live' ? false : (st == 'finished' ? r.get('playerOfMatchId', null) != null : st == 'abandoned');
-    }
 
     // ---------- result confirmation (1.3.0, src/core/antifraud.ts confirmProblem) ----------
     // x plays for side A / B (participantIds start with exactly team A's then team B's players).
@@ -673,8 +994,11 @@ service cloud.firestore {
       return x in (sideIsA ? r.participantIds[0:r.teamA.players.size()]
         : r.participantIds[r.teamA.players.size():r.teamA.players.size() + r.teamB.players.size()]);
     }
+    // 1.4.4: no summary.winner here (the stored summary is untrusted): the app only offers the confirm / review on a
+    // match whose replayed events have a winner (core/antifraud.ts isCompleted → matchWinner), and a match without
+    // one never counts, whatever is confirmed (countMatches replays it as well).
     function completed(r) {
-      return r.status == 'finished' && r.get('playerOfMatchId', null) != null && r.summary.winner in ['A', 'B'];
+      return r.status == 'finished' && r.get('playerOfMatchId', null) != null;
     }
     function vStatus(r) { return r.get('verification', {'status': 'pending'}).get('status', 'pending'); }
     // The opposing captain: a captain who is not the scorer or the creator, and not on their side.
@@ -684,14 +1008,48 @@ service cloud.firestore {
     // src/core/antifraud.ts (rules-tests check it). Counting itself is computed from these fields.
     function adminApprovalCounts() { return false; }
     function captainOf(r) { return r.get('verification', {}).get('captain', null); }
+    // 1.4.5 (QA V144-8): measured against the scorer before any admin reassignment (scorerReassign.from)
+    // A captain who gives the verdict (core/antifraud.ts verdictCaptains): not the scorer as at the first rally or the
+    // creator, and on neither one's side.
+    function verdictCapt(r, x) {
+      let sc = r.get('scorerReassign', null) == null ? r.scorerId : r.scorerReassign.from;
+      let c = r.get('captains', null);
+      return c != null && x != sc && x != r.createdBy
+        && (x == c.A ? !onSide(r, true, sc) && !onSide(r, true, r.createdBy)
+          : (x == c.B && !onSide(r, false, sc) && !onSide(r, false, r.createdBy)));
+    }
+    // 1.4.8 (QA V147-2, core/verdictRepair.ts, lifecycle 'repairVerdict'): an admin outside the match repairs a match
+    // nobody can confirm (scorerTargetOk fails now, passes after), with no captain verdict and no review yet: either a
+    // participant becomes the scorer (scorerReassign removed: the verdict reference is that scorer) or a player of one
+    // side becomes that side's captain. Audited in verdictRepair (by me, server time, what was there).
+    function verdictRepairOk(d, ks) {
+      let r = resource.data;
+      let v = d.verdictRepair;
+      let c = r.get('captains', null);
+      // 1.4.10 (QA V149-3): scorerTargetOk can't see a captain who plays for the other team (it checks the captain's
+      // slot, not the player's side), so a captain repair proves "broken" by that captain being off its side instead
+      return isAdmin() && !ownMatch(r) && c != null && (v.kind == 'confirmer' || !scorerTargetOk(r)) && scorerTargetOk(d)
+        && vStatus(r) == 'pending' && captainOf(r) == null
+        && v.keys().hasOnly(['by', 'at', 'kind', 'to', 'side', 'prevScorer', 'prevFrom', 'prevCaptainA', 'prevCaptainB'])
+        && v.by == uid() && v.at == request.time && v.prevScorer == r.scorerId
+        && v.prevFrom == (r.get('scorerReassign', null) == null ? null : r.scorerReassign.get('from', null)) && v.prevCaptainA == c.A && v.prevCaptainB == c.B
+        // 1.4.9 (QA V148-2): a scorer; 1.4.10 (QA V149-3): or a captain, only for a side whose stored captain doesn't
+        // play for that side (core captainFixAllowed), replaced by a player of that side
+        && (v.kind == 'scorer'
+          ? ks.hasOnly(['verdictRepair', 'scorerId', 'scorerReassign', 'updatedAt']) && v.side == null && v.to == d.scorerId
+            && d.scorerId in r.participantIds && d.get('scorerReassign', null) == null
+          : v.kind == 'confirmer' && ks.hasOnly(['verdictRepair', 'captains', 'updatedAt']) && v.side in ['A', 'B']
+            && d.captains.keys().hasOnly(['A', 'B'])
+            && (v.side == 'A'
+              ? d.captains.A == v.to && d.captains.B == c.B && !onSide(r, true, c.A) && onSide(r, true, v.to)
+              : d.captains.B == v.to && d.captains.A == c.A && !onSide(r, false, c.B) && onSide(r, false, v.to)));
+    }
+    // 1.4.6: never the CURRENT scorer (V145-6), and a verdict belongs to the current re-open epoch (V145-2: `epoch`, only
+    // written after a re-open, equals reopenEpoch).
     function confirmOk(r, v) {
-      return completed(r) && r.get('captains', null) != null
+      return completed(r) && verdictCapt(r, uid()) && uid() != r.scorerId
         && (vStatus(r) == 'pending' ? confirmFromPending(v) : confirmAfterApproval(r, v))
-        && v.by == uid() && v.at == request.time
-        && uid() != r.scorerId && uid() != r.createdBy
-        && (uid() == r.captains.A
-            ? !onSide(r, true, r.scorerId) && !onSide(r, true, r.createdBy)
-            : (uid() == r.captains.B && !onSide(r, false, r.scorerId) && !onSide(r, false, r.createdBy)));
+        && v.by == uid() && v.at == request.time && v.get('epoch', 0) == r.get('reopenEpoch', 0);
     }
     // verdict 'confirmed'/'rejected' must match the decision. 1.3.9 (V138-3): required on every new
     // answer (1.3.7+ clients always send it); a 1.3.6 client's answer without it is refused, so the
@@ -700,7 +1058,7 @@ service cloud.firestore {
       return v.get('captain', null) == (decision == 'confirmed' ? 'confirmed' : 'rejected');
     }
     function confirmFromPending(v) {
-      return v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain'])
+      return v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain', 'epoch'])
         && v.status in ['confirmed', 'disputed'] && verdictOk(v, v.status)
         && (v.status == 'disputed' ? optTextOk(v.get('reason', null), 200) : v.get('reason', null) == null);
     }
@@ -709,7 +1067,7 @@ service cloud.firestore {
     function confirmAfterApproval(r, v) {
       let old = r.get('verification', {});
       return !adminApprovalCounts() && vStatus(r) == 'approved' && captainOf(r) == null && old.get('by', null) == null
-        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain', 'reviewedBy', 'reviewedAt'])
+        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain', 'reviewedBy', 'reviewedAt', 'epoch'])
         && v.status == 'approved' && v.get('captain', null) in ['confirmed', 'rejected']
         && v.get('reviewedBy', null) == old.get('reviewedBy', null) && v.get('reviewedAt', null) == old.get('reviewedAt', null)
         && (v.captain == 'rejected' ? optTextOk(v.get('reason', null), 200) : v.get('reason', null) == null);
@@ -727,11 +1085,13 @@ service cloud.firestore {
     }
     function reviewOk(r, v) {
       let old = r.get('verification', {});
-      return completed(r) && !(vStatus(r) in ['approved', 'voided'])
+      // 1.4.5 (QA V144-2): a match stored as finished without a Player of the Match (e.g. without a winner) can be voided
+      return (completed(r) || (r.status == 'finished' && v.status == 'voided')) && !(vStatus(r) in ['approved', 'voided'])
         && uid() != r.createdBy && uid() != r.scorerId && !(uid() in r.participantIds)
         && !(uid() in [r.get('captains', {}).get('A', null), r.get('captains', {}).get('B', null)])
-        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'reviewedBy', 'reviewedAt', 'captain'])
+        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'reviewedBy', 'reviewedAt', 'captain', 'epoch'])
         && v.status in ['approved', 'voided'] && v.reviewedBy == uid() && v.reviewedAt == request.time
+        && v.get('epoch', 0) == r.get('reopenEpoch', 0)
         && v.get('by', null) == old.get('by', null) && v.get('at', null) == old.get('at', null)
         && v.get('reason', null) == old.get('reason', null)
         // 1.3.9 (V138-3): when the captain answered (`by`), the approval/void MUST carry the verdict
@@ -750,19 +1110,11 @@ service cloud.firestore {
     // (Kept to a few expressions: match create is close to the 1000-expression budget.)
     function captainsOk(d) {
       let c = d.captains;
-      let na = d.teamA.players.size();
       return c.keys().hasOnly(['A', 'B']) && c.A != c.B
-        && (d.teamA.get('teamId', null) == null ? c.A in d.participantIds[0:na]
-            : get(/databases/$(database)/documents/teams/$(d.teamA.teamId)).data.captainId == c.A)
-        && (d.teamB.get('teamId', null) == null ? c.B in d.participantIds[na:na + d.teamB.players.size()]
-            : get(/databases/$(database)/documents/teams/$(d.teamB.teamId)).data.captainId == c.B);
+        && sourceOk(d.teamA, d.participantIds, 0, c.A)
+        && sourceOk(d.teamB, d.participantIds, d.teamA.players.size(), c.B);
     }
 
-    // QA NB-R2 (SCORE-04): 'finished' only with a winner in the summary.
-    function finishedWinnerOk(d) {
-      // (no summary or no winner key = evaluation error = denied)
-      return d.status == 'finished' ? d.summary.winner in ['A', 'B'] : true;
-    }
     // QA NB-R3/NB-R4: finishedAt changes only together with the status, and never into the future
     // (5 min allowance for device clocks). finishedServerAt is request.time of the write that
     // finished the match (kept while finished, null otherwise); Firebase rankings order by it.
@@ -775,14 +1127,73 @@ service cloud.firestore {
     // 1.3.7: on update only the changed keys (ks, already bound) are checked against the key list: the
     // stored doc passed it on create, and this skips a d.keys() call (the 12-a-side finishing write is
     // at the 1000-expression budget).
+    // The write that FINISHES a live match (status -> finished) has its own short list: at most the winning rally
+    // (one appended event, or none: the rally was written before), the summary (shape only), the status and the
+    // finish times – nothing else may ride on it. 1.4.4: the result is not checked here (rules can't replay);
+    // a log too short for any win is refused as an obvious forgery (minWinEvents), and the app shows the replayed
+    // result of whatever was finished – a premature finish shows no winner, never counts and is flagged.
+    function finishingWriteOk(d, ks) {
+      let o = resource.data.get('events', []);
+      let n = d.get('events', []);
+      return ks.hasOnly(['events', 'summary', 'status', 'finishedAt', 'finishedServerAt', 'updatedAt', 'serverUpdatedAt', 'maxEvents', 'wasWon'])
+        && resource.data.status == 'live'
+        && n.size() >= minWinEvents(d.rules)
+        // 1.4.5 (V144-1): the wasWon latch is set by the write that finishes; no finish while a request is pending
+        && d.get('wasWon', false) == true && resource.data.get('abandonRequest', null) == null
+        && (ks.hasAny(['events', 'maxEvents']) ? maxEvOk(d) : true)
+        && (ks.hasAny(['events']) ? n is list && n.size() == o.size() + 1 && n.size() <= 3000 && appendOk(o, n, o.size(), n.size(), d) : true)
+        && (ks.hasAny(['summary']) ? summaryShapeOk(d.summary) : true)
+        && finishTimesOk(d)
+        && timesOk(d);
+    }
+    // Set lineups (src/core/rotation.ts): the scorer sets a set's starting six at the start of that set (score.tsx,
+    // rot.atSetStart). Once the first rally exists, a set's lineup that is already stored never changes (it shaped
+    // the rotation the credited rallies were scored with); a new set's lineup may be added. They don't affect the
+    // result (the replay ignores them). Before the first rally anything goes.
+    // 1.4.5 (PRD gap): one set's lineup per write (the app writes the set that starts), and its players are players of
+    // the match (participantIds; empty slots are null). Before the first rally a lineup may still be changed or removed.
+    function lineupsOk(d) {
+      let o = resource.data.get('lineups', null);
+      let l = d.get('lineups', null);
+      let df = l == null ? null : (o == null ? l.diff({}) : l.diff(o));
+      let set = df == null ? [] : df.addedKeys().union(df.changedKeys());
+      return (l == null ? (o == null || resource.data.get('events', []).size() == 0)
+        : l is map && set.size() <= 1
+          && (set.size() == 0 ? true : setLineupOk(l, set, d.participantIds.concat([null])))
+          && (resource.data.get('events', []).size() == 0 || o == null
+            || (df.changedKeys().size() == 0 && df.removedKeys().size() == 0)));
+    }
+    // (rules Sets can't be indexed: the one written set is found among the set numbers 1–5)
+    function setLineupOk(l, set, ids) {
+      return set.hasOnly(['1', '2', '3', '4', '5'])
+        && (set.hasAny(['1']) ? lineupInOk(l['1'], ids)
+          : (set.hasAny(['2']) ? lineupInOk(l['2'], ids)
+            : (set.hasAny(['3']) ? lineupInOk(l['3'], ids)
+              : (set.hasAny(['4']) ? lineupInOk(l['4'], ids) : lineupInOk(l['5'], ids)))));
+    }
+    function lineupInOk(x, ids) {
+      return x is map && x.keys().hasOnly(['A', 'B']) && x.get('A', []) is list && x.get('B', []) is list
+        && x.get('A', []).size() <= 12 && x.get('B', []).size() <= 12
+        && ids.hasAll(x.get('A', [])) && ids.hasAll(x.get('B', []));
+    }
     function matchUpdateOk(d, ks) {
+      return ks.hasAny(['status']) && d.status == 'finished' ? finishingWriteOk(d, ks) : matchUpdateOk2(d, ks);
+    }
+    function matchUpdateOk2(d, ks) {
       return matchKeysOk(ks, 'title')
         && (ks.hasAny(['playerOfMatchId']) ? potmOk(d, ks) : true)
-        && (ks.hasAny(['events']) ? eventsOk(d) : true)
-        && (ks.hasAny(['summary', 'events', 'rules'])
-            ? (d.get('summary', null) == null ? resource.data.get('summary', null) == null : summaryOk(d.summary, d))
-              && finishedWinnerOk(d)
-            : true)
+        && (ks.hasAny(['events']) ? eventsOk(d) && resource.data.get('abandonRequest', null) == null : true)
+        // 1.4.5 (V144-1): maxEvents only grows with the events; wasWon only latches (the finishing write sets it);
+        // the abandon record only comes with the abandon (statusMoveOk → scorerAbandonOk)
+        && (ks.hasAny(['events', 'maxEvents']) ? maxEvOk(d) : true)
+        && (ks.hasAny(['wasWon']) ? d.wasWon == true : true)
+        && (ks.hasAny(['abandon']) ? ks.hasAny(['status']) && d.status == 'abandoned' : true)
+        && (ks.hasAny(['summary']) ? summaryShapeOk(d.get('summary', null)) : true)
+        // V143-3: the replay's inputs are fixed once the first rally exists (and the write adding it can't change them).
+        // 1.4.5 (V144-1/4): "exists" = ever existed (maxEv): undoing to 0 and raising bestOf would lift the shortest win
+        // above maxEvents and re-open the scorer's abandon
+        && (ks.hasAny(['rules', 'firstServe']) ? maxEv(resource.data) == 0 && d.get('events', []).size() == 0 : true)
+        && (ks.hasAny(['lineups']) ? lineupsOk(d) : true)
         && (ks.hasAny(['interestedIds']) ? (d.interestedIds is list && d.interestedIds.size() <= 500) : true)
         && (ks.hasAny(['title', 'rules', 'status', 'firstServe', 'startedAt', 'startedServerAt', 'finishedAt', 'finishedServerAt', 'scheduledAt', 'location',
               'tournamentId', 'challengeId', 'fixtureId']) ? matchMetaOk(d, ks) : true);
@@ -808,6 +1219,8 @@ service cloud.firestore {
           && matchCreateOk(d)
           && validRoster(d)
           && captainsOk(d)
+          // 1.4.8 (QA V147-1): someone can confirm the result, and the scorer isn't on that side
+          && setupVerdictOk(d)
           && termsOk();
       }
       allow create: if signedIn() && createAllowed();
@@ -815,25 +1228,38 @@ service cloud.firestore {
       // scored, but its scorer may still close it: only the status (to 'abandoned') and finish time change.
       function abandonOnly() {
         return request.resource.data.status == 'abandoned' && resource.data.status in ['scheduled', 'live']
-          && changed().hasOnly(['status', 'finishedAt', 'updatedAt']);
+          && changed().hasOnly(['status', 'finishedAt', 'updatedAt', 'abandon']);
       }
       // The branches are chosen with ?: (both sides of || are always evaluated, and the scorer's
       // finishing write on a big match is close to the 1000-expression budget).
       function scorerWriteOk(ks, d) {
         // (createdBy can't change: see matchKeysOk)
         return (ks.hasAny(['teamA', 'teamB', 'participantIds', 'captains', 'teamSizeMode'])
-                ? (resource.data.get('events', []).size() == 0 && validRoster(d) && captainsOk(d) && teamSizeOk(d))
+                // 1.4.6 (QA V145-3): the set-up is frozen once a rally EVER existed (maxEvents; undo to 0 doesn't reopen it)
+                // 1.4.8 (QA V147-1): and the roster edit keeps the verdict invariant (setupVerdictOk)
+                ? (maxEv(resource.data) == 0 && d.get('events', []).size() == 0 && validRoster(d) && captainsOk(d) && teamSizeOk(d) && setupVerdictUpdOk(d))
                 : (enoughPlayers(d) ? true : abandonOnly()));
       }
+      // 1.4.5 (QA V144-1/2/3): an admin who isn't part of the match resolves it (first: before the finished branch – a
+      // finished match without a winner can be re-opened / abandoned – and, 1.4.6 (QA V145-2), before the verification
+      // branch – a re-open removes the verdict / review).
       // ks / d are bound once (let) and passed down: a function argument is re-evaluated at every
       // reference, and changed() is a full document diff (1.3.0: this freed the expression budget).
       function updateAllowed() {
         let ks = changed();
         let d = request.resource.data;
-        return ks.hasAny(['verification']) ? verificationWriteOk() && termsOk()
+        return ks.hasAny(['verdictRepair']) ? verdictRepairOk(d, ks) && termsOk()
+          : (isAdmin() && ks.hasAny(['status', 'abandon', 'abandonRequest', 'resolution', 'scorerId']) && !ownMatch(resource.data)) ? adminResolveOk(d, ks) && termsOk()
+          : ks.hasAny(['verification']) ? verificationWriteOk() && termsOk()
+          // 1.4.3 (QA V142-2): a finished match (with or without the Player of the Match) is final
+          : resource.data.status == 'finished' ? finishedWriteOk(d, ks)
+          // 1.4.5 ('consent' policy): the abandon request and its answers
+          : ks.hasAny(['abandonRequest']) ? abandonRequestOk(d, ks) && termsOk()
+          // 1.4.5: the opposing captain's report of an abandoned match
+          : (resource.data.status == 'abandoned' && ks.hasAny(['abandon'])) ? reportOk(d, ks) && termsOk()
           : matchUpdateOk(d, ks) && (
-            // A completed or abandoned match is closed: only "I want to play" still changes.
-            terminal(resource.data) ? interestedToggle()
+            // An abandoned match is closed: only "I want to play" still changes.
+            resource.data.status == 'abandoned' ? interestedToggle()
             // The assigned scorer controls the score (but can't silently change who the scorer is here).
             // Players can only change before the first rally; scoring needs minPlayers() per team.
             : (isScorer() && d.scorerId == resource.data.scorerId)
@@ -841,7 +1267,7 @@ service cloud.firestore {
               // The creator or the current scorer can hand scoring to someone else (that field only),
               // while the match isn't over (QA PM-13).
               : ((((resource.data.createdBy == uid() || isScorer()) && ks.hasOnly(['scorerId', 'updatedAt'])
-                  && resource.data.status in ['scheduled', 'live'])
+                  && resource.data.status in ['scheduled', 'live'] && handoverOk(resource.data, d.scorerId) && scorerTargetOk(d))
                 // Anyone can add/remove themselves from "I want to play".
                 || interestedToggle()) && termsOk()));
       }
@@ -850,9 +1276,16 @@ service cloud.firestore {
       // (no data loss), and the finishing write of a big match is at the 1000-expression budget.
       // Everyone who can be a scorer is a registered user, and a profile needs an accepted T&C.
       allow update: if signedIn() && updateAllowed();
-      // 1.3.0 (QA AF-50/BN-11): a finished match is history: only an admin deletes it. Live: nobody.
-      allow delete: if signedIn() && resource.data.status != 'live'
-        && (isAdmin() || (resource.data.createdBy == uid() && resource.data.status != 'finished' && termsOk()));
+      // 1.4.6 (QA V145-1, core/lifecycle.ts 'delete'): only a scheduled / abandoned match that NEVER had a rally (maxEvents
+      // == 0 – undo to 0 doesn't count) and has no abandon record, request or admin re-open; by its creator or an admin
+      // who isn't part of it. A finished or live match is never deleted (1.3.0 let an admin delete a finished one).
+      function deleteOk(r) {
+        return r.status in ['scheduled', 'abandoned'] && maxEv(r) == 0
+          && r.get('abandon', null) == null && r.get('abandonRequest', null) == null && r.get('resolution', null) == null
+          && r.get('reopenEpoch', 0) == 0
+          && ((isAdmin() && !ownMatch(r)) ? true : (r.createdBy == uid() && termsOk()));
+      }
+      allow delete: if signedIn() && deleteOk(resource.data);
 
       match /photos/{photoId} {
         // Players of team A or B and the scorer (src/core/photos.ts canAddMatchPhoto); not the
@@ -1058,7 +1491,8 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // 1.3.7 "Fact of the day": public read (the app filters inactive items); admins add / edit / delete.
+    // 1.3.7 "Fact of the day": public read (the app filters inactive items); admins add / edit / delete
+    // (1.4.1: delete = a tombstone update, see removalOk).
     // Quotes need an attribution and an https source URL (src/core/dailyItems.ts checkDailyItem).
     match /dailyItems/{itemId} {
       allow read: if true;
@@ -1067,10 +1501,18 @@ service cloud.firestore {
         return !x.matches('(?s).*[\\x{0}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}].*');
       }
       function dailyOk(d) {
-        return d.keys().hasOnly(['type', 'textEn', 'textHi', 'attribution', 'sourceUrl', 'active', 'updatedAt', 'createdAt'])
+        return d.keys().hasOnly(['type', 'textEn', 'textHi', 'attribution', 'sourceUrl', 'active', 'updatedAt', 'createdAt', 'removedAt', 'deleted'])
+          && d.get('deleted', false) is bool
           && d.keys().hasAll(['type', 'textEn', 'textHi', 'active'])
           && d.type in ['fact', 'quote'] && d.active is bool
-          && d.textEn is string && d.textEn.size() > 0 && d.textEn.size() <= 400 && cleanText(d.textEn)
+          // 1.4.2 (QA V141-6): a deleted item (tombstone) keeps no text – it was publicly readable
+          && (d.get('deleted', false) == true ? tombstoneOk(d) : dailyTextOk(d));
+      }
+      function tombstoneOk(d) {
+        return d.textEn == '' && d.textHi == '' && d.get('attribution', null) == null && d.get('sourceUrl', null) == null;
+      }
+      function dailyTextOk(d) {
+        return d.textEn is string && d.textEn.size() > 0 && d.textEn.size() <= 400 && cleanText(d.textEn)
           && d.textHi is string && d.textHi.size() > 0 && d.textHi.size() <= 400 && cleanText(d.textHi)
           && (d.get('attribution', null) == null || (d.attribution is string && d.attribution.size() <= 120 && cleanText(d.attribution)))
           && (d.get('sourceUrl', null) == null || (d.sourceUrl is string && d.sourceUrl.size() <= 500 && d.sourceUrl.matches('https://[^\\s]+') && cleanText(d.sourceUrl)))
@@ -1079,11 +1521,30 @@ service cloud.firestore {
       // 1.3.9 (V138-7): createdAt = server time on create, unchanged afterwards (a new fact joins the daily
       // rotation the next IST day: core/dailyItems.ts pickDaily). Absent (pre-1.3.9 admin app / docs): the item
       // is simply always in the rotation. It can never be back- or forward-dated.
-      allow create: if signedIn() && isAdmin() && dailyOk(request.resource.data)
-        && (request.resource.data.get('createdAt', null) == null || request.resource.data.createdAt == request.time);
-      allow update: if signedIn() && isAdmin() && dailyOk(request.resource.data)
+      // 1.4.1 (QA V140-7): removedAt = server time when an item is turned off (or created off), set once and
+      // never changed; an item that is off can't be turned back on (the app makes a copy: a new item) and a
+      // deleted one (deleted = true, a tombstone) can't change at all; docs are never deleted. Started rotation
+      // cycles keep the item's slot (core/dailyItems.ts pickDaily), so nothing an admin does reshapes them.
+      // A doc turned off before 1.4.1 (no removedAt) keeps none: it is in no cycle, and stamping it later would
+      // make it a member of the running cycle and shift today's fact.
+      function removalOk(d, old) {
+        let rm = d.get('removedAt', null);
+        return (d.get('deleted', false) == false || d.active == false)
+          && (old == null ? (d.get('deleted', false) == false && (d.active ? rm == null : rm == request.time))
+            : (old.get('deleted', false) == false
+              ? (old.active != false ? (d.active ? rm == null : rm == request.time)
+                : (d.active == false && rm == old.get('removedAt', null)))
+              // 1.4.2 (V141-6): a 1.4.1 tombstone that still has its text may only be scrubbed (stays deleted)
+              : (old.get('textEn', '') != '' && d.get('deleted', false) == true && d.active == false
+                && rm == old.get('removedAt', null) && d.type == old.type)));
+      }
+      allow create: if signedIn() && isAdmin() && dailyOk(request.resource.data) && removalOk(request.resource.data, null)
+        // 1.4.2 (QA V141-3): createdAt is required on create and is the server's time (no back-/forward-dating;
+        // absent = always in the rotation was a way to jump the queue)
+        && request.resource.data.get('createdAt', null) == request.time;
+      allow update: if signedIn() && isAdmin() && dailyOk(request.resource.data) && removalOk(request.resource.data, resource.data)
         && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null);
-      allow delete: if signedIn() && isAdmin();
+      allow delete: if false;
     }
   }
 }

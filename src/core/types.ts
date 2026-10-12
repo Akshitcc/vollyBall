@@ -125,6 +125,13 @@ export interface Match {
   captains?: MatchCaptains | null;
   /** Result confirmation by the opposing captain / admin review. Written only by the server/rules-validated actions. */
   verification?: MatchVerification | null;
+  /**
+   * 1.4.4 (Firebase, QA V143-1): set when the STORED summary/status disagree with the replay of the events
+   * (core/replay.ts). The summary the app shows is always the replay; this only flags the match for admin review.
+   */
+  resultCheck?: ResultCheck | null;
+  /** 1.4.5 (Firebase, PRD gap): players without a user profile, found on read (core/antifraud.ts CountableMatch). */
+  unknownPlayerIds?: string[] | null;
   /** Server clock (ms) when the match went live / finished. Never taken from the client. */
   startedServerAt?: number | null;
   finishedServerAt?: number | null;
@@ -137,6 +144,104 @@ export interface Match {
    * Filled on read by every backend (API: verified_at, Firebase/demo: verification.at); see core/antifraud.ts confirmedAtOf.
    */
   confirmedAt?: number | null;
+  /**
+   * 1.4.5 (QA V144-1, src/core/abandon.ts): the most events the log ever had. Only grows (undo never lowers it –
+   * firestore.rules, the API server and the demo enforce that); missing on older matches = the current length.
+   */
+  maxEvents?: number | null;
+  /** 1.4.5: latch – the match was finished (showed a winner) at some point. Never set back by a scorer. */
+  wasWon?: boolean | null;
+  /** 1.4.5: who abandoned the match, when, at what score, and the admin review of it. */
+  abandon?: AbandonRecord | null;
+  /** 1.4.5 (consent policy): a pending abandon request – the opposing captain(s) agree, or an admin decides. */
+  abandonRequest?: AbandonRequest | null;
+  /** 1.4.5 (QA V144-2): an admin re-opened a match stored as finished whose events have no winner. */
+  resolution?: MatchResolution | null;
+  /**
+   * 1.4.5 (QA V144-8): an admin moved scoring after the first rally. `from` = the scorer before the first admin
+   * reassignment: the captain verdict keeps coming from the captain opposing THAT scorer's side (core/scorerHandoff.ts).
+   */
+  scorerReassign?: ScorerReassign | null;
+  /**
+   * 1.4.6 (QA V145-2): how many times an admin re-opened the match (0 / missing = never). A captain verdict counts only
+   * when it was given in the current epoch (verification.epoch == reopenEpoch, core/antifraud.ts currentVerification).
+   */
+  reopenEpoch?: number | null;
+  /**
+   * 1.4.6 (QA V145-5): earlier abandon records, oldest first – append-only (a record that is replaced, e.g. by an admin's
+   * abandon after a reinstate, moves here; nothing is ever removed or rewritten).
+   */
+  abandonHistory?: AbandonRecord[] | null;
+  /** 1.4.6 (QA V145-12, consent policy): abandon requests made on this match so far, and when the last one was made. */
+  abandonRequests?: number | null;
+  abandonRequestAt?: number | null;
+  /** 1.4.8 (QA V147-2): an admin's repair of a match nobody could confirm (the audit record; the last one). */
+  verdictRepair?: VerdictRepair | null;
+}
+/**
+ * 1.4.8 (QA V147-2): an admin set a valid scorer ('scorer': the verdict reference becomes that scorer, scorerReassign
+ * is cleared) or a valid confirmer ('confirmer': side's captain becomes `to`). Flat, so firestore.rules can check it;
+ * prev* keep what was there.
+ */
+export interface VerdictRepair {
+  by: string;
+  at: number;
+  kind: 'scorer' | 'confirmer';
+  to: string;
+  side: 'A' | 'B' | null;
+  prevScorer: string;
+  prevFrom: string | null;
+  prevCaptainA: string | null;
+  prevCaptainB: string | null;
+}
+export interface ScorerReassign {
+  from: string;
+  to: string;
+  by: string;
+  at: number;
+}
+
+/** 1.4.5: the score when a match was abandoned (replayed from its events). */
+export interface AbandonScore {
+  setsA: number;
+  setsB: number;
+  currentA: number;
+  currentB: number;
+}
+/**
+ * 1.4.5 (QA V144-1): mode 'flag' = the scorer abandoned after the first rally (waits for an admin), 'consent' = the
+ * opposing captain(s) agreed, 'admin' = an admin abandoned it, 'legacy' = an older abandoned match an admin reviewed.
+ * review: 'pending' (in the admin queue), 'confirmed', 'reinstated' (back to live / finished).
+ */
+export interface AbandonRecord {
+  by?: string | null;
+  at?: number | null;
+  events: number;
+  mode: 'review' | 'flag' | 'consent' | 'admin' | 'legacy';
+  review: 'pending' | 'confirmed' | 'reinstated';
+  score?: AbandonScore | null;
+  /** The scorer's side was behind (fewer sets, or level on sets and fewer points in the current set). */
+  behind?: boolean | null;
+  agreedBy?: string[] | null;
+  reviewedBy?: string | null;
+  reviewedAt?: number | null;
+  /** 1.4.5: the opposing captain reported the abandon (sends it back to admin review). */
+  reportedBy?: string | null;
+  reportedAt?: number | null;
+}
+/** side = the requester's side ('N' = the scorer plays on neither side: both captains must agree). */
+export interface AbandonRequest {
+  by: string;
+  at: number;
+  side: 'A' | 'B' | 'N';
+  agreedBy: string[];
+}
+export interface MatchResolution {
+  action: 'reopened';
+  by: string;
+  at: number;
+  /** 1.4.6 (QA V145-2): the match's reopenEpoch after this re-open. */
+  epoch?: number | null;
 }
 
 export interface MatchCaptains {
@@ -163,6 +268,8 @@ export interface MatchVerification {
    * (status then becomes 'approved' / 'voided'). Missing on older data: derived from status.
    */
   captain?: 'confirmed' | 'rejected' | null;
+  /** 1.4.6 (QA V145-2): the match's reopenEpoch when this verdict / review was given (missing = 0). */
+  epoch?: number | null;
 }
 
 export interface MatchPhoto {
@@ -250,3 +357,6 @@ export function distinctColor(color: string, taken: readonly string[]): string {
 
 /** Title stored on matches created from an accepted challenge; translated at display (i18n dataLabel). */
 export const CHALLENGE_MATCH_TITLE = 'Challenge match';
+
+/** 1.4.4: why a stored result disagrees with its events (core/replay.ts). */
+export type ResultCheck = 'summary_mismatch' | 'finished_without_winner';

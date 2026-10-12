@@ -3,7 +3,8 @@
 // stylised mini-map with relative pin positions. Tapping picks a point (LocationPicker).
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal, Platform, Pressable, ScrollView, Text, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
+import { Platform, Pressable, ScrollView, Text, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
+import { Modal } from '../AppModal'; // 1.4.0 (V139-7): holds the review prompt while open
 import type { GeoPoint } from '../../core/geo';
 import { colors, swatchRing } from '../../theme';
 import type { AppMapProps, MapMarker } from './types';

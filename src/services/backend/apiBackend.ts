@@ -1,3 +1,4 @@
+import type { RepairFix } from '../../core/verdictRepair';
 import { checkFeedback } from '../../core/reviewPrompt';
 import { checkDailyItem, type DailyItem } from '../../core/dailyItems';
 /**
@@ -16,6 +17,7 @@ import { checkDailyItem, type DailyItem } from '../../core/dailyItems';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import type { Challenge, ChallengeStatus, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
+import type { AbandonAnswer, ResolveAction } from '../../core/abandon';
 import { API_DEV_AUTH, API_OTP_AUTH, API_URL, DEMO_OTP } from '../config';
 import { IDEMPOTENCY_KEY_RE, inviteState, PHOTO_WRONG_ACCOUNT, type InviteState } from './types';
 import type { AuthUser, Backend, FeedbackItem, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, PhoneVerifier, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
@@ -548,7 +550,7 @@ export class ApiBackend implements Backend {
     q.running = false;
   }
   async updateMatch(id: string, patch: Partial<Match>) {
-    const { id: _id, createdAt: _c, updatedAt: _u, summary: _s, ...p } = patch as Partial<Match> & { rotation?: unknown };
+    const { id: _id, createdAt: _c, updatedAt: _u, summary: _s, maxEvents: _mx, wasWon: _w, abandon: _a, abandonRequest: _ar, resolution: _r, scorerReassign: _sr, ...p } = patch as Partial<Match> & { rotation?: unknown };
     delete (p as { rotation?: unknown }).rotation;
     await this.request('PATCH', `/matches/${encodeURIComponent(id)}`, p);
   }
@@ -616,6 +618,29 @@ export class ApiBackend implements Backend {
   }
   listFlagged() {
     return this.get<Match[]>('/admin/matches/flagged');
+  }
+  // 1.4.5 (QA V144-1/2/3): abandon / consent request / admin resolution (server/src/domain/matches.ts, core/abandon.ts)
+  async abandonMatch(matchId: string) {
+    const r = await this.request<{ result: 'abandoned' | 'requested' }>('POST', `/matches/${encodeURIComponent(matchId)}/abandon`, {});
+    return r?.result === 'requested' ? ('requested' as const) : ('abandoned' as const);
+  }
+  async answerAbandonRequest(matchId: string, action: AbandonAnswer) {
+    await this.request('POST', `/matches/${encodeURIComponent(matchId)}/abandon-request`, { action });
+  }
+  async resolveMatch(matchId: string, action: ResolveAction) {
+    await this.request('POST', `/admin/matches/${encodeURIComponent(matchId)}/resolve`, { action });
+  }
+  async reportAbandon(matchId: string) {
+    await this.request('POST', `/matches/${encodeURIComponent(matchId)}/abandon-report`, {});
+  }
+  async handoffAdmins(matchId: string) {
+    return this.request<{ id: string; name: string }[]>('GET', `/matches/${encodeURIComponent(matchId)}/handoff-admins`);
+  }
+  async reassignScorer(matchId: string, scorerId: string) {
+    await this.request('POST', `/admin/matches/${encodeURIComponent(matchId)}/scorer`, { scorerId });
+  }
+  async repairVerdict(matchId: string, fix: RepairFix) {
+    await this.request('POST', `/admin/matches/${encodeURIComponent(matchId)}/repair-verdict`, fix);
   }
   // 1.3.7 feedback + fact of the day
   async sendFeedback(f: { stars: number; text: string; appVersion?: string }) {

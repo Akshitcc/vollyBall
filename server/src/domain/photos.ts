@@ -7,7 +7,7 @@ import { PHOTO_NOT_ALLOWED, PHOTO_NOT_ALLOWED_MESSAGE } from '../../../src/core/
 import type { Identity } from '../auth/verifier';
 import { topics } from '../live/bus';
 import { IMAGE_TYPES, MAX_IMAGE_BYTES } from '../storage/photoStorage';
-import { newId, nowDate, toMs } from './util';
+import { newId, nowDate, toMs, txRetry } from './util';
 import crypto from 'node:crypto';
 import { MAX_PHOTOS_PER_MATCH } from '../../../src/core/limits';
 
@@ -95,8 +95,9 @@ export async function uploadPhoto(s: Services, viewer: Identity, matchId: string
   await s.storage.put(key, data, type);
   try {
     // The count is re-checked with the match row locked, so concurrent uploads can't pass the cap.
-    await s.db.transaction(async (trx) => {
-      await trx('matches').where({ id: matchId }).forUpdate().first('id');
+    await txRetry(s.db, async (trx) => {
+      // 1.4.7 (QA V146-1 audit): a match deleted meanwhile is a 404, not a foreign-key error
+      if (!(await trx('matches').where({ id: matchId }).forUpdate().first('id'))) throw new HttpError(404, 'not_found', 'Match not found');
       const n = Number((await trx('match_photos').where({ match_id: matchId }).count({ n: '*' }))[0].n);
       if (n >= MAX_PHOTOS_PER_MATCH) throw limit();
       await trx('match_photos').insert({ id, match_id: matchId, uploaded_by: viewer.uid, storage_key: key, content_type: type, size_bytes: data.length, content_hash: hash, idempotency_key: idempotencyKey ?? null, created_at: nowDate() });

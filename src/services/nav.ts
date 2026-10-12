@@ -11,6 +11,19 @@ export function goBackOr(fallback: Href = '/') {
 }
 
 /**
+ * 1.4.1 (QA V140-14): after "Save" on Edit profile the user lands on Profile – whatever opened the form (the
+ * Profile header Edit, Home's "update your phone" link, a fresh web load). dismissTo pops back to the Profile
+ * tab when it is in the stack, else replaces the form with it.
+ */
+export function toProfileAfterSave() {
+  try {
+    router.dismissTo('/profile');
+  } catch {
+    router.replace('/profile');
+  }
+}
+
+/**
  * Where the header back arrow goes when a screen was opened directly (fresh tab, shared link,
  * notification) and there is nothing to go back to: the tab the screen naturally belongs to.
  */
@@ -22,6 +35,10 @@ export function backFallback(routeName: string, params?: Record<string, unknown>
     case 'team/[id]':
     case 'team/new':
     case 'edit-profile':
+    // 1.4.0 (QA V139-9): the admin screens are opened from Profile
+    case 'admin-review':
+    case 'admin-daily':
+    case 'admin-feedback':
       return '/profile';
     case 'teams':
     case 'memories':
@@ -35,6 +52,28 @@ export function backFallback(routeName: string, params?: Record<string, unknown>
     default:
       return '/';
   }
+}
+
+type NavState = { index: number; routes: { name: string; state?: { index?: number; routes: { name: string }[] } }[] };
+/** 1.4.0 (QA V139-9): screens that belong to a tab – back always lands there. */
+export const HOME_TAB: Readonly<Record<string, string>> = Object.freeze({ 'admin-review': 'profile', 'admin-daily': 'profile', 'admin-feedback': 'profile' });
+/**
+ * The header back arrow. On the web a direct load (fresh tab, reload, shared link) puts the tabs' first tab
+ * (Home) under the screen, so canGoBack() is true and "back" went Home; a screen in HOME_TAB goes to its tab
+ * instead unless what is underneath really is that tab (or another screen, e.g. admin-review under
+ * admin-feedback). `state` = the stack's navigation state at press time.
+ */
+export function headerBack(routeName: string, params?: object, state?: NavState): void {
+  const tab = HOME_TAB[routeName];
+  if (tab && state) {
+    const prev = state.routes[state.index - 1];
+    const underTab = prev?.name === '(tabs)' ? prev.state?.routes[prev.state.index ?? 0]?.name : undefined;
+    if (!prev || (prev.name === '(tabs)' && underTab !== tab)) {
+      router.navigate(`/${tab}` as Href);
+      return;
+    }
+  }
+  goBackOr(backFallback(routeName, params));
 }
 
 /** Screens that never show a back arrow (tab roots, sign-in, first-time profile). */

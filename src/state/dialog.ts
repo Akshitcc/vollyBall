@@ -9,11 +9,22 @@ export type DialogSpec = { title: string; message: string; buttons: DialogButton
 type Open = DialogSpec & { resolve: (v: boolean) => void };
 
 const listeners = new Set<(d: Open | null) => void>();
+const changeListeners = new Set<() => void>();
 let current: Open | null = null;
 const set = (d: Open | null) => {
   current = d;
   listeners.forEach((l) => l(d));
+  changeListeners.forEach((l) => l());
 };
+
+/** 1.4.0 (V139-7): is a dialog open (state/uiBusy.ts). */
+export const dialogOpen = () => current != null;
+export function onDialogChange(l: () => void): () => void {
+  changeListeners.add(l);
+  return () => {
+    changeListeners.delete(l);
+  };
+}
 
 /** Opens the dialog; resolves with the pressed button's value (false when dismissed). */
 export function openDialog(spec: DialogSpec): Promise<boolean> {

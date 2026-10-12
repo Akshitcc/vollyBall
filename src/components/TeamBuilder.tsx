@@ -6,7 +6,7 @@
  */
 import { Ionicons } from '@expo/vector-icons';
 import { LIMITS } from '../core/limits';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { toE164 } from '../core/phone';
@@ -17,6 +17,7 @@ import { swatchLabel, translateError } from '../i18n/format';
 import { backend } from '../services/backend';
 import { colors, contrast, radius, swatchRing } from '../theme';
 import { Avatar, Button, Field, Row, styles as ui } from './ui';
+import { RevealOnShow, ScrollRevealContext } from './KeyboardAwareScreen';
 
 export interface BuiltTeam {
   kind: 'build';
@@ -75,6 +76,16 @@ export function TeamBuilder({
   }, [phone]);
 
   const found = lookup.state === 'found' ? lookup.user : null;
+  // 1.4.7 (QA V146-12): the found-player card (and its Add button) scrolls fully into view above the keyboard / the
+  // sticky footer when it appears (web: measured against the visual viewport, V146-6)
+  const reveal = useContext(ScrollRevealContext);
+  const foundRef = useRef<View>(null);
+  const foundId = found?.id ?? null;
+  useEffect(() => {
+    if (!foundId) return;
+    const tm = setTimeout(() => reveal(foundRef.current, 24), 60);
+    return () => clearTimeout(tm);
+  }, [foundId, reveal]);
   const problem = !found
     ? null
     : value.players.some((p) => p.id === found.id)
@@ -157,18 +168,20 @@ export function TeamBuilder({
         </>
       )}
       {lookup.state === 'looking' && <Text style={ui.hint}>{t('newMatch.lookingUp')}</Text>}
-      {lookup.state === 'notRegistered' && (
+      {/* 1.4.9 (QA V148-7): messages scroll into view when they appear, also with the keyboard up */}
+      <RevealOnShow show={lookup.state === 'notRegistered'}>
         <Text style={{ color: colors.danger, fontWeight: '700', marginBottom: 8 }} testID={`${testID}-not-registered`}>
           {t('errors.notRegistered')}
         </Text>
-      )}
-      {lookup.state === 'error' && (
+      </RevealOnShow>
+      <RevealOnShow show={lookup.state === 'error'} dep={lookup.state === 'error' ? lookup.message : null}>
         <Text style={{ color: colors.danger, fontWeight: '700' }} testID={`${testID}-lookup-error`}>
-          {lookup.message}
+          {lookup.state === 'error' ? lookup.message : ''}
         </Text>
-      )}
+      </RevealOnShow>
       {found && (
         <View
+          ref={foundRef}
           testID={`${testID}-found`}
           style={{ borderWidth: 2, borderColor: colors.border, borderRadius: radius.md, padding: 10, marginBottom: 10, backgroundColor: colors.white }}
         >
@@ -183,11 +196,12 @@ export function TeamBuilder({
             <Button title={t('newMatch.add')} icon="person-add" onPress={add} disabled={!!problem} testID={`${testID}-add`} />
           </View>
           {/* QA B5: the reason gets its own full-width line and wraps instead of being cut off. */}
-          {problem && (
+          {/* 1.4.9 (QA V148-7, 48_04): the refusal line itself is revealed (the keyboard's reveal used to hide it) */}
+          <RevealOnShow show={!!problem} dep={problem} below={16}>
             <Text style={{ color: colors.danger, fontWeight: '700', fontSize: 13, marginTop: 8, flexShrink: 1 }} accessibilityRole="alert" testID={`${testID}-problem`}>
               {problem}
             </Text>
-          )}
+          </RevealOnShow>
         </View>
       )}
     </View>

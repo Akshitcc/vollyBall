@@ -4,7 +4,8 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Text, View } from 'react-native';
 import type { Match } from '../core/types';
-import { dataLabel, formatWhenT, matchStatusLabel } from '../i18n/format';
+import { matchDate } from '../core/antifraud';
+import { dataLabel, formatDateT, formatWhenT, matchStatusLabel } from '../i18n/format';
 import { colors, font } from '../theme';
 import { Card, LiveBadge, Row, TeamDot } from './ui';
 
@@ -43,8 +44,13 @@ export function MatchCard({ m, extra }: { m: Match; extra?: string }) {
     <Card onPress={() => router.push(`/match/${m.id}`)}>
       <Row style={{ marginBottom: 6 }}>
         {live ? <LiveBadge /> : <Text style={[font.small, { color: colors.muted }]}>{sched ? t('matchStatus.scheduled') : m.status === 'finished' ? t('matchStatus.final') : matchStatusLabel(m.status, t)}</Text>}
-        <Text style={[font.small, { color: colors.muted, marginLeft: 8, flex: 1 }]} numberOfLines={1}>
-          {sched ? formatWhen(m.scheduledAt) : dataLabel(m.title, t)}
+        <Text style={[font.small, { color: colors.muted, marginLeft: 8, flex: 1 }]} numberOfLines={1} testID={`match-card-when-${m.id}`}>
+          {sched
+            ? formatWhen(m.scheduledAt)
+            : live
+              ? dataLabel(m.title, t)
+              : /* 1.4.0 (QA V139-9): a finished match card says when it was played (match date, never updatedAt) */
+                [formatDateT(matchDate(m)), dataLabel(m.title, t)].filter(Boolean).join(' · ')}
           {extra ? ` · ${extra}` : ''}
         </Text>
         <Ionicons name="chevron-forward" size={18} color={colors.muted} />

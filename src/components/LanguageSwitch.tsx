@@ -19,8 +19,9 @@ export function LanguageSwitch({ dark, style, showLabel = true }: { dark?: boole
           <Text style={{ color: fg, fontWeight: '800', marginLeft: 6, marginRight: 10, fontSize: 14 }}>{t('language.label')}</Text>
         </>
       )}
+      {/* 1.4.2 (QA info): real buttons (web: <button>, Enter/Space work, in the tab order) – a radio group
+          without arrow-key handling was a focusable div that announced the wrong thing */}
       <View
-        accessibilityRole="radiogroup"
         style={{ flexDirection: 'row', borderRadius: radius.pill, borderWidth: 2, borderColor: dark ? colors.primary : colors.ink, overflow: 'hidden' }}
       >
         {LANGUAGES.map((lng) => {
@@ -29,8 +30,10 @@ export function LanguageSwitch({ dark, style, showLabel = true }: { dark?: boole
             <Pressable
               key={lng}
               testID={`lang-${lng}`}
-              accessibilityRole="radio"
+              accessibilityRole="button"
               accessibilityState={{ selected: on }}
+              // web: a toggle button says whether it is on (aria-pressed); native reads accessibilityState
+              {...({ 'aria-pressed': on } as object)}
               accessibilityLabel={t('language.switchTo', { name: t(`language.${lng}`) })}
               onPress={() => !on && setLanguage(lng)}
               hitSlop={6}

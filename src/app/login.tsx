@@ -168,7 +168,7 @@ export default function Login() {
           <Text style={[type.body, { color: colors.muted, marginTop: 4, fontSize: 15 }]} testID="otp-sent-to">
             {t('login.sentTo', { phone: formatPhone(e164) })}
             {' · '}
-            <Text style={{ color: colors.primaryText, fontWeight: '700' }} onPress={changeNumber} accessibilityRole="link" testID="otp-change">
+            <Text style={{ color: colors.primaryText, fontWeight: '700' }} onPress={changeNumber} accessibilityRole="button" testID="otp-change">
               {t('login.change')}
             </Text>
           </Text>

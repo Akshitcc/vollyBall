@@ -1,5 +1,5 @@
 import { checkFeedback } from '../../core/reviewPrompt';
-import { checkDailyItem, type DailyItem } from '../../core/dailyItems';
+import { checkDailyItem, dailyTombstone, type DailyItem } from '../../core/dailyItems';
 /**
  * Production backend: Firebase Auth (phone), Firestore, Storage.
  *
@@ -13,10 +13,10 @@ import { checkDailyItem, type DailyItem } from '../../core/dailyItems';
  *   tournaments/{id}               tournament with fixtures
  *   courts/{id}                    community-added courts
  */
-import { checkRegistrationUpdate, fullName, isApsPincode, pincodePrefixOk, sentRegistration } from '../../core/registration';
+import { checkRegistrationUpdate, emailClaimId, emailKey, fullName, isApsPincode, pincodePrefixOk, sentRegistration } from '../../core/registration';
 import { MIN_AGE } from '../config';
 import { onAuthStateChanged, signInWithPhoneNumber, signOut as fbSignOut, type ApplicationVerifier } from 'firebase/auth';
-import {
+import { deleteField,
   addDoc,
   arrayRemove,
   arrayUnion,
@@ -33,6 +33,7 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
+  startAfter,
   updateDoc,
   where,
   writeBatch,
@@ -46,7 +47,9 @@ import { computeState, summarize, type Side } from '../../core/scoring';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
 import { CONFIRM_MESSAGES, byMatchDateDesc, captainVerdict, confirmedAtOf, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
-import { guardCreate, guardProgress, guardUpdate } from '../../core/matchGuards';
+import { finishedScoreProblem, firebaseUpdateProblem, GUARD_MESSAGES, guardCreate, guardProgress, guardUpdate, MATCH_STATUS_MOVE, matchOver } from '../../core/matchGuards';
+import { answerAbandon, needsAdminAction, nextMaxEvents, planAbandon, reportAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../core/abandon';
+import { HANDOVER_MESSAGES, handoverProblem, reassignProblem, reassignRecord } from '../../core/scorerHandoff';
 import { TERMS_VERSION, TERMS_VERSION_MISMATCH, type TermsAcceptance } from '../../core/terms';
 import { checkText } from '../../core/validate';
 import { canAddMatchPhoto, PHOTO_ERROR_CODES } from '../../core/photos';
@@ -55,10 +58,17 @@ import { CodedError, PHOTO_NOT_ALLOWED, PHOTO_NOT_ALLOWED_MESSAGE } from '../../
 import type { Challenge, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
 import { assertRoster, canonicalParticipants, challengeProblem, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, tournamentTeamsProblem } from '../../core/roster';
 import { getFirebase } from '../firebase';
+import { repairPatch, type RepairFix } from '../../core/verdictRepair';
+import { abandonDoc, repairDoc, reassignDoc, reportDoc, resolveDoc, reviewDoc, verifyDoc, type FxSentinels } from './firebaseActionDocs';
+import { clean, matchCreateBase, matchCreateChecked, matchCreateDoc, replayMatchData } from './firebaseMatchDoc';
 import { checkChallengeFields, checkCourtFields, checkMatchFields, checkProfileFields, checkTeamFields, checkTournamentFields, ValidationError } from '../../core/validate';
 import { INVALID_PHONE_CODE, isValidE164 } from '../../core/phone';
 import { IDEMPOTENCY_KEY_RE, inviteState, PHOTO_WRONG_ACCOUNT, type InviteState } from './types';
 import type { Backend, FeedbackItem, NewMatch, PhoneVerifier, RankingsResult, ReviewDecision, UploadOptions, UploadProgress, WalletResult } from './types';
+
+/** 1.4.2 (QA V141-6): what a deleted daily item keeps of its text (firestore.rules tombstoneOk). */
+const fx = (): FxSentinels => ({ stamp: serverTimestamp(), del: deleteField() });
+const tombstoneBlank = () => ({ textEn: '', textHi: '', attribution: deleteField(), sourceUrl: deleteField() });
 
 const withId = <T>(d: QueryDocumentSnapshot<DocumentData>): T => ({ ...(d.data() as object), id: d.id }) as T;
 /** Firestore Timestamp (rules-set server time) -> epoch ms; numbers/null pass through. */
@@ -67,14 +77,29 @@ const ms = (v: unknown): number | null =>
 /** A match document with its server times as epoch ms (core/antifraud.ts works on numbers). */
 function matchFrom(data: DocumentData, id: string): Match {
   const v = data.verification as Record<string, unknown> | null | undefined;
+  // 1.4.4 (QA V143-1): the stored summary is untrusted – what the app shows and counts is the replay of the events
+  const replay = replayMatchData(data);
   return {
     ...(data as Match),
+    ...replay,
     id,
+    // 1.4.1 (V140-8): new docs carry no createdAt (rules refuse a client value); older docs keep theirs
+    createdAt: ms(data.createdAt) ?? ms(data.startedAt) ?? ms(data.scheduledAt) ?? ms(data.updatedAt) ?? 0,
     startedServerAt: ms(data.startedServerAt),
     finishedServerAt: ms(data.finishedServerAt),
     verification: v ? ({ ...v, at: ms(v.at), reviewedAt: ms(v.reviewedAt) } as Match['verification']) : null,
     // 1.3.9 (V138-11): derived from the captain's answer time, never stored over a match time
-    confirmedAt: v ? confirmedAtOf({ verification: { ...(v as object), at: ms(v.at) } as Match['verification'] }) : null,
+    confirmedAt: v ? confirmedAtOf({ verification: { ...(v as object), at: ms(v.at) } as Match['verification'], reopenEpoch: data.reopenEpoch ?? 0 }) : null,
+    // 1.4.5 (QA V144-1/2): server times (request.time in the rules) as ms
+    abandon: data.abandon ? ({ ...data.abandon, at: ms(data.abandon.at), reviewedAt: ms(data.abandon.reviewedAt), reportedAt: ms(data.abandon.reportedAt) } as Match['abandon']) : null,
+    abandonRequest: data.abandonRequest ? ({ ...data.abandonRequest, at: ms(data.abandonRequest.at) ?? 0 } as Match['abandonRequest']) : null,
+    resolution: data.resolution ? ({ ...data.resolution, at: ms(data.resolution.at) ?? 0 } as Match['resolution']) : null,
+    scorerReassign: data.scorerReassign ? ({ ...data.scorerReassign, at: ms(data.scorerReassign.at) ?? 0 } as Match['scorerReassign']) : null,
+    // 1.4.6 (QA V145-5/12)
+    abandonHistory: Array.isArray(data.abandonHistory)
+      ? (data.abandonHistory as Record<string, unknown>[]).map((a) => ({ ...a, at: ms(a.at), reviewedAt: ms(a.reviewedAt), reportedAt: ms(a.reportedAt) }) as unknown as NonNullable<Match['abandonHistory']>[number])
+      : null,
+    abandonRequestAt: ms(data.abandonRequestAt),
   };
 }
 const matchOf = (d: QueryDocumentSnapshot<DocumentData>): Match => matchFrom(d.data(), d.id);
@@ -90,9 +115,18 @@ function startFields(prev: Match['status'] | undefined, next: Match['status']): 
 }
 
 /** Firestore rejects `undefined`; strip it recursively. */
-type LogBase = { events: Match['events']; rules: Match['rules']; firstServe: Side; status?: Match['status'] };
+type LogBase = { events: Match['events']; rules: Match['rules']; firstServe: Side; status?: Match['status']; maxEvents?: number | null };
 function logOf(m: Match): LogBase {
-  return { events: m.events ?? [], rules: m.rules, firstServe: m.firstServe ?? 'A', status: m.status };
+  return { events: m.events ?? [], rules: m.rules, firstServe: m.firstServe ?? 'A', status: m.status, maxEvents: m.maxEvents ?? null };
+}
+/**
+ * 1.4.5 (QA V144-1): the bookkeeping a scoring write carries (firestore.rules maxEvOk / finishingWriteOk): on a match
+ * that isn't stored as finished every events write states maxEvents = max(stored maxEvents or old length, new length),
+ * and the write that finishes it sets the wasWon latch. A finished match's re-credit carries neither (finishedWriteOk).
+ */
+function marksFor(prevStatus: Match['status'] | undefined, base: { maxEvents?: number | null; events?: Match['events'] } | undefined, events: Match['events'], status: Match['status']): { maxEvents?: number; wasWon?: boolean } {
+  if (prevStatus === 'finished') return {};
+  return { maxEvents: base ? nextMaxEvents(base, events) : events.length, ...(status === 'finished' ? { wasWon: true } : {}) };
 }
 /**
  * Finish times for a scorer write (retest 1.1.0 NB-R3). firestore.rules only accept them in a write
@@ -106,21 +140,7 @@ function finishFields(prev: Match['status'] | undefined, next: Match['status']):
   return { finishedAt: done ? Date.now() : null, finishedServerAt: next === 'finished' ? serverTimestamp() : null };
 }
 
-/**
- * Drops undefined fields (Firestore refuses them), recursively in plain objects and arrays.
- * 1.3.9: only PLAIN objects are rebuilt – Firestore sentinels (serverTimestamp(), deleteField()) and
- * Timestamp/GeoPoint instances are passed through as they are. Before, clean() copied them into plain maps
- * (e.g. {_methodName:'serverTimestamp'}), so a "server time" field was not a timestamp.
- */
-export function clean<T>(v: T): T {
-  if (Array.isArray(v)) return v.map(clean) as unknown as T;
-  if (v && typeof v === 'object' && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null)) {
-    const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(v as Record<string, unknown>)) if (val !== undefined) out[k] = clean(val);
-    return out as T;
-  }
-  return v;
-}
+export { clean };
 
 /**
  * Photo blob checked on the client (services/photoFile.ts): allow-listed declared type, magic bytes,
@@ -128,6 +148,9 @@ export function clean<T>(v: T): T {
  * 1.1.0 NB-P3); storage.rules check the type and size again.
  */
 const photoBlob = (uri: string) => readPhoto(uri);
+
+import { approxDocBytes, newReadBudget, pagedReads, budgetedProfiles, RANKING_READ, type RankingTier, type ReadBudget } from './readBudget';
+export { approxDocBytes, budgetedProfiles, newReadBudget, pageSizeFor, pagedReads, RANKING_READ, type RankingTier, type ReadBudget } from './readBudget';
 
 const chunk = <T>(arr: T[], n: number) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
 
@@ -189,12 +212,16 @@ export class FirebaseBackend implements Backend {
     const cur = await getDoc(doc(this.fb.db, 'users', p0.id));
     const samePhone = cur.exists() && (cur.data() as UserProfile).phone === p0.phone;
     if (!samePhone && !isValidE164(p0.phone)) throw new ValidationError(INVALID_PHONE_CODE, 'phone');
-    const batch = writeBatch(this.fb.db);
     // 1.3.7: names on the public profile; dob / email / pincode / district / state in the owner-only doc
     // (firestore.rules users/{uid}/private/registration). A save is checked together with the stored
     // fields (R136-3); the age range only when the DOB is new or changed (R136-8).
     const { dob: _dob, email: _email, pincode: _pin, district: _district, state: _state, ...rest } = p0 as UserProfile;
     let pub: Omit<UserProfile, 'dob' | 'email' | 'pincode' | 'district' | 'state'> = rest;
+    let reg: Record<string, unknown> | null = null;
+    // 1.4.0 (QA V139-3): one email per account – a new or changed address is claimed (emails/{id}) in the
+    // same transaction; someone else's claim → email_taken. The old claim (if it is ours) is released.
+    let claim: ReturnType<typeof doc> | null = null;
+    let release: ReturnType<typeof doc> | null = null;
     if (sentRegistration(p0)) {
       const curPub = cur.exists() ? (cur.data() as UserProfile) : null;
       const priv = await getDoc(doc(this.fb.db, 'users', p0.id, 'private', 'registration')).catch(() => null);
@@ -204,12 +231,43 @@ export class FirebaseBackend implements Backend {
       // client-typed district/state is stored (firestore.rules registrationOk refuses both)
       if (!pincodePrefixOk(f.pincode) && !isApsPincode(f.pincode)) throw Object.assign(new CodedError('pincode_unknown', 'No post office has this pincode'), { field: 'pincode' });
       pub = { ...pub, firstName: f.firstName, lastName: f.lastName, name: fullName(f.firstName, f.lastName) };
-      batch.set(doc(this.fb.db, 'users', p0.id, 'private', 'registration'), clean({ dob: f.dob, email: f.email, pincode: f.pincode, updatedAt: serverTimestamp() }));
+      const oldEmail = stored.email ?? null;
+      // 1.4.1 (V140-3): the stored address in another form (a pre-1.4.0 NFD address) is the same address –
+      // if someone else has since claimed the normalised form, the stored value is kept as it is (the rules
+      // accept an unchanged email without a claim), so the profile still saves.
+      if (f.email && oldEmail && oldEmail !== f.email && emailKey(oldEmail) === f.email) {
+        const other = await getDoc(doc(this.fb.db, 'emails', emailClaimId(f.email))).then(() => false, (err: { code?: string }) => err?.code === 'permission-denied');
+        if (other) f.email = oldEmail;
+      }
+      reg = clean({ dob: f.dob, email: f.email, pincode: f.pincode, updatedAt: serverTimestamp() });
+      if (f.email && f.email !== oldEmail) claim = doc(this.fb.db, 'emails', emailClaimId(f.email));
+      if (oldEmail && oldEmail !== f.email) {
+        const r = await getDoc(doc(this.fb.db, 'emails', emailClaimId(oldEmail))).catch(() => null); // a 1.3.x address may have no claim
+        if (r?.exists() && (r.data() as { uid?: string }).uid === p0.id) release = r.ref;
+      }
     }
     const p = checkProfileFields(pub as UserProfile);
-    batch.set(doc(this.fb.db, 'users', p.id), clean(p), { merge: true });
-    batch.set(doc(this.fb.db, 'phoneIndex', p.phone), { uid: p.id });
-    await batch.commit();
+    const emailTaken = () => Object.assign(new CodedError('email_taken', 'This email is already used by another account.'), { field: 'email' });
+    try {
+      await runTransaction(this.fb.db, async (tx) => {
+        if (claim) {
+          const c = await tx.get(claim); // someone else's claim can't be read: permission-denied
+          if (c.exists() && (c.data() as { uid?: string }).uid !== p0.id) throw emailTaken();
+          if (!c.exists()) tx.set(claim, { uid: p0.id });
+        }
+        if (reg) tx.set(doc(this.fb.db, 'users', p0.id, 'private', 'registration'), reg);
+        tx.set(doc(this.fb.db, 'users', p.id), clean(p), { merge: true });
+        tx.set(doc(this.fb.db, 'phoneIndex', p.phone), { uid: p.id });
+        if (release) tx.delete(release);
+      });
+    } catch (e) {
+      if (claim && (e as { code?: string })?.code === 'permission-denied') {
+        // was it the claim? (a missing or own claim is readable)
+        const c = await getDoc(claim).then(() => null, (err: { code?: string }) => err);
+        if (c?.code === 'permission-denied') throw emailTaken();
+      }
+      throw e;
+    }
   }
   async getProfiles(uids: string[]) {
     const ids = [...new Set(uids)].filter(Boolean);
@@ -320,15 +378,13 @@ export class FirebaseBackend implements Backend {
     // firestore.rules compare participantIds position by position (team A, team B, creator/scorer).
     // 1.3.0: scheduled/live only, captains (a registered team's captain / a player of a built side),
     // no POTM, finish or server fields (core/matchGuards.ts; firestore.rules matchCreateOk).
-    const { startedAt: _s, startedServerAt: _ss, finishedServerAt: _fs, verification: _v, confirmedAt: _ca, ...rest } = m;
+    // 1.4.4 (QA V143-5): the document is built by firebaseMatchDoc.ts, which rules-tests use as well
     const teams = await this.getTeams([m.teamA.teamId, m.teamB.teamId].filter((x): x is string => !!x));
     const cap = (t: Match['teamA']) => (t.teamId ? teams.get(t.teamId)?.captainId ?? null : null);
-    guardCreate(rest, { A: cap(m.teamA), B: cap(m.teamB) });
-    const doc0 = checkMatchFields({ ...rest, participantIds: canonicalParticipants(m) }, { scheduleChanged: true });
+    guardCreate(matchCreateBase(m), { A: cap(m.teamA), B: cap(m.teamB) });
+    const doc0 = matchCreateChecked(m);
     await this.checkMatch(doc0);
-    const now = Date.now();
-    const live = doc0.status === 'live' ? { startedAt: now, startedServerAt: serverTimestamp() } : {};
-    const r = await addDoc(collection(this.fb.db, 'matches'), clean({ ...doc0, ...live, createdAt: now, updatedAt: now }));
+    const r = await addDoc(collection(this.fb.db, 'matches'), matchCreateDoc(doc0, Date.now(), serverTimestamp));
     return r.id;
   }
   watchMatch(id: string, cb: (m: Match | null) => void) {
@@ -349,17 +405,24 @@ export class FirebaseBackend implements Backend {
     // are started together and awaited at the end (offline they resolve only once synced).
     let base = this.lastLog.get(id);
     if (!base) {
+      let cm: Match | null = null;
       try {
         const cur = await getDoc(ref);
-        if (cur.exists()) {
-          const cm = matchFrom(cur.data(), id);
-          // 1.3.0: closed after the POTM / abandon, one-way statuses (the rules refuse it anyway)
-          guardProgress(cm, p.status);
-          base = logOf(cm);
-        }
+        if (cur.exists()) cm = matchFrom(cur.data(), id);
       } catch {
         // no cached copy: write directly; the rules decide
       }
+      if (cm) {
+        // 1.3.0: closed after the POTM / abandon, one-way statuses; 1.4.2 (V141-8): a finished match's score is
+        // fixed (the rules refuse all of it anyway – 1.4.1 swallowed this check together with read errors)
+        guardProgress(cm, p.status, p.events);
+        base = logOf(cm);
+      }
+    }
+    // 1.4.2 (QA V141-8): a finished match's score never changes (firestore.rules refuse it too)
+    if (base) {
+      const f = finishedScoreProblem(base, p.events, p.status);
+      if (f) throw new CodedError(f, GUARD_MESSAGES[f]);
     }
     const writes: Promise<void>[] = [];
     let prev = base?.status;
@@ -367,13 +430,17 @@ export class FirebaseBackend implements Backend {
     const { finishedAt: _f, startedAt: _st, ...rest } = p;
     if (base) {
       const steps = planEventSteps(base.events, p.events);
+      let mx = base.maxEvents ?? null;
       for (const ev of steps.slice(0, -1)) {
         const st = computeState(base.rules, ev, base.firstServe);
         const status: Match['status'] = st.finished ? 'finished' : p.status === 'finished' ? 'live' : p.status;
+        const marks = marksFor(prev, { maxEvents: mx, events: base.events }, ev, status);
+        if (marks.maxEvents !== undefined) mx = marks.maxEvents;
         writes.push(updateDoc(ref, clean({
           events: ev,
           summary: summarize(st),
           status,
+          ...marks,
           ...startFields(prev, status),
           ...finishFields(prev, status),
           updatedAt: Date.now(),
@@ -381,20 +448,37 @@ export class FirebaseBackend implements Backend {
         }) as DocumentData));
         prev = status;
       }
-      this.lastLog.set(id, { ...base, events: p.events, status: p.status });
+      base = { ...base, maxEvents: mx };
     }
     // Unknown stored status (no cache): only a finishing write carries the finish times.
     const times = prev === undefined ? (p.status === 'finished' ? finishFields(undefined, 'finished') : {}) : { ...startFields(prev, p.status), ...finishFields(prev, p.status) };
-    writes.push(updateDoc(ref, clean({ ...rest, ...times, updatedAt: Date.now(), serverUpdatedAt: serverTimestamp() }) as DocumentData));
+    const marks = marksFor(prev, base, p.events, p.status);
+    if (base) this.lastLog.set(id, { ...base, events: p.events, status: p.status, maxEvents: marks.maxEvents ?? base.maxEvents });
+    writes.push(updateDoc(ref, clean({ ...rest, ...marks, ...times, updatedAt: Date.now(), serverUpdatedAt: serverTimestamp() }) as DocumentData));
     await Promise.all(writes);
   }
   async updateMatch(id: string, patch: Partial<Match>) {
     const cur = await getDoc(doc(this.fb.db, 'matches', id));
     if (!cur.exists()) throw new Error('Match not found');
     const before = matchFrom(cur.data(), id);
+    // 1.4.5 (QA V144-1): {status: 'abandoned'} is the abandon action (records who, when, the score; policy switch)
+    if (patch.status === 'abandoned' && (before.status === 'live' || before.status === 'scheduled')) {
+      if (Object.keys(patch).some((k) => k !== 'status' && k !== 'updatedAt')) throw new CodedError(MATCH_STATUS_MOVE, GUARD_MESSAGES[MATCH_STATUS_MOVE]);
+      await this.abandonMatch(id);
+      return;
+    }
     // 1.3.0 (QA N121-1/N121-3, INFO): no client times, one-way statuses, closed when terminal.
     guardUpdate(before, patch);
-    const p = checkMatchFields({ ...patch }, { scheduleChanged: patch.scheduledAt != null }) as Partial<Match>;
+    // 1.4.5 (QA V144-8, interim): after the first rally only to the scorer's own side (firestore.rules handoverOk;
+    // the rules can't see another user's admin claim, so "to an admin" is the admin's own reassignment here)
+    if (patch.scorerId !== undefined && patch.scorerId !== before.scorerId) {
+      const hp = handoverProblem(before, patch.scorerId);
+      if (hp) throw new CodedError(hp, HANDOVER_MESSAGES[hp]);
+    }
+    // 1.4.4 (QA V143-2/3): what the rules refuse because they can't replay the match (clear message first)
+    const fbProblem = firebaseUpdateProblem(before, patch);
+    if (fbProblem) throw new CodedError(fbProblem, GUARD_MESSAGES[fbProblem]);
+    const p = checkMatchFields({ ...patch }, { scheduleChanged: patch.scheduledAt != null && patch.scheduledAt !== before.scheduledAt, status: before.status }) as Partial<Match>;
     delete p.id;
     if (p.teamA || p.teamB || p.participantIds) {
       const merged = { ...before, ...p };
@@ -411,6 +495,57 @@ export class FirebaseBackend implements Backend {
       ? { status, ...startFields(before.status, status!), ...finishFields(before.status, status!) }
       : meta;
     await updateDoc(ref0, clean({ ...body, updatedAt: Date.now() }) as DocumentData);
+  }
+  // ---------- 1.4.5 (QA V144-1/2/3): abandon, consent request, admin resolution (core/abandon.ts; firestore.rules
+  // scorerAbandonOk / abandonRequestOk / adminResolveOk). Times in the records are the server's (request.time). ----------
+  private async matchRaw(id: string) {
+    const cur = await getDoc(doc(this.fb.db, 'matches', id));
+    if (!cur.exists()) throw new Error('Match not found');
+    return { raw: cur.data(), m: matchFrom(cur.data(), id) };
+  }
+  async abandonMatch(matchId: string) {
+    const me = this.fb.auth.currentUser?.uid ?? '';
+    const { raw, m } = await this.matchRaw(matchId);
+    const plan = planAbandon(m, me, Date.now());
+    await updateDoc(doc(this.fb.db, 'matches', matchId), abandonDoc(plan, raw, fx(), Date.now()) as DocumentData);
+    return plan.kind === 'request' ? ('requested' as const) : ('abandoned' as const);
+  }
+  async answerAbandonRequest(matchId: string, action: AbandonAnswer) {
+    const me = this.fb.auth.currentUser?.uid ?? '';
+    const { raw, m } = await this.matchRaw(matchId);
+    const patch = answerAbandon(m, me, action, Date.now());
+    const out: Record<string, unknown> = { updatedAt: Date.now() };
+    // the request keeps its stored server time; the closing agreement stamps the abandon record with the request time
+    if (patch.abandonRequest !== undefined) out.abandonRequest = patch.abandonRequest ? { ...patch.abandonRequest, at: raw.abandonRequest.at } : null;
+    if (patch.status) Object.assign(out, { status: patch.status, finishedAt: Date.now() });
+    if (patch.abandon) out.abandon = { ...patch.abandon, at: serverTimestamp() };
+    await updateDoc(doc(this.fb.db, 'matches', matchId), clean(out) as DocumentData);
+  }
+  async resolveMatch(matchId: string, action: ResolveAction) {
+    const me = this.fb.auth.currentUser?.uid ?? '';
+    const { raw, m } = await this.matchRaw(matchId);
+    const patch = resolvePatch(m, me, await this.isAdmin(me), action, Date.now());
+    await updateDoc(doc(this.fb.db, 'matches', matchId), resolveDoc(raw, m, patch, me, fx(), Date.now()) as DocumentData);
+  }
+  async reportAbandon(matchId: string) {
+    const me = this.fb.auth.currentUser?.uid ?? '';
+    const { raw, m } = await this.matchRaw(matchId);
+    reportAbandon(m, me, Date.now()); // throws unless allowed (core/lifecycle.ts 'report')
+    await updateDoc(doc(this.fb.db, 'matches', matchId), reportDoc(raw, me, fx(), Date.now()) as DocumentData);
+  }
+  async reassignScorer(matchId: string, scorerId: string) {
+    const me = this.fb.auth.currentUser?.uid ?? '';
+    const { m } = await this.matchRaw(matchId);
+    const p = reassignProblem(m, me, await this.isAdmin(me), scorerId);
+    if (p) throw new CodedError(p, HANDOVER_MESSAGES[p] ?? GUARD_MESSAGES[p] ?? p);
+    const rec = reassignRecord(m, me, scorerId, Date.now());
+    await updateDoc(doc(this.fb.db, 'matches', matchId), reassignDoc(scorerId, rec, fx(), Date.now()) as DocumentData);
+  }
+  async repairVerdict(matchId: string, fix: RepairFix) {
+    const me = this.fb.auth.currentUser?.uid ?? '';
+    const { m } = await this.matchRaw(matchId);
+    const patch = repairPatch(m, me, await this.isAdmin(me), fix, Date.now()); // throws unless allowed
+    await updateDoc(doc(this.fb.db, 'matches', matchId), repairDoc(patch, fx(), Date.now()) as DocumentData);
   }
   watchLiveMatches(cb: (m: Match[]) => void) {
     return onSnapshot(query(collection(this.fb.db, 'matches'), where('status', 'in', ['live', 'scheduled']), limit(50)), (s) =>
@@ -564,20 +699,61 @@ export class FirebaseBackend implements Backend {
    * query reads approved matches ordered by the rules-set review time. No device time orders anything.
    * Capped at 500 + 200 documents (documented limit of Firebase mode; the API server counts in SQL).
    */
-  private async countableMatches(extra: Match[] = []): Promise<Match[]> {
+  private async countableMatches(extra: Match[] = [], budget: ReadBudget = newReadBudget()): Promise<Match[]> {
     const col = collection(this.fb.db, 'matches');
-    const [byServer, approved] = await Promise.all([
-      getDocs(query(col, where('status', '==', 'finished'), orderBy('finishedServerAt', 'desc'), limit(500))),
-      getDocs(query(col, where('verification.status', '==', 'approved'), orderBy('verification.reviewedAt', 'desc'), limit(200))).catch(() => null),
-    ]);
+    // 1.4.6 (QA V145-8): tiers in priority order within one hard budget (RANKING_READ). Errors are no longer swallowed
+    // (1.4.5's .catch(() => []) hid a failing approved query): a missing index or a refused read fails the call.
+    const approved = await this.pagedDocs(query(col, where('verification.status', '==', 'approved'), orderBy('verification.reviewedAt', 'desc')), RANKING_READ.MAX_APPROVED, budget, 'approved');
+    const confirmed = await this.pagedDocs(query(col, where('verification.status', '==', 'confirmed'), orderBy('finishedServerAt', 'desc')), RANKING_READ.MAX_CONFIRMED, budget, 'confirmed');
+    const byServer = await this.pagedDocs(query(col, where('status', '==', 'finished'), orderBy('finishedServerAt', 'desc')), RANKING_READ.MAX_FINISHED, budget, 'finished');
     const seen = new Map<string, Match>();
-    for (const d of [...byServer.docs, ...(approved?.docs ?? [])]) if (!seen.has(d.id)) seen.set(d.id, matchOf(d));
-    for (const m of extra) if (!seen.has(m.id) && m.status === 'finished') seen.set(m.id, m);
-    return [...seen.values()];
+    for (const m of extra) if (m.status === 'finished') seen.set(m.id, m);
+    for (const d of [...approved, ...confirmed, ...byServer]) if (!seen.has(d.id)) seen.set(d.id, matchOf(d));
+    const out = [...seen.values()];
+    await this.markUnknownPlayers(out, budget);
+    return out;
+  }
+  /** Pages of a query within the tier's share of the budget; never asks for more than the bytes left can hold. */
+  private async pagedDocs(q: ReturnType<typeof query>, max: number, budget: ReadBudget, tier: RankingTier) {
+    return pagedReads<QueryDocumentSnapshot<DocumentData>>(
+      async (n, last) => (await getDocs(query(q, ...(last ? [startAfter(last)] : []), limit(n)))).docs as QueryDocumentSnapshot<DocumentData>[],
+      (d) => approxDocBytes(d.data() as DocumentData),
+      max,
+      budget,
+      tier,
+    );
+  }
+  /** User ids known to have a profile (cached for the session; profiles are never deleted by the app). */
+  private knownUsers = new Set<string>();
+  /**
+   * 1.4.5 (PRD gap): the rules check only the captains and the first 3 players of a side built by number, so later
+   * players can be made-up ids. For matches that could count (completed and confirmed/approved – a confirmation needs
+   * the real opposing captain), players without a profile are listed in unknownPlayerIds: the match is flagged
+   * 'unknown_players' and those ids never get credit (core/antifraud.ts).
+   */
+  private async markUnknownPlayers(list: Match[], budget: ReadBudget) {
+    const cands = list.filter((m) => isCompleted(m) && ['confirmed', 'approved'].includes(verificationStatus(m)));
+    const ids = [...new Set(cands.flatMap((m) => [...m.teamA.players, ...m.teamB.players].map((p) => p.id)))].filter((x) => x && !this.knownUsers.has(x));
+    // 1.4.7 (QA V146-4): within the call's read budget, and errors propagate (1.4.6 swallowed them and marked nothing).
+    // Ids the budget can't cover this time count as unknown (fail closed: no credit, flagged for review); they are
+    // checked first on the next call, since the ones found are cached.
+    const { found } = await budgetedProfiles(
+      ids,
+      async (part) => (await getDocs(query(collection(this.fb.db, 'users'), where(documentId(), 'in', part)))).docs.map((d) => ({ id: d.id, bytes: approxDocBytes(d.data() as DocumentData) })),
+      budget,
+    );
+    for (const id of found) this.knownUsers.add(id);
+    for (const m of cands) {
+      const unknown = [...m.teamA.players, ...m.teamB.players].map((p) => p.id).filter((x) => !this.knownUsers.has(x));
+      if (unknown.length) m.unknownPlayerIds = unknown;
+    }
   }
   async getWallet(uid: string): Promise<WalletResult> {
-    const mine = await getDocs(query(collection(this.fb.db, 'matches'), where('participantIds', 'array-contains', uid), limit(200)));
-    return playerWallet(await this.countableMatches(mine.docs.map(matchOf)), uid);
+    // 1.4.6 (QA V145-8): the player's own matches are paged (document-id order: no extra index) within the same hard
+    // budget, their share first
+    const budget = newReadBudget();
+    const mine = await this.pagedDocs(query(collection(this.fb.db, 'matches'), where('participantIds', 'array-contains', uid)), RANKING_READ.MAX_OWN, budget, 'own');
+    return playerWallet(await this.countableMatches(mine.map(matchOf), budget), uid);
   }
 
   // ---------- T&C, confirmation, admin review (1.3.0) ----------
@@ -607,15 +783,8 @@ export class FirebaseBackend implements Backend {
     const problem = confirmProblem(matchFrom(s.data(), matchId), me);
     if (problem) throw new CodedError(problem, CONFIRM_MESSAGES[problem]);
     // 1.3.7 (F135-1): keep the captain's verdict; after an admin cleared the flag the status stays 'approved'.
-    const old = (s.data().verification ?? {}) as Record<string, unknown>;
-    const captain = status === 'confirmed' ? 'confirmed' : 'rejected';
-    await updateDoc(doc(this.fb.db, 'matches', matchId), {
-      verification:
-        old.status === 'approved'
-          ? clean({ status: 'approved', captain, by: me, at: serverTimestamp(), reason: reason || undefined, reviewedBy: old.reviewedBy, reviewedAt: old.reviewedAt })
-          : clean({ status, captain, by: me, at: serverTimestamp(), reason: reason || undefined }),
-      updatedAt: Date.now(),
-    });
+    // 1.4.6 (QA V145-2): after a re-open the verdict carries the epoch (firebaseActionDocs.verifyDoc)
+    await updateDoc(doc(this.fb.db, 'matches', matchId), verifyDoc(s.data(), me, status, reason, fx(), Date.now()) as DocumentData);
   }
   confirmResult(matchId: string) {
     return this.verify(matchId, 'confirmed');
@@ -629,17 +798,15 @@ export class FirebaseBackend implements Backend {
     const s = await getDoc(doc(this.fb.db, 'matches', matchId));
     if (!s.exists()) throw new Error('Match not found');
     const m = matchFrom(s.data(), matchId);
-    if (!isCompleted(m)) throw new CodedError('not_completed', CONFIRM_MESSAGES.not_completed);
+    // 1.4.5 (QA V144-2): a match stored as finished without a winner can be voided too (firestore.rules reviewOk)
+    const winnerless = m.status === 'finished' && !matchOver({ ...m, status: 'live' });
+    if (!isCompleted(m) && !(winnerless && decision === 'void')) throw new CodedError('not_completed', CONFIRM_MESSAGES.not_completed);
     const v = verificationStatus(m);
     if (v === 'approved' || v === 'voided') throw new CodedError('already_reviewed', CONFIRM_MESSAGES.already_reviewed);
     if (ownMatchReview(m, me)) throw new CodedError(OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE);
-    const old = (s.data().verification ?? {}) as Record<string, unknown>;
-    await updateDoc(doc(this.fb.db, 'matches', matchId), {
-      // 1.3.8 (V137-1): the captain's verdict is written explicitly, also when it was only in the older
-      // fields (a 1.3.6 client confirmed without `captain`); firestore.rules reviewOk accepts exactly that.
-      verification: clean({ by: old.by, at: old.at, reason: old.reason, captain: captainVerdict(m) ?? undefined, status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: serverTimestamp() }),
-      updatedAt: Date.now(),
-    });
+    // 1.3.8 (V137-1): the captain's verdict is written explicitly, also when it was only in the older
+    // fields (a 1.3.6 client confirmed without `captain`); firestore.rules reviewOk accepts exactly that.
+    await updateDoc(doc(this.fb.db, 'matches', matchId), reviewDoc(s.data(), me, decision, captainVerdict(m), fx(), Date.now()) as DocumentData);
   }
   // ---------- 1.3.7 feedback + fact of the day (firestore.rules: feedback create-own, admin read; dailyItems public read, admin write) ----------
   async sendFeedback(f: { stars: number; text: string; appVersion?: string }) {
@@ -673,28 +840,72 @@ export class FirebaseBackend implements Backend {
   async listDailyItems(opts?: { all?: boolean }) {
     const snap = await getDocs(collection(this.fb.db, 'dailyItems'));
     const out: DailyItem[] = [];
+    const toMs = (v: unknown) => (typeof (v as { toMillis?: () => number } | null)?.toMillis === 'function' ? (v as { toMillis: () => number }).toMillis() : null);
     snap.forEach((d) => {
-      const x = d.data() as Omit<DailyItem, 'id' | 'createdAt'> & { createdAt?: { toMillis?: () => number } | null; updatedAt?: unknown };
-      const { updatedAt: _u, createdAt, ...rest } = x;
-      out.push({ ...rest, id: d.id, createdAt: typeof createdAt?.toMillis === 'function' ? createdAt.toMillis() : null });
+      const x = d.data() as Omit<DailyItem, 'id' | 'createdAt' | 'removedAt'> & { createdAt?: unknown; removedAt?: unknown; updatedAt?: unknown };
+      const { updatedAt: _u, createdAt, removedAt, ...rest } = x;
+      out.push({ ...rest, id: d.id, createdAt: toMs(createdAt), removedAt: toMs(removedAt) });
     });
-    return opts?.all ? out : out.filter((x) => x.active !== false);
+    // 1.4.1 (V140-7): the public list keeps items that are off / deleted as tombstones (rotation slots)
+    return opts?.all ? out.filter((x) => !x.deleted) : out.map((x) => (x.active !== false ? x : dailyTombstone(x)));
   }
   async saveDailyItem(item: Partial<DailyItem>) {
     const c = checkDailyItem(item);
-    const ref = item.id ? doc(this.fb.db, 'dailyItems', item.id) : doc(collection(this.fb.db, 'dailyItems'));
-    // 1.3.9 (V138-7): createdAt is the server's time on create and never changes (firestore.rules dailyItems)
-    const old = item.id ? await getDoc(ref) : null;
-    const createdAt = old?.exists() ? old.get('createdAt') ?? null : serverTimestamp();
-    await setDoc(ref, clean({ ...c, updatedAt: serverTimestamp(), createdAt }));
+    // 1.3.9 (V138-7): createdAt is the server's time on create and never changes; 1.4.1 (V140-7): removedAt
+    // is the server's time when it is turned off, set once (firestore.rules dailyItems). Turning an item back
+    // on creates a copy and marks the old doc deleted, in one batch.
+    const old = item.id ? await getDoc(doc(this.fb.db, 'dailyItems', item.id)) : null;
+    if (item.id && (!old?.exists() || old.get('deleted') === true)) throw new Error('Item not found');
+    const fresh = () => doc(collection(this.fb.db, 'dailyItems'));
+    if (old?.exists()) {
+      const wasActive = old.get('active') !== false;
+      if (!wasActive && c.active) {
+        const ref = fresh();
+        const b = writeBatch(this.fb.db);
+        // it is off: removedAt stays as it is (none = pre-1.4.1, in no cycle); 1.4.2 (V141-6): the tombstone keeps no text
+        b.update(old.ref, { deleted: true, ...tombstoneBlank(), updatedAt: serverTimestamp() });
+        b.set(ref, clean({ ...c, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+        await b.commit();
+        return ref.id;
+      }
+      const removedAt = wasActive ? (c.active ? null : serverTimestamp()) : old.get('removedAt') ?? null;
+      await setDoc(old.ref, clean({ ...c, updatedAt: serverTimestamp(), createdAt: old.get('createdAt') ?? null, removedAt }));
+      return old.id;
+    }
+    const ref = fresh();
+    await setDoc(ref, clean({ ...c, updatedAt: serverTimestamp(), createdAt: serverTimestamp(), removedAt: c.active ? null : serverTimestamp() }));
     return ref.id;
   }
   async deleteDailyItem(id: string) {
-    await deleteDoc(doc(this.fb.db, 'dailyItems', id));
+    // 1.4.1 (V140-7): deleting leaves a tombstone (firestore.rules: no delete; deleted = true, off, removedAt set once)
+    const ref = doc(this.fb.db, 'dailyItems', id);
+    const old = await getDoc(ref);
+    if (!old.exists()) return;
+    // 1.4.2 (QA V141-6): the tombstone keeps no text (public read); a 1.4.1 tombstone that still has it is scrubbed
+    if (old.get('deleted') === true) {
+      if (old.get('textEn')) await updateDoc(ref, { ...tombstoneBlank(), updatedAt: serverTimestamp() });
+      return;
+    }
+    await updateDoc(ref, { deleted: true, active: false, ...tombstoneBlank(), ...(old.get('active') === false ? {} : { removedAt: serverTimestamp() }), updatedAt: serverTimestamp() });
   }
   async listFlagged() {
     if (!(await this.isAdmin(this.fb.auth.currentUser?.uid ?? ''))) return [];
-    return (await this.countableMatches()).filter(needsReview);
+    // 1.4.5 (QA V144-1/2): plus abandoned matches waiting for review (flagged, or older ones with rallies and no
+    // record), matches stored as finished without a winner (in countableMatches) and pending abandon requests
+    // 1.4.7 (QA V146-4): the 3 extra queries are paged within the same read budget as the countable matches (their own
+    // 'flagged' share first), and a failing query fails the list (1.4.6 turned a failed query into an empty one).
+    const col = collection(this.fb.db, 'matches');
+    const budget = newReadBudget();
+    const extra: QueryDocumentSnapshot<DocumentData>[] = [];
+    for (const q of [
+      query(col, where('abandon.review', '==', 'pending')),
+      query(col, where('status', '==', 'abandoned')),
+      query(col, where('abandonRequest.side', 'in', ['A', 'B', 'N'])),
+    ]) extra.push(...(await this.pagedDocs(q, RANKING_READ.MAX_FLAGGED, budget, 'flagged')));
+    const seen = new Map<string, Match>();
+    for (const m of await this.countableMatches([], budget)) seen.set(m.id, m);
+    for (const d of extra) if (!seen.has(d.id)) seen.set(d.id, matchOf(d));
+    return [...seen.values()].filter((m) => needsReview(m) || needsAdminAction(m));
   }
 
   // ---------- challenges ----------

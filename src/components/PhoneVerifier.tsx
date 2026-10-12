@@ -6,7 +6,8 @@
  */
 import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal, Pressable, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
+import { Modal } from './AppModal'; // 1.4.0 (V139-7): holds the review prompt while open
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { firebaseConfig } from '../services/config';
 import type { PhoneVerifier } from '../services/backend';
@@ -78,7 +79,7 @@ export const PhoneVerifierHost = forwardRef<PhoneVerifierHandle>(function PhoneV
             style={{ flex: 1 }}
           />
         )}
-        <Pressable onPress={cancel} style={{ padding: 18, alignItems: 'center' }}>
+        <Pressable accessibilityRole="button" onPress={cancel} style={{ padding: 18, alignItems: 'center' }}>
           <Text style={{ fontWeight: '800', color: colors.danger }}>{t('common.cancel')}</Text>
         </Pressable>
       </View>

@@ -40,6 +40,9 @@ function migrationsBefore(upTo: string): string {
   for (const f of fs.readdirSync(MIGRATIONS_DIR)) if (f.endsWith('.sql') && f < upTo) fs.copyFileSync(path.join(MIGRATIONS_DIR, f), path.join(dir, f));
   return dir;
 }
+/** 1.4.1: the migrations up to 0014 – these tests are about 0013/0014 (0015, daily items, is separate). */
+let pre15: string | undefined;
+const PRE15 = () => (pre15 ??= migrationsBefore('0015'));
 
 describe('V138-1: 0013 on a database whose default collation is NOT utf8mb4_0900_ai_ci', () => {
   const url = new URL(testDbUrl());
@@ -96,8 +99,8 @@ describe('V138-1: 0013 on a database whose default collation is NOT utf8mb4_0900
     assert.equal(await tableCollation(db, 'email_duplicates_0013'), 'utf8mb4_unicode_ci');
     assert.equal(await emailIndexExpr(db), null);
     assert.ok((await listed()).some(([u]) => u === 'u3'), 'the 1.3.8 list wrongly had josé@ as a duplicate of jose@');
-    // the fixed file through the runner (as MIGRATE_ON_START would)
-    assert.deepEqual(await migrate(db), [M13]);
+    // the fixed file through the runner (as MIGRATE_ON_START would); 1.4.0's 0014 then finds nothing to repair
+    assert.deepEqual(await migrate(db, PRE15()), [M13, '0014_email_index_repair.sql']);
     assert.deepEqual(await emails(), EXPECTED);
     assert.deepEqual(await listed(), [['u2', 'SAME@x.in ', 'u1']]);
     assert.equal(await tableCollation(db, 'email_duplicates_0013'), 'utf8mb4_0900_ai_ci');
@@ -110,11 +113,11 @@ describe('V138-1: 0013 on a database whose default collation is NOT utf8mb4_0900
     // re-run of the whole file (schema_migrations row removed): no error, no change
     for (let run = 0; run < 2; run++) {
       await db('schema_migrations').where({ version: M13 }).del();
-      assert.deepEqual(await migrate(db), [M13]);
+      assert.deepEqual(await migrate(db, PRE15()), [M13]);
       assert.deepEqual(await emails(), EXPECTED);
       assert.deepEqual(await listed(), [['u2', 'SAME@x.in ', 'u1']]);
     }
-    assert.deepEqual(await migrate(db), []);
+    assert.deepEqual(await migrate(db, PRE15()), []);
   });
 
   it('an index left with the 1.3.8 (accent-insensitive) definition is replaced by the binary one on a re-run', async () => {
@@ -123,7 +126,7 @@ describe('V138-1: 0013 on a database whose default collation is NOT utf8mb4_0900
     await db.raw('DROP INDEX ux_users_email_norm ON users');
     await db.raw("CREATE UNIQUE INDEX ux_users_email_norm ON users ((NULLIF(LOWER(TRIM(email)), '')))");
     await db('schema_migrations').where({ version: M13 }).del();
-    assert.deepEqual(await migrate(db), [M13]);
+    assert.deepEqual(await migrate(db, PRE15()), [M13]);
     assert.match(String(await emailIndexExpr(db)), /utf8mb4_bin/);
   });
 });

@@ -13,7 +13,7 @@ import { ToastHost } from '../components/ToastHost';
 import { Loading } from '../components/ui';
 import '../i18n';
 import { LanguageGate } from '../i18n/LanguageGate';
-import { backFallback, goBackOr, leakedTabParams, NO_BACK_ROUTES } from '../services/nav';
+import { headerBack, leakedTabParams, NO_BACK_ROUTES } from '../services/nav';
 import { useNotificationRouting } from '../services/notifications';
 import { AuthProvider, useAuth } from '../state/AuthContext';
 import { colors } from '../theme';
@@ -52,7 +52,7 @@ function RootStack() {
   if (loading) return <Loading />;
   return (
     <Stack
-      screenOptions={({ route }) => ({
+      screenOptions={({ route, navigation }) => ({
         headerStyle: { backgroundColor: colors.ink },
         headerTintColor: colors.white,
         headerTitleStyle: { fontWeight: '800' },
@@ -66,7 +66,7 @@ function RootStack() {
               headerLeft: (p: NativeStackHeaderBackProps & { canGoBack?: boolean; onPress?: () => void }) => (
                 <HeaderBackButton
                   {...p}
-                  onPress={() => goBackOr(backFallback(route.name, route.params))}
+                  onPress={() => headerBack(route.name, route.params, navigation.getState() as never)}
                   tintColor={colors.white}
                   accessibilityLabel={t('common.goBack')}
                   testID="header-back"

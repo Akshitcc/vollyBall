@@ -8,6 +8,7 @@ import type { Services } from '../context';
 import { me } from '../auth/middleware';
 import { badRequest, forbidden, HttpError, notFound } from '../errors';
 import { checkText } from '../../../src/core/validate';
+import { MATCH_ACTION_FIELDS } from '../../../src/core/matchGuards';
 import * as users from '../domain/users';
 import * as teams from '../domain/teams';
 import * as matches from '../domain/matches';
@@ -48,6 +49,10 @@ import {
   profileSchema,
   rejectSchema,
   reviewSchema,
+  resolveSchema,
+  reassignSchema,
+  repairSchema,
+  abandonAnswerSchema,
   termsAcceptSchema,
   progressSchema,
   pushTokenSchema,
@@ -67,7 +72,8 @@ const LIVE_STATUSES = ['live', 'scheduled'];
 const SERVER_ONLY_FIELDS = ['verification', 'startedServerAt', 'finishedServerAt', 'confirmedAt' /* 1.3.9 V138-11 */, 'points', 'bonus', 'winBonus', 'wallet', 'balance', 'rankingPoints', 'termsVersion', 'termsAcceptedAt', 'flags', 'isAdmin', 'role'];
 function rejectServerFields(body: unknown) {
   if (!body || typeof body !== 'object') return;
-  const bad = SERVER_ONLY_FIELDS.filter((k) => k in (body as object));
+  // 1.4.5: plus the abandon / resolve action fields (core/matchGuards.ts MATCH_ACTION_FIELDS)
+  const bad = [...SERVER_ONLY_FIELDS, ...MATCH_ACTION_FIELDS].filter((k) => k in (body as object));
   if (bad.length) throw new HttpError(400, 'server_field', `These fields are set by the server only: ${bad.join(', ')}`);
 }
 
@@ -247,8 +253,22 @@ export function apiRouter(s: Services): Router {
     res.json((await matches.patchMatch(s, me(req), req.params.id, patch)).match);
   }));
   r.put('/matches/:id/progress', lim.match, h(async (req, res) => {
+    rejectServerFields(req.body); // 1.4.0 (QA V139): 400 like POST/PATCH, not a silent drop
     const p = parse(progressSchema, req.body);
     res.json(await matches.saveProgress(s, me(req), req.params.id, p));
+  }));
+  // 1.4.5 (QA V144-1): the scorer's abandon (policy: src/core/abandonPolicy.ts) and the answers to a request.
+  // 1.4.6 (QA V145-17): who the handoff chips may offer besides the scorer's own side
+  r.get('/matches/:id/handoff-admins', h(async (req, res) => res.json(await matches.handoffAdmins(s, me(req), req.params.id))));
+  r.post('/matches/:id/abandon', lim.match, h(async (req, res) => {
+    res.json(await matches.abandonMatch(s, me(req), req.params.id));
+  }));
+  r.post('/matches/:id/abandon-request', lim.match, h(async (req, res) => {
+    const b = parse(abandonAnswerSchema, req.body);
+    res.json(await matches.answerAbandonRequest(s, me(req), req.params.id, b.action));
+  }));
+  r.post('/matches/:id/abandon-report', lim.verify, h(async (req, res) => {
+    res.json(await matches.reportAbandonedMatch(s, me(req), req.params.id));
   }));
   r.put('/matches/:id/player-of-match', lim.match, h(async (req, res) => {
     const b = parse(potmSchema, req.body);
@@ -295,6 +315,20 @@ export function apiRouter(s: Services): Router {
   r.post('/admin/matches/:id/review', h(async (req, res) => {
     const b = parse(reviewSchema, req.body);
     res.json(await matches.reviewMatch(s, me(req), req.params.id, b.decision));
+  }));
+  // 1.4.5 (QA V144-1/2): reinstate / confirm an abandon, re-open / abandon a finished match without a winner, decide a request
+  r.post('/admin/matches/:id/scorer', h(async (req, res) => {
+    const b = parse(reassignSchema, req.body);
+    res.json(await matches.reassignScorer(s, me(req), req.params.id, b.scorerId));
+  }));
+  // 1.4.8 (QA V147-2): repair a match nobody can confirm (a valid scorer or confirmer; audited in verdict_repair)
+  r.post('/admin/matches/:id/repair-verdict', h(async (req, res) => {
+    const b = parse(repairSchema, req.body);
+    res.json(await matches.repairVerdict(s, me(req), req.params.id, b));
+  }));
+  r.post('/admin/matches/:id/resolve', h(async (req, res) => {
+    const b = parse(resolveSchema, req.body);
+    res.json(await matches.resolveMatch(s, me(req), req.params.id, b.action));
   }));
   r.delete('/matches/:id', lim.match, h(async (req, res) => {
     await matches.deleteMatch(s, me(req), req.params.id);

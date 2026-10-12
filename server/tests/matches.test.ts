@@ -49,7 +49,7 @@ describe('scoring (rule: only the assigned scorer changes the score)', () => {
     const sets = await h.db('sets').where({ match_id: id });
     assert.deepEqual(sets.map((x: { score_a: number; score_b: number; winner: string }) => [x.score_a, x.score_b, x.winner]), [[5, 1, 'A']]);
     // nothing may come after the end of the match
-    assert.equal((await save(id, [...events, pt('B', 7)])).status, 400);
+    assert.equal((await save(id, [...events, pt('B', 7)])).status, 409); // 1.4.2 (V141-8): match_finished
   });
 
   it('rejects timeouts over the limit', async () => {
@@ -166,8 +166,10 @@ describe('player credit persistence (QA bug A)', () => {
     const fin = await save(id, win);
     assert.equal(fin.body.status, 'finished');
     assert.deepEqual(await statsOf(id), ['B:aarav:kill', 'B:aarav:ace']);
-    await save(id, win.slice(0, -1)); // undo the winning rally
-    assert.deepEqual(await statsOf(id), ['B:aarav:kill']);
+    const undone = await save(id, win.slice(0, -1)); // 1.4.2 (V141-8): the winning rally can't be undone
+    assert.equal(undone.status, 409);
+    assert.equal(undone.body.error, 'match_finished');
+    assert.deepEqual(await statsOf(id), ['B:aarav:kill', 'B:aarav:ace']);
   });
 
   // Fix re-test 212 #2: a credit with no shot type stays untyped end to end (no default to spike).
@@ -269,8 +271,8 @@ describe('registered players only', () => {
     await save(id, [pt('A', 1)]);
     const swap = [...SQUAD_A.slice(0, 5), 'eve'];
     const r = await h.as('cap').patch(`/api/matches/${id}`).send({ teamA: team('QA Spikers', playersOf(swap)), participantIds: [...swap, ...SQUAD_B, 'cap'] });
-    assert.equal(r.status, 403);
-    assert.match(r.body.message, /Players can only be changed before the first rally/);
+    assert.deepEqual([r.status, r.body.error], [409, 'match_setup_locked']); // 1.4.6 (V145-3): one set-up lock
+    assert.match(r.body.message, /After the first rally .*players/);
   });
 
   it('a registered team side may only list members of that team', async () => {
@@ -342,8 +344,11 @@ describe('legacy matches left short of players by migration 0002 (QA retest #2)'
   it('abandoning is the only relaxation: not by others, not together with other changes', async () => {
     const id = await stuckMatch();
     assert.equal((await h.as('bob').patch(`/api/matches/${id}`).send({ status: 'abandoned' })).status, 403);
-    assert.equal((await h.as('cap').patch(`/api/matches/${id}`).send({ status: 'abandoned', title: 'x' })).status, 403);
-    assert.equal((await h.as('cap').patch(`/api/matches/${id}`).send({ status: 'finished' })).status, 403);
+    const both = await h.as('cap').patch(`/api/matches/${id}`).send({ status: 'abandoned', title: 'x' });
+    // 1.4.5 (V144-1): the abandon is its own action – together with other changes it is 409 match_status_move (was 403)
+    assert.deepEqual([both.status, both.body.error], [409, 'match_status_move']);
+    const fin = await h.as('cap').patch(`/api/matches/${id}`).send({ status: 'finished' });
+    assert.equal(fin.status, 403, `finished ${JSON.stringify(fin.body)}`);
   });
 
   it('handover and "I want to play" still work on it (as in the rules)', async () => {

@@ -6,7 +6,8 @@
  */
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal } from './AppModal'; // 1.4.0 (V139-7): holds the review prompt while open
 import type { SideLineups } from '../core/rotation';
 import type { Side } from '../core/scoring';
 import type { Match } from '../core/types';

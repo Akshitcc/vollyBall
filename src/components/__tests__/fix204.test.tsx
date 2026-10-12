@@ -132,7 +132,7 @@ describe('web: in-app translated dialog instead of the browser OK/Cancel box', (
     expect(screen.getByText('रद्द करें')).toBeTruthy();
     await fireEvent.press(screen.getByText('रद्द करें'));
     await expect(p).resolves.toBe(false);
-    await act(async () => notify('मैच रद्द नहीं हो सका', 'नेटवर्क'));
+    await act(async () => notify('मैच छोड़ा नहीं जा सका', 'नेटवर्क'));
     await fireEvent.press(screen.getByText('ठीक है'));
     expect(screen.queryByTestId('app-dialog')).toBeNull();
   });

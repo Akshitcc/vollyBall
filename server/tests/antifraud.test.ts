@@ -136,9 +136,9 @@ describe('POTM required + terminal statuses + server time (baseline PM-04, PM-10
     const id = await createMatch(h);
     code(await progress(id, WIN_A), 200);
     code(await h.as('aarav').post(`/api/matches/${id}/confirm`), 409, 'not_completed');
-    // undo is still possible while awaiting the POTM
-    code(await progress(id, WIN_A.slice(0, 4)), 200);
-    code(await progress(id, WIN_A), 200);
+    // 1.4.2 (V141-8): no undo once the match is over, even while awaiting the POTM
+    code(await progress(id, WIN_A.slice(0, 4)), 409, 'match_finished');
+    code(await progress(id, WIN_A), 200); // unchanged is fine
     code(await potm(id, 'bob'), 200);
   });
   it('completed (finished + POTM) is terminal: no undo, no re-finish with another POTM, no edits (PM-10b)', async () => {
@@ -160,7 +160,7 @@ describe('POTM required + terminal statuses + server time (baseline PM-04, PM-10
   it('awaiting POTM can not be abandoned or handed over (PM-13)', async () => {
     const id = await createMatch(h);
     code(await progress(id, WIN_A), 200);
-    code(await h.as('cap').patch(`/api/matches/${id}`).send({ status: 'abandoned' }), 409, 'match_status_move');
+    code(await h.as('cap').patch(`/api/matches/${id}`).send({ status: 'abandoned' }), 409, 'match_finished'); // 1.4.3 (V142-7)
     code(await h.as('cap').patch(`/api/matches/${id}`).send({ scorerId: 'bob' }), 409, 'match_terminal');
   });
   it('clients can not write verification, server times, points, bonus or wallet (AF-46c, AF-51, WL-03)', async () => {
@@ -177,8 +177,9 @@ describe('POTM required + terminal statuses + server time (baseline PM-04, PM-10
     const awaiting = await createMatch(h);
     code(await progress(awaiting, WIN_A), 200);
     code(await h.as('cap').del(`/api/matches/${awaiting}`), 403);
-    code(await h.as(ADMIN).del(`/api/matches/${id}`), 204);
-    // scheduled / abandoned stay deletable by the creator
+    // 1.4.6 (QA V145-1): a played match is never deleted, not even by an admin (void it instead)
+    code(await h.as(ADMIN).del(`/api/matches/${id}`), 403, 'match_delete_forbidden');
+    // a never-played match stays deletable by the creator
     const sch = await createMatch(h, { status: 'scheduled', scheduledAt: Date.now() + 3600_000 });
     code(await h.as('cap').del(`/api/matches/${sch}`), 204);
   });
@@ -189,7 +190,7 @@ describe('QA retest 1.2.1: N121-1..N121-3 and INFO', () => {
     // awaiting POTM -> abandoned is refused (H2a), so the finished <-> abandoned loop can't start
     const id = await createMatch(h);
     const fin = (await progress(id, WIN_A)).body;
-    code(await h.as('cap').patch(`/api/matches/${id}`).send({ status: 'abandoned' }), 409, 'match_status_move');
+    code(await h.as('cap').patch(`/api/matches/${id}`).send({ status: 'abandoned' }), 409, 'match_finished'); // 1.4.3 (V142-7)
     assert.equal((await h.as('cap').get(`/api/matches/${id}`)).body.finishedAt, fin.finishedAt);
     // completed -> abandoned (H2a after POTM) is refused too
     code(await potm(id, 'bob'), 200);
@@ -219,7 +220,7 @@ describe('QA retest 1.2.1: N121-1..N121-3 and INFO', () => {
     code(await h.as('cap').patch(`/api/matches/${id}`).send({ startedAt: 1 }), 400, 'server_time'); // H3 on a finished match
     assert.equal((await h.as('cap').get(`/api/matches/${id}`)).body.startedAt, start);
     code(await h.as('cap').del(`/api/matches/${id}`), 403); // H4
-    code(await h.as(ADMIN).del(`/api/matches/${id}`), 204);
+    code(await h.as(ADMIN).del(`/api/matches/${id}`), 403, 'match_delete_forbidden'); // 1.4.6 (V145-1): played, never deleted
   });
   it('INFO: PATCH with finishedAt is 400, like playerOfMatchId', async () => {
     const id = await createMatch(h);
@@ -251,7 +252,7 @@ describe('captains and opposing-captain confirmation (AF-36..AF-46)', () => {
   it('captains are fixed once scoring started', async () => {
     const id = await createMatch(h);
     code(await progress(id, [pt('A', 1)]), 200);
-    code(await h.as('cap').patch(`/api/matches/${id}`).send({ captains: { A: 'bob', B: 'dan' } }), 403);
+    code(await h.as('cap').patch(`/api/matches/${id}`).send({ captains: { A: 'bob', B: 'dan' } }), 409, 'match_setup_locked'); // 1.4.6 (V145-3)
   });
   it('only the opposing captain confirms; not the scorer, the creator, their side or others', async () => {
     const id = await completed();
@@ -268,7 +269,11 @@ describe('captains and opposing-captain confirmation (AF-36..AF-46)', () => {
     code(await h.as('aarav').post(`/api/matches/${id}/reject`).send({}), 409, 'already_reviewed');
   });
   it('a scorer on the B side makes B a scoring side: B captain can not confirm', async () => {
-    const id = await createMatch(h, { scorerId: 'dan' });
+    // 1.4.8 (QA V147-1): such a match can no longer be created (nobody could confirm it) …
+    code(await h.as('cap').post('/api/matches').send(newMatchBody({ scorerId: 'dan' })), 400, 'match_no_verdict');
+    // … but older data like it still never lets B's captain confirm (an admin repairs it – fixes148.test.ts)
+    const id = await createMatch(h);
+    await h.db('matches').where({ id }).update({ scorer_id: 'dan' });
     code(await progress(id, WIN_A, 'dan'), 200);
     code(await potm(id, 'bob', 'dan'), 200);
     code(await h.as('aarav').post(`/api/matches/${id}/confirm`), 403, 'scoring_side');

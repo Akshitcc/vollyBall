@@ -54,14 +54,18 @@ describe('guardUpdate / guardProgress (N121-1 terminal one-way, N121-3 server ti
     expect(code(() => guardUpdate(done, { status: 'live' }))).toBe(MATCH_TERMINAL);
     expect(code(() => guardUpdate(done, { scorerId: 'b1' }))).toBe(MATCH_TERMINAL);
     expect(code(() => guardProgress(done, 'live'))).toBe(MATCH_TERMINAL);
-    expect(code(() => guardUpdate(done, { interestedIds: ['x'] }))).toBeNull(); // "I want to play" stays open
+    // 1.4.3 (QA V142-1/V142-3): a finished match is final – "I want to play" (offered on scheduled matches only)
+    // no longer changes it; an abandoned match still takes it
+    expect(code(() => guardUpdate(done, { interestedIds: ['x'] }))).toBe('match_finished');
+    expect(code(() => guardUpdate({ ...done, status: 'abandoned' } as never, { interestedIds: ['x'] }))).toBeNull();
   });
   it('status moves are one-way except undo while awaiting the POTM; live -> scheduled only before a rally', () => {
     expect(code(() => guardUpdate(base({ status: 'scheduled' }), { status: 'finished' }))).toBe(MATCH_STATUS_MOVE);
-    expect(code(() => guardProgress(base({ status: 'finished', finishedAt: 9 }), 'live'))).toBeNull();
+    expect(code(() => guardProgress(base({ status: 'finished', finishedAt: 9 }), 'live'))).toBe('match_finished'); // 1.4.2 V141-8: no undo once over
     expect(code(() => guardUpdate(base({ events: [{}] } as never), { status: 'scheduled' }))).toBe(MATCH_STATUS_MOVE);
     expect(code(() => guardUpdate(base(), { status: 'scheduled' }))).toBeNull();
-    expect(code(() => guardUpdate(base({ events: [{}] } as never), { captains: { A: 'a2', B: 'b1' } } as never))).toBe(MATCH_TERMINAL);
+    // 1.4.6 (V145-3): captains are part of the setup lock
+    expect(code(() => guardUpdate(base({ events: [{}] } as never), { captains: { A: 'a2', B: 'b1' } } as never))).toBe('match_setup_locked');
   });
 });
 
@@ -76,13 +80,18 @@ describe('stampTimes (server time only)', () => {
   });
 });
 
-describe('deleteProblem (N121-3: a finished match only by an admin)', () => {
-  it('live never; finished admin only; otherwise creator or admin', () => {
-    expect(deleteProblem({ status: 'live', createdBy: 'u' }, 'u', true)).toBe(MATCH_DELETE_FORBIDDEN);
-    expect(deleteProblem({ status: 'finished', createdBy: 'u' }, 'u', false)).toBe(MATCH_DELETE_FORBIDDEN);
-    expect(deleteProblem({ status: 'finished', createdBy: 'u' }, 'x', true)).toBeNull();
-    expect(deleteProblem({ status: 'scheduled', createdBy: 'u' }, 'u', false)).toBeNull();
-    expect(deleteProblem({ status: 'scheduled', createdBy: 'u' }, 'x', false)).toBe(MATCH_DELETE_FORBIDDEN);
+describe('deleteProblem (N121-3; 1.4.6 V145-1: core/lifecycle.ts "delete")', () => {
+  const dm = (status: Match['status'], over: Partial<Match> = {}) =>
+    ({ status, createdBy: 'u', scorerId: 'u', events: [], rules: { bestOf: 1, pointsPerSet: 5 }, firstServe: 'A', teamA: { name: 'A', color: '#000000', players: [{ id: 'u', name: 'U' }] }, teamB: { name: 'B', color: '#000000', players: [{ id: 'v', name: 'V' }] }, participantIds: ['u', 'v'], ...over }) as unknown as Match;
+  it('live never; finished never (it had rallies); otherwise the creator or an admin outside the match', () => {
+    expect(deleteProblem(dm('live'), 'u', true)).toBe(MATCH_DELETE_FORBIDDEN);
+    expect(deleteProblem(dm('finished', { maxEvents: 5 }), 'u', false)).toBe(MATCH_DELETE_FORBIDDEN);
+    expect(deleteProblem(dm('finished', { maxEvents: 5 }), 'x', true)).toBe(MATCH_DELETE_FORBIDDEN);
+    expect(deleteProblem(dm('scheduled'), 'u', false)).toBeNull();
+    expect(deleteProblem(dm('scheduled'), 'x', true)).toBeNull();
+    expect(deleteProblem(dm('scheduled'), 'x', false)).toBe(MATCH_DELETE_FORBIDDEN);
+    expect(deleteProblem(dm('scheduled'), 'v', true)).toBe(MATCH_DELETE_FORBIDDEN); // an admin who plays in it
+    expect(deleteProblem(dm('scheduled', { maxEvents: 3 }), 'u', false)).toBe(MATCH_DELETE_FORBIDDEN); // undone to 0
   });
 });
 

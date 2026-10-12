@@ -10,6 +10,11 @@ import { CodedError } from './codedError';
 
 export const REVIEW_RULES = Object.freeze({ MIN_COMPLETED: 3, COOLDOWN_DAYS: 60, RECENT_MINUTES: 10 });
 export type ReviewMoment = 'won' | 'potm';
+/**
+ * Where the app keeps "last asked" per user (AsyncStorage; API/demo – Firebase keeps it on the server).
+ * 1.4.1 (QA V140-13): the demo's "Reset demo data" clears these too, so a reset demo can ask again.
+ */
+export const REVIEW_LAST_ASKED_PREFIX = 'volleylive.review.lastAsked.';
 
 export interface ReviewContext {
   completedMatches: number;

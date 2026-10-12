@@ -116,7 +116,7 @@ export const matchFields = {
   scorerId: id,
   participantIds: z.array(z.string().min(1).max(140)).max(100),
   location: placeSchema.nullable().optional(),
-  scheduledAt: ms.nullable().optional(),
+  scheduledAt: z.number().nullable().optional(), // 1.4.2 (V141-7): range/integer checked in writeMatch → time_invalid
   startedAt: ms.nullable().optional(),
   finishedAt: ms.nullable().optional(),
   tournamentId: z.string().max(64).nullable().optional(),
@@ -152,6 +152,18 @@ export const termsAcceptSchema = z.object({ version: z.string().max(40) }).stric
 export const rejectSchema = z.object({ reason: optText('rejectReason') }).strict();
 /** POST /admin/matches/:id/review */
 export const reviewSchema = z.object({ decision: z.enum(['approve', 'void']) }).strict();
+/** 1.4.5: POST /admin/matches/:id/resolve (core/abandon.ts RESOLVE_ACTIONS) */
+export const resolveSchema = z.object({ action: z.enum(['reinstate', 'confirm_abandon', 'reopen', 'abandon', 'reject_request']) }).strict();
+/** 1.4.5: POST /admin/matches/:id/scorer */
+export const reassignSchema = z.object({ scorerId: z.string().regex(/^[A-Za-z0-9_:-]{1,140}$/) }).strict();
+/** 1.4.8 (QA V147-2): POST /admin/matches/:id/repair-verdict – a scorer, or a side's confirmer */
+const uidRe = z.string().regex(/^[A-Za-z0-9_:-]{1,140}$/);
+export const repairSchema = z.union([
+  z.object({ scorerId: uidRe }).strict(),
+  z.object({ captain: z.object({ side: z.enum(['A', 'B']), id: uidRe }).strict() }).strict(),
+]);
+/** 1.4.5: POST /matches/:id/abandon-request */
+export const abandonAnswerSchema = z.object({ action: z.enum(['agree', 'decline', 'cancel']) }).strict();
 
 export const profileSchema = z.object({
   id,

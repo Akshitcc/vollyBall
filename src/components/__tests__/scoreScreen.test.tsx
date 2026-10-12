@@ -35,6 +35,8 @@ jest.mock('../../services/backend', () => ({
     },
     saveMatchProgress: (id: string, p: { events: Match['events'] }) => mockSave(id, p),
     updateMatch: jest.fn(async () => {}),
+    // 1.4.5 (V144-1): the abandon has its own backend action
+    abandonMatch: jest.fn(async () => 'abandoned'),
   },
 }));
 
@@ -140,7 +142,7 @@ describe('abandon match', () => {
   beforeEach(() => {
     (Platform as { OS: string }).OS = 'android';
     alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-    (backend.updateMatch as jest.Mock).mockReset();
+    (backend.abandonMatch as jest.Mock).mockReset();
     (router.replace as jest.Mock).mockClear();
   });
   afterEach(() => {
@@ -164,23 +166,31 @@ describe('abandon match', () => {
   };
 
   test('asks before abandoning; Cancel keeps the match, Abandon saves and leaves', async () => {
-    (backend.updateMatch as jest.Mock).mockResolvedValue(undefined);
+    (backend.abandonMatch as jest.Mock).mockResolvedValue('abandoned');
     await open([pt('A', 1)]);
     await chooseAbandon();
     expect(alertSpy).toHaveBeenCalledTimes(1);
     const [title, message, buttons] = alertSpy.mock.calls[0];
-    expect([title, message]).toEqual(['Abandon match', 'Abandon this match?']);
+    // 1.4.5 (V144-1, interim 'review' policy): after a rally the dialog says an admin will review it
+    expect([title, message]).toEqual(['Abandon match', 'Abandon this match? Rallies were already played, so an admin will review it. Who abandoned it and the score now are recorded, and the admin can reinstate the match.\n\nThe match stops at 1–0 in set 1 · sets 0–0.']); // 1.4.8 (V147-3): + the score
     expect((buttons as Btn[]).map((b) => b.text)).toEqual(['Keep playing', 'Abandon']);
     await pressAlertButton(0, 'Keep playing');
-    expect(backend.updateMatch).not.toHaveBeenCalled();
+    expect(backend.abandonMatch).not.toHaveBeenCalled();
     await chooseAbandon();
     await pressAlertButton(1, 'Abandon');
-    expect(backend.updateMatch).toHaveBeenCalledWith('m1', { status: 'abandoned' });
+    expect(backend.abandonMatch).toHaveBeenCalledWith('m1');
     expect(router.replace).toHaveBeenCalledWith('/match/m1');
   });
 
+  test('1.4.5: before the first rally the plain question is asked (abandoned directly)', async () => {
+    (backend.abandonMatch as jest.Mock).mockResolvedValue('abandoned');
+    await open([]);
+    await chooseAbandon();
+    expect(alertSpy.mock.calls[0].slice(0, 2)).toEqual(['Abandon match', 'Abandon this match?']);
+  });
+
   test('a failed save is reported (translated) and the screen stays', async () => {
-    (backend.updateMatch as jest.Mock).mockRejectedValue(new Error('Only the assigned scorer can change the score'));
+    (backend.abandonMatch as jest.Mock).mockRejectedValue(new Error('Only the assigned scorer can change the score'));
     await open([pt('A', 1)]);
     await chooseAbandon();
     await pressAlertButton(0, 'Abandon');
@@ -194,15 +204,15 @@ describe('abandon match', () => {
     await act(async () => {
       await i18n.changeLanguage('hi');
     });
-    (backend.updateMatch as jest.Mock).mockRejectedValue(new Error('network down'));
+    (backend.abandonMatch as jest.Mock).mockRejectedValue(new Error('network down'));
     await open();
     await chooseAbandon();
     const [title, message, buttons] = alertSpy.mock.calls[0];
-    expect([title, message]).toEqual(['मैच रद्द करें', 'यह मैच रद्द करें?']);
+    expect([title, message]).toEqual(['मैच छोड़ें', 'यह मैच छोड़ें?']);
     // the two buttons must read differently (common.cancel is also 'रद्द करें')
-    expect((buttons as Btn[]).map((b) => b.text)).toEqual(['मैच जारी रखें', 'हाँ, रद्द करें']);
-    await pressAlertButton(0, 'हाँ, रद्द करें');
-    expect(alertSpy.mock.calls[1][0]).toBe('मैच रद्द नहीं हो सका');
+    expect((buttons as Btn[]).map((b) => b.text)).toEqual(['मैच जारी रखें', 'हाँ, मैच छोड़ें']);
+    await pressAlertButton(0, 'हाँ, मैच छोड़ें');
+    expect(alertSpy.mock.calls[1][0]).toBe('मैच छोड़ा नहीं जा सका');
   });
 });
 
@@ -216,8 +226,8 @@ test('web: Abandon asks in the in-app dialog', async () => {
   (Platform as { OS: string }).OS = 'web';
   const confirmSpy = jest.fn(() => true);
   (window as unknown as { confirm: unknown }).confirm = confirmSpy;
-  (backend.updateMatch as jest.Mock).mockReset();
-  (backend.updateMatch as jest.Mock).mockResolvedValue(undefined);
+  (backend.abandonMatch as jest.Mock).mockReset();
+  (backend.abandonMatch as jest.Mock).mockResolvedValue('abandoned');
   (router.replace as jest.Mock).mockClear();
   try {
     mockMatch = make([pt('A', 1)]);
@@ -241,7 +251,7 @@ test('web: Abandon asks in the in-app dialog', async () => {
       fireEvent.press(screen.getByText('Keep playing'));
       await jest.advanceTimersByTimeAsync(0);
     });
-    expect(backend.updateMatch).not.toHaveBeenCalled();
+    expect(backend.abandonMatch).not.toHaveBeenCalled();
     await fireEvent.press(screen.getByTestId('score-menu'));
     await act(async () => {
       fireEvent.press(screen.getByTestId('menu-abandon'));
@@ -251,7 +261,7 @@ test('web: Abandon asks in the in-app dialog', async () => {
       fireEvent.press(screen.getByText('Abandon'));
       await jest.advanceTimersByTimeAsync(0);
     });
-    expect(backend.updateMatch).toHaveBeenCalledWith('m1', { status: 'abandoned' });
+    expect(backend.abandonMatch).toHaveBeenCalledWith('m1');
     expect(router.replace).toHaveBeenCalledWith('/match/m1');
   } finally {
     (Platform as { OS: string }).OS = restore;
@@ -314,4 +324,32 @@ test('text on the team colours uses onColor; the SERVING pill stays distinct on 
   const pill = flat(screen.getByTestId('serving-A').props.style);
   expect(pill.backgroundColor).toBe('#00BAF2');
   expect(pill.borderColor).toBe('#002E6E');
+});
+
+// 1.4.3 (QA V142-7): once the winning rally is in, the ⋮ menu offers nothing that changes the match
+describe('V142-7: the ⋮ menu after the winning rally', () => {
+  const WON = Array.from({ length: 10 }, (_, i) => pt('A', i + 1)); // 5-0, 5-0 (best of 3 to 5)
+  test('finished (stored finished, POTM not chosen yet): no Abandon, no Lineup; Share and point-by-point stay', async () => {
+    mockMatch = { ...make(WON), status: 'finished', finishedAt: 20 } as Match;
+    await render(<ScoreScreen />);
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(5);
+    });
+    await fireEvent.press(screen.getByTestId('score-menu'));
+    expect(screen.queryByTestId('menu-abandon')).toBeNull();
+    expect(screen.queryByText('Abandon match')).toBeNull();
+    expect(screen.queryByText(i18n.t('rotation.lineup'))).toBeNull();
+    expect(screen.getByText(i18n.t('score.shareLive'))).toBeTruthy();
+    expect(screen.getByText(i18n.t('score.pointByPoint'))).toBeTruthy();
+  });
+  test('still "live" in the doc but the events have a winner (older client): no Abandon either', async () => {
+    await open(WON);
+    await fireEvent.press(screen.getByTestId('score-menu'));
+    expect(screen.queryByTestId('menu-abandon')).toBeNull();
+  });
+  test('one rally short of the win: Abandon is offered', async () => {
+    await open(WON.slice(0, -1));
+    await fireEvent.press(screen.getByTestId('score-menu'));
+    expect(screen.getByTestId('menu-abandon')).toBeTruthy();
+  });
 });

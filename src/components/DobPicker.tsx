@@ -4,7 +4,8 @@
  */
 import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Modal } from './AppModal'; // 1.4.0 (V139-7): holds the review prompt while open
 import { MAX_AGE, todayIST } from '../core/registration';
 import { colors } from '../theme';
 import { Button, styles as ui } from './ui';

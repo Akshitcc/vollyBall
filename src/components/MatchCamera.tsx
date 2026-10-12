@@ -7,7 +7,8 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal } from './AppModal'; // 1.4.0 (V139-7): holds the review prompt while open
 import { PHOTO_ERROR_CODES, photoSizeProblem } from '../core/photos';
 import { MAX_PHOTOS_PER_MATCH, photoSlots } from '../core/limits';
 import type { MatchPhoto } from '../core/types';

@@ -140,6 +140,13 @@ describe('C130-8: rank card and Career stats share one source', () => {
     expect(screen.getByTestId('career-wins').props.accessibilityLabel).toBe(`${i18n.t('profile.wins')}: 2`);
     expect(screen.getByTestId('career-not-counted')).toHaveTextContent(i18n.t('profile.notCountedYet', { count: 1 }));
     expect(screen.getByTestId('profile-form').props.children).toHaveLength(2); // W/L chips: counted matches only
+    // 1.4.1 (V140-15): ✓ / ✗ icons (no letters – Hindi showed "जी हा"), read out in words, with a legend
+    const won = i18n.t('profile.formWon');
+    expect(screen.getByTestId('profile-form').props.accessibilityLabel).toBe(i18n.t('profile.formLabel', { list: `${won}, ${won}` }));
+    expect(screen.getAllByTestId('profile-form-won')).toHaveLength(2);
+    expect(screen.queryByText(i18n.t('profile.win'))).toBeNull();
+    expect(screen.getByTestId('profile-form-legend', { includeHiddenElements: true })).toHaveTextContent(`${won}${i18n.t('profile.formLost')}`);
+    expect(i18n.t('profile.formLabel', { list: 'x' })).toBe(lng === 'en' ? 'Recent form, latest first: x' : 'हाल का प्रदर्शन, सबसे नया पहले: x');
     await i18n.changeLanguage('en');
   });
 });

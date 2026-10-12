@@ -20,7 +20,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Modal } from '../../../components/AppModal'; // 1.4.0 (V139-7): holds the review prompt while open
 import Animated, { SlideInDown } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CourtCard, RallyTicker, TeamHalf, type ChipOrigin } from '../../../components/LiveScoring';
@@ -60,9 +61,12 @@ import { goBackOr } from '../../../services/nav';
 import { connectivity, isNetworkError, syncView, useOnline, type SyncView } from '../../../services/connectivity';
 import { usePhotoQueue } from '../../../state/usePhotoQueue';
 import { useMe } from '../../../state/AuthContext';
+import { useReviewPrompt } from '../../../state/useReviewPrompt';
 import { letterSpacing, shareTextT as shareText, translateError } from '../../../i18n/format';
 import { colors, elevation, palette } from '../../../theme';
 import { shareOrCopy } from '../../../services/share';
+import { ABANDON_POLICY, abandonedAt, abandonPending, maxEventsOf } from '../../../core/abandon';
+import { abandonScoreOf } from '../../../components/AbandonPanel';
 
 const cacheKey = scoreCacheKey; // shared with the lists (services/localScore.ts, F135-2)
 
@@ -79,6 +83,13 @@ export default function ScoreScreen() {
   const [swapped, setSwapped] = useState(false);
   // The rally being credited: its team and its index in the event log (captured at tap time).
   const [attrib, setAttrib] = useState<{ side: Side; index: number } | null>(null);
+  // 1.4.1 (QA V140-14): the match-over sheet can be closed (button, Escape / Android back, tap outside)
+  const [overClosed, setOverClosed] = useState(false);
+  // 1.4.2 (QA V141-9): the Play review prompt may also come here, once the result sheet is closed and nothing
+  // else is open (the hook waits for uiBusy() to clear) – the same rules as on the match page (won / POTM, >= 3
+  // completed matches, 60 days, within 10 minutes of the finish; a flagged short match is no exception).
+  // Before 1.4.2 it was only on the match page, so a scorer who closed the sheet here was never asked.
+  useReviewPrompt(match && match.status === 'finished' && overClosed ? match : null, me.id);
   const [sync, setSync] = useState<SyncState>('synced');
   // 1.3.4 D133-1: rallies/undos not yet confirmed by the backend (+ queued photos) and the connection.
   const [pendingWrites, setPendingWrites] = useState(0);
@@ -248,6 +259,11 @@ export default function ScoreScreen() {
   };
 
   const commit = (next: MatchEvent[], msg?: string) => {
+    // 1.4.5 (consent policy): scoring is paused while an abandon request waits (every backend refuses it too)
+    if (paused) {
+      flash(tr('abandon.pausedToast'));
+      return;
+    }
     const before = computeState(match.rules, ev, match.firstServe);
     const after = computeState(match.rules, next, match.firstServe);
     setEvents(next);
@@ -271,15 +287,23 @@ export default function ScoreScreen() {
   const abandon = async () => {
     if (abandoning || !match) return;
     setMenu(false);
+    if (match.status === 'finished' || computeState(match.rules, events ?? match.events, match.firstServe).finished) return; // 1.4.3 (V142-7)
     // iOS won't show an alert while the menu modal is still animating away.
     if (Platform.OS === 'ios') await new Promise((r) => setTimeout(r, 400));
-    const ok = await confirmAsk(tr('score.abandonConfirm'), { title: tr('score.abandon'), confirmLabel: tr('score.abandonYes'), cancelLabel: tr('score.abandonKeep'), returnFocusTo: 'score-menu' });
+    // 1.4.5 (QA V144-1): what the abandon does depends on the policy (core/abandonPolicy.ts) once a rally exists
+    const rallied = maxEventsOf({ maxEvents: match.maxEvents, events: events ?? match.events }) > 0;
+    const asking = rallied && ABANDON_POLICY === 'consent';
+    const base = !rallied ? tr('score.abandonConfirm') : asking ? tr('abandon.askConfirm') : tr('abandon.reviewConfirm');
+    // 1.4.8 (QA V147-3): the score it stops at, in the same words as the card / panel / admin confirm
+    const text = rallied ? `${base}\n\n${tr('abandon.stopsAt', { score: abandonScoreOf(abandonedAt({ rules: match.rules, events: events ?? match.events, firstServe: match.firstServe }), tr) })}` : base;
+    const ok = await confirmAsk(text, { title: tr('score.abandon'), confirmLabel: asking ? tr('abandon.askYes') : tr('score.abandonYes'), cancelLabel: tr('score.abandonKeep'), returnFocusTo: 'score-menu' });
     if (!ok) return;
     setAbandoning(true);
     try {
-      await backend.updateMatch(match.id, { status: 'abandoned' });
+      const r = await backend.abandonMatch(match.id);
       setAbandoning(false);
-      router.replace(`/match/${match.id}`);
+      if (r === 'requested') flash(tr('abandon.requestedToast'));
+      else router.replace(`/match/${match.id}`);
     } catch (e) {
       setAbandoning(false);
       notify(tr('score.abandonFailed'), translateError(e));
@@ -357,10 +381,14 @@ export default function ScoreScreen() {
     if (kind) setAttrib(null);
   };
 
-  // completed (finished + Player of the Match): closed for good, no undo (core/antifraud.ts isTerminal)
+  // completed (finished + Player of the Match): closed for good (core/antifraud.ts isTerminal).
   const closed = match?.status === 'finished' && !!match.playerOfMatchId;
+  // 1.4.2 (QA V141-8): once the winning rally is in, the score is final – no undo, on every backend
+  // (core/matchGuards.ts finishedScoreProblem). Only crediting the last rallies ("Who scored?") is left.
+  const over = st.finished || match?.status === 'finished';
+  const paused = !!match && abandonPending(match);
   const doUndo = () => {
-    if (!ev.length || closed) return;
+    if (!ev.length || over) return;
     haptic('undo');
     setAttrib(null);
     commit(undo(ev), tr('score.undone'));
@@ -409,12 +437,14 @@ export default function ScoreScreen() {
   // Undo shows the score it goes back to (screen order), e.g. "Back to 18–17" (design-spec §8).
   const undoTo = ev.length ? computeState(match.rules, undo(ev), match.firstServe).current : null;
   // QA C130-4: once the Player of the Match is set the match is closed, so Undo looks disabled and says why.
-  const canUndo = ev.length > 0 && !closed;
+  const canUndo = ev.length > 0 && !over && !paused;
   const lastEv = ev[ev.length - 1];
   const backTo = undoTo ? tr('score.backTo', { score: left === 'A' ? `${undoTo.a}–${undoTo.b}` : `${undoTo.b}–${undoTo.a}` }) : null;
   // "Aarav −1 · back to 18–17": undoing a tapped point takes it back from the player too.
   const undoSub = closed
     ? tr('score.undoClosed')
+    : over
+      ? tr('score.undoOver')
     : backTo
       ? lastEv?.type === 'point'
         ? lastEv.playerId && names[lastEv.playerId]
@@ -475,7 +505,15 @@ export default function ScoreScreen() {
         </View>
         {!LEGACY_HALVES && (
           <View style={{ paddingHorizontal: 8, paddingTop: 6 }}>
-            <LiveScoreboard teamA={match.teamA} teamB={match.teamB} st={st} setsNeeded={setsToWin} live left={left} scoreRefs={{ A: scoreRefA, B: scoreRefB }} onTeamPoint={TEAM_HALF_TAP ? teamPoint : undefined} disabled={st.finished} />
+            <LiveScoreboard teamA={match.teamA} teamB={match.teamB} st={st} setsNeeded={setsToWin} live left={left} scoreRefs={{ A: scoreRefA, B: scoreRefB }} onTeamPoint={TEAM_HALF_TAP ? teamPoint : undefined} disabled={st.finished || paused} />
+          </View>
+        )}
+        {paused && (
+          <View style={s.pausedBanner} testID="abandon-paused" accessibilityLiveRegion="polite">
+            <Text style={s.pausedText}>{tr('abandon.pausedBanner')}</Text>
+            {match.abandonRequest?.by === me.id ? (
+              <Button title={tr('abandon.cancelRequest')} variant="secondary" testID="abandon-cancel" onPress={() => void backend.answerAbandonRequest(match.id, 'cancel').catch((e) => notify(tr('score.abandonFailed'), translateError(e)))} />
+            ) : null}
           </View>
         )}
         {!LEGACY_HALVES && st.setPoint && !st.finished && (
@@ -504,7 +542,7 @@ export default function ScoreScreen() {
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 12 }} keyboardShouldPersistTaps="handled" scrollEnabled={!compact}>
         {canSetLineup && (
-          <Pressable testID="open-lineup" onPress={() => setLineupOpen(true)} style={s.lineupBar}>
+          <Pressable accessibilityRole="button" testID="open-lineup" onPress={() => setLineupOpen(true)} style={s.lineupBar}>
             <Ionicons name="people" size={16} color={colors.onPrimary} />
             <Text style={s.lineupBarText} numberOfLines={1}>
               {tr('rotation.setLineup', { n: rot.setIndex + 1 })}
@@ -550,7 +588,7 @@ export default function ScoreScreen() {
             <Text style={s.attribTitle} numberOfLines={2}>
               {tr('score.whoScored', { team: attribTeam.name })}
             </Text>
-            <Pressable onPress={() => setAttrib(null)} hitSlop={10} testID="attrib-skip" style={{ minHeight: 40, justifyContent: 'center', paddingHorizontal: 6 }}>
+            <Pressable accessibilityRole="button" onPress={() => setAttrib(null)} hitSlop={10} testID="attrib-skip" style={{ minHeight: 40, justifyContent: 'center', paddingHorizontal: 6 }}>
               <Text style={s.skip}>{tr(credited ? 'score.done' : 'score.skip')}</Text>
             </Pressable>
           </View>
@@ -597,10 +635,24 @@ export default function ScoreScreen() {
       )}
 
       {/* match over */}
-      <Modal visible={st.finished && !attrib} transparent animationType="fade">
+      {!st.finished && overClosed ? <ResetFlag reset={() => setOverClosed(false)} /> : null}
+      <Modal visible={st.finished && !attrib && !overClosed} transparent animationType="fade" onRequestClose={() => setOverClosed(true)}>
         <View style={s.modalBg}>
-          <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}>
+          {/* tap outside the sheet closes it (a mouse/touch convenience; keyboard users have the Close button and Escape) */}
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setOverClosed(true)} focusable={false} tabIndex={-1} accessible={false} importantForAccessibility="no" testID="match-over-backdrop" />
+          {/* 1.4.5 (QA V144-9): taps inside the result sheet always reach its buttons (no tap spent on the scroll view) */}
+          <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }} keyboardShouldPersistTaps="handled">
           <View style={s.modal} testID="match-over">
+            <Pressable
+              onPress={() => setOverClosed(true)}
+              accessibilityRole="button"
+              accessibilityLabel={tr('score.closeResult')}
+              hitSlop={8}
+              style={s.modalClose}
+              testID="match-over-close"
+            >
+              <Ionicons name="close" size={22} color={colors.ink} />
+            </Pressable>
             <Text style={{ fontSize: 36, textAlign: 'center' }}>🏆</Text>
             <Text style={s.winner}>{tr('score.teamWins', { team: st.winner === 'A' ? match.teamA.name : match.teamB.name })}</Text>
             <Text style={s.final}>
@@ -617,7 +669,7 @@ export default function ScoreScreen() {
               onPress={() => void shareOrCopy(shareText(match.teamA.name, match.teamB.name, match.rules, ev, match.firstServe, { location: match.location?.name }))}
             />
             <Button title={tr('score.summaryPhotos')} variant="dark" icon="images" onPress={() => router.replace(`/match/${match.id}`)} />
-            {closed ? null : <Button title={tr('score.undoLast')} variant="ghost" icon="arrow-undo" onPress={doUndo} testID="undo-last" />}
+            {/* 1.4.2 (V141-8): no "Undo last rally" here any more – the result is final once the match is won */}
           </View>
           </ScrollView>
         </View>
@@ -655,7 +707,9 @@ export default function ScoreScreen() {
             <Text style={[s.winner, { fontSize: 20 }]}>{tr('score.options')}</Text>
             <Button title={tr('score.shareLive')} icon="share-social" onPress={() => { setMenu(false); void shareOrCopy(shareText(match.teamA.name, match.teamB.name, match.rules, ev, match.firstServe)); }} />
             <Button title={tr('score.pointByPoint')} icon="list" variant="secondary" onPress={() => { setMenu(false); router.replace(`/match/${match.id}`); }} />
-            {hasPlayers && (
+            {/* 1.4.3 (QA V142-7): once the winning rally is in, nothing in this menu may change the match – no
+                lineup, no abandon (every backend refuses them too: match_finished). Share and point-by-point stay. */}
+            {hasPlayers && !over && (
               <Button
                 title={tr('rotation.lineup')}
                 icon="people"
@@ -667,14 +721,18 @@ export default function ScoreScreen() {
                 }}
               />
             )}
-            <Button
-              title={tr('score.abandon')}
-              icon="close-circle"
-              variant="danger"
-              testID="menu-abandon"
-              loading={abandoning}
-              onPress={abandon}
-            />
+            {/* 1.4.8 (optional item): not after a reinstate – the match has an abandon record, so only an admin abandons
+                (core/lifecycle.ts 'abandon': "no abandon record yet"); 1.4.7 offered it and the backend refused */}
+            {!over && !paused && !match?.abandon && (
+              <Button
+                title={tr('score.abandon')}
+                icon="close-circle"
+                variant="danger"
+                testID="menu-abandon"
+                loading={abandoning}
+                onPress={abandon}
+              />
+            )}
             <Button title={tr('common.close')} variant="ghost" onPress={() => setMenu(false)} />
           </View>
         </Pressable>
@@ -773,6 +831,8 @@ const s = StyleSheet.create({
   // 1.3.4: 2-line subtitle (Hindi "Aarav −1 · वापस 1–0" was cut off), a little less padding
   undo: { flex: 1, minHeight: 56, borderRadius: 14, backgroundColor: colors.primary, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, gap: 10 },
   // Tester 1.2.0: the disabled Undo must look disabled (solid grey, grey text, no glow).
+  pausedBanner: { backgroundColor: colors.warnBg, borderRadius: 12, padding: 10, marginHorizontal: 8, marginTop: 6, gap: 8 },
+  pausedText: { color: colors.ink, fontWeight: '800', textAlign: 'center' },
   undoDisabled: { backgroundColor: colors.disabledBg },
   undoText: { fontWeight: '900', fontSize: 16 },
   undoSub: { fontWeight: '600', fontSize: 12, marginTop: 1 },
@@ -792,6 +852,7 @@ const s = StyleSheet.create({
   kindText: { color: colors.text, fontWeight: '700', fontSize: 14 },
   modalBg: { flex: 1, backgroundColor: colors.scrim, justifyContent: 'center', padding: 20 },
   modal: { backgroundColor: colors.white, borderRadius: 22, padding: 20 },
+  modalClose: { position: 'absolute', top: 8, right: 8, width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
   winner: { fontSize: 26, fontWeight: '900', textAlign: 'center', color: colors.text },
   final: { fontSize: 48, fontWeight: '900', textAlign: 'center', color: colors.text },
 });
@@ -840,3 +901,9 @@ function NeedPlayers({ match, onUpdated }: { match: Match; onUpdated: (m: Match)
   );
 }
 
+
+/** 1.4.1: re-arms the match-over sheet once the match is no longer over (undo of the last rally). */
+function ResetFlag({ reset }: { reset: () => void }) {
+  useEffect(() => reset(), [reset]);
+  return null;
+}

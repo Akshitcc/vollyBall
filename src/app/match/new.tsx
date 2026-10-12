@@ -2,7 +2,7 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { HeaderBackButton } from 'expo-router/react-navigation';
 import { firstFutureHour, isPastStart, localAt, localDayOffset, localDayStart } from '../../core/dates';
 import { LIMITS } from '../../core/limits';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { BackHandler, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -10,7 +10,7 @@ import { card } from '../../components/Hero';
 import { PressableScale } from '../../components/PressableScale';
 import { LocationPicker, placeReady } from '../../components/LocationPicker';
 import { RulesEditor } from '../../components/RulesEditor';
-import { KeyboardAwareScreen } from '../../components/KeyboardAwareScreen';
+import { KeyboardAwareScreen, RevealOnShow, ScrollRevealContext } from '../../components/KeyboardAwareScreen';
 import { Button, Card, Chip, Field, H2, P, Row, styles as ui } from '../../components/ui';
 import { placeFromCourt, type Place } from '../../core/geo';
 import { INDOOR_RULES, type RuleSet } from '../../core/rules';
@@ -42,6 +42,7 @@ function SidePicker({
   myTeams,
   defaultColor,
   otherPlayerIds,
+  playingCount,
   otherTeamId,
   otherColor,
   badge,
@@ -63,6 +64,8 @@ function SidePicker({
   myTeams: Team[];
   defaultColor: string;
   otherPlayerIds: string[];
+  /** 1.4.9 (QA V148-6): the players who actually play (Exact 6 of a bigger team: 6) */
+  playingCount?: number | null;
   /** The registered team already picked for the other side: not offered here (fix re-test 204). */
   otherTeamId?: string | null;
   /** Side complete (players, name, captain): tick in the header. */
@@ -72,6 +75,15 @@ function SidePicker({
   const { t: tr } = useTranslation();
   const [q, setQ] = useState('');
   const [results, setResults] = useState<Team[]>([]);
+  // 1.4.6 (QA V145-13): the results under a focused search field scroll into view above the keyboard / footer
+  const reveal = useContext(ScrollRevealContext);
+  const resultsRef = useRef<View>(null);
+  const searchFocused = useRef(false);
+  useEffect(() => {
+    if (!results.length || !searchFocused.current) return;
+    const t = setTimeout(() => reveal(resultsRef.current, 24), 60);
+    return () => clearTimeout(t);
+  }, [results, reveal]);
   const [built, setBuilt] = useState<BuiltTeam>({ kind: 'build', name: '', color: defaultColor, players: [] });
   const [mode, setMode] = useState<'team' | 'build'>(value?.kind === 'build' ? 'build' : 'team');
   useEffect(() => {
@@ -83,7 +95,7 @@ function SidePicker({
     if (value?.kind === 'build') setBuilt(value);
   }, [value]);
   const colorNow = value?.kind === 'team' ? value.team.color : value?.kind === 'build' ? value.color : defaultColor;
-  const count = value?.kind === 'team' ? value.team.memberIds.length : value?.kind === 'build' ? value.players.length : 0;
+  const count = playingCount ?? (value?.kind === 'team' ? value.team.memberIds.length : value?.kind === 'build' ? value.players.length : 0);
   const name = value?.kind === 'team' ? value.team.name : value?.kind === 'build' ? value.name.trim() : '';
   const summary = value && (name || count) ? [name, tr('newMatch.summaryPlayers', { count })].filter(Boolean).join(' · ') : null;
   const teamChip = (t: Team) => (
@@ -123,7 +135,9 @@ function SidePicker({
         ).map(([m, icon, key, go]) => (
           <PressableScale key={m} onPress={go} accessibilityRole="tab" accessibilityState={{ selected: mode === m }} style={[st.segItem, mode === m && st.segOn]} testID={`${testID}-mode-${m}`}>
             <Ionicons name={icon} size={16} color={mode === m ? colors.text : colors.muted} />
-            <Text style={{ color: mode === m ? colors.text : colors.muted, fontWeight: '700', fontSize: 13, flexShrink: 1, minWidth: 0, textAlign: 'center' }} numberOfLines={2}>
+            {/* 1.4.2 (QA V141-10): Devanagari matras (ें, ि) reach past the glyph box – the 2-line clamp clipped them
+                at 360 px ("…खिलाड़ी जोड़" looked cut). Side padding + a taller line keep them inside; the label wraps. */}
+            <Text style={{ color: mode === m ? colors.text : colors.muted, fontWeight: '700', fontSize: 13, lineHeight: 19, paddingHorizontal: 3, flexShrink: 1, minWidth: 0, textAlign: 'center' }} numberOfLines={2}>
               {tr(key)}
             </Text>
           </PressableScale>
@@ -132,15 +146,27 @@ function SidePicker({
       {mode === 'team' ? (
         <>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>{myTeams.filter((t) => t.id !== otherTeamId).map(teamChip)}</View>
-          <Field label={tr('newMatch.findTeam')} value={q} onChangeText={setQ} placeholder={tr('newMatch.searchTeam')} maxLength={LIMITS.teamSearch.max} testID={`${testID}-search`} />
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>{results.filter((t) => t.id !== otherTeamId && !myTeams.some((m) => m.id === t.id)).map(teamChip)}</View>
+          <Field
+            label={tr('newMatch.findTeam')}
+            value={q}
+            onChangeText={setQ}
+            placeholder={tr('newMatch.searchTeam')}
+            maxLength={LIMITS.teamSearch.max}
+            testID={`${testID}-search`}
+            onFocus={() => {
+              searchFocused.current = true;
+              if (results.length) setTimeout(() => reveal(resultsRef.current, 24), 60);
+            }}
+            onBlur={() => (searchFocused.current = false)}
+          />
+          <View ref={resultsRef} style={{ flexDirection: 'row', flexWrap: 'wrap', minHeight: q.trim().length >= 2 ? 44 : 0 }} testID={`${testID}-results`}>{results.filter((t) => t.id !== otherTeamId && !myTeams.some((m) => m.id === t.id)).map(teamChip)}</View>
           {/* 1.3.4: the only match is the team already on the other side – say so instead of showing nothing */}
           {otherTeamId && results.some((t) => t.id === otherTeamId) && !results.some((t) => t.id !== otherTeamId) ? (
             <P muted testID={`${testID}-already-other`}>{tr('newMatch.alreadyOtherSide', { side: badge === 'A' ? 'B' : 'A' })}</P>
           ) : null}
           {value?.kind === 'team' &&
             (teamCanPlay(value.team) ? (
-              <P muted>{tr('newMatch.fromTeam', { count: value.team.memberIds.length, team: value.team.name })}</P>
+              <P muted /* 1.4.10 (QA V149-4): the players who actually play, like the header */>{tr('newMatch.fromTeam', { count: playingCount ?? value.team.memberIds.length, team: value.team.name })}</P>
             ) : (
               <Text style={{ color: colors.danger, fontWeight: '700' }}>
                 {tr('newMatch.teamTooSmall', { team: value.team.name, count: value.team.memberIds.length, min: MIN_PLAYERS })}
@@ -186,6 +212,16 @@ export default function NewMatch() {
     return exactPicks[v.team.id] ?? exactDefaultPick(ids, v.team.captainId, MIN_PLAYERS);
   };
   const pickProblem = [a, b].some((v) => needsPick(v) && pickOf(v).length !== MIN_PLAYERS);
+  // 1.4.9 (QA V148-6): the players who actually play for a side (a registered team: its roster, or the 6 picked in
+  // Exact 6; a built side: its players); null while a registered team's roster is still loading
+  const playingIds = (v: SideInput): string[] | null =>
+    !v ? [] : v.kind === 'build' ? v.players.map((p) => p.id) : !rosters[v.team.id] ? null : needsPick(v) ? pickOf(v) : rosters[v.team.id].players.map((p) => p.id);
+  const idsA = playingIds(a);
+  const idsB = playingIds(b);
+  // a player in both squads (e.g. in two registered teams) is caught here, before Next – the match-level check stays
+  const inBoth = idsA && idsB ? idsA.filter((id) => idsB.includes(id)) : [];
+  const nameIn = (id: string) => [...(a?.kind === 'build' ? a.players : a?.kind === 'team' ? rosters[a.team.id]?.players ?? [] : []), ...(b?.kind === 'build' ? b.players : b?.kind === 'team' ? rosters[b.team.id]?.players ?? [] : [])].find((p) => p.id === id)?.name ?? id;
+  const bothText = inBoth.length ? t('newMatch.inBothTeams', { count: inBoth.length, names: inBoth.map(nameIn).join(', ') }) : null;
   const [rules, setRules] = useState<RuleSet>({ ...INDOOR_RULES });
   const [firstServe, setFirstServe] = useState<Side>('A');
   const [location, setLocation] = useState<Place | null>(null);
@@ -224,7 +260,7 @@ export default function NewMatch() {
   const summaryOf = (v: SideInput, cap: string | null): SideSummary | null =>
     !v ? null : v.kind === 'team' ? { kind: 'team', teamId: v.team.id, name: v.team.name, players: teamSidePlayers(v.team.memberIds.length, sizeMode) } : { kind: 'build', name: v.name, players: v.players.length, captain: cap };
   const problem = teamsProblem(summaryOf(a, capA), summaryOf(b, capB), sizeMode);
-  const teamsReady = !problem && !pickProblem;
+  const teamsReady = !problem && !pickProblem && !inBoth.length;
   const now = Date.now();
   const rulesProblem = location && !placeReady(location) ? t('location.nameRequired') : when !== 'now' && isPastStart(when, now, 0) ? t('errors.codes.time_in_past') : null;
   const rulesReady = !rulesProblem;
@@ -392,9 +428,9 @@ export default function NewMatch() {
       <SafeFooter testID="new-match-footer">
         <Button
           // R136-20: the label states the rule of the chosen mode (exactly 6 / 6–12 / pick 6)
-          title={`${teamsReady ? t('newMatch.nextRules') : pickProblem && !problem ? t('newMatch.nextRulesPick', { count: MIN_PLAYERS }) : sizeMode === 'exact' ? t('newMatch.nextRulesNeedsExact', { count: MIN_PLAYERS }) : t('newMatch.nextRulesNeedsCustom', { min: MIN_PLAYERS, max: maxPlayersFor('custom') })} →`}
+          title={`${teamsReady ? t('newMatch.nextRules') : inBoth.length && !problem && !pickProblem ? t('newMatch.nextRulesBoth') : pickProblem && !problem ? t('newMatch.nextRulesPick', { count: MIN_PLAYERS }) : sizeMode === 'exact' ? t('newMatch.nextRulesNeedsExact', { count: MIN_PLAYERS }) : t('newMatch.nextRulesNeedsCustom', { min: MIN_PLAYERS, max: maxPlayersFor('custom') })} →`}
           disabled={!teamsReady}
-          disabledHint={hint(problem) ?? (pickProblem ? t('newMatch.pickSix', { count: MIN_PLAYERS }) : undefined)}
+          disabledHint={hint(problem) ?? (pickProblem ? t('newMatch.pickSix', { count: MIN_PLAYERS }) : bothText ?? undefined)}
           onPress={() => goTo(1)}
           testID="next-rules"
         />
@@ -421,7 +457,9 @@ export default function NewMatch() {
     const players = v?.kind === 'build' ? v.players : v?.kind === 'team' ? (rosters[v.team.id]?.players ?? []) : [];
     const capId = v?.kind === 'team' ? v.team.captainId : cap;
     const capName = players.find((p) => p.id === capId)?.name;
-    const count = v?.kind === 'team' ? v.team.memberIds.length : players.length;
+    // 1.4.9 (QA V148-6): the players actually picked (Exact 6 of a bigger team: the 6), not the team's member count
+    const ids = playingIds(v);
+    const count = ids ? ids.length : players.length;
     const col = colorOf(v) ?? TEAM_COLORS[s === 'A' ? 0 : 1];
     return (
       <View style={st.sumRow} testID={`summary-team-${s}`}>
@@ -453,7 +491,7 @@ export default function NewMatch() {
   const shown = (i: NewMatchStep) => (step === i ? null : st.hidden);
 
   return (
-    <KeyboardAwareScreen edges={[]} header={<Stepper step={step} canOpen={(i) => canOpenStep(i, teamsReady, rulesReady)} onOpen={goTo} />} footer={footer} scrollKey={step}>
+    <KeyboardAwareScreen edges={[]} header={<Stepper step={step} canOpen={(i) => canOpenStep(i, teamsReady, rulesReady)} onOpen={goTo} />} footer={footer} scrollKey={step} hideFooterOnKeyboard>
       <Stack.Screen
         options={{
           // Header arrow follows the steps too (Android back is handled by BackHandler above).
@@ -481,12 +519,18 @@ export default function NewMatch() {
           <P muted style={{ fontSize: 12 }} testID="team-size-hint">{sizeMode === 'exact' ? t('newMatch.sizeExactHint') : t('newMatch.sizeCustomHint')}</P>
           </View>
         </Card>
-        <SidePicker label={t('common.teamA')} badge="A" value={a} onChange={setA} myTeams={myTeams} defaultColor={TEAM_COLORS[0]} otherPlayerIds={playerIdsOf(b, rosters)} otherTeamId={b?.kind === 'team' ? b.team.id : null} otherColor={colorOf(b)} ready={sideReady('A')} max={maxPlayersFor(sizeMode)} open={open.A} onToggle={() => setOpen((o) => ({ ...o, A: !o.A }))} testID="side-a" />
+        <SidePicker label={t('common.teamA')} badge="A" value={a} onChange={setA} myTeams={myTeams} defaultColor={TEAM_COLORS[0]} otherPlayerIds={playerIdsOf(b, rosters)} playingCount={idsA?.length ?? null} otherTeamId={b?.kind === 'team' ? b.team.id : null} otherColor={colorOf(b)} ready={sideReady('A')} max={maxPlayersFor(sizeMode)} open={open.A} onToggle={() => setOpen((o) => ({ ...o, A: !o.A }))} testID="side-a" />
         {open.A && <CaptainPicker side="A" value={a} captain={capA} onChange={setCapA} />}
         {needsPick(a) && renderPick('A', a)}
-        <SidePicker label={t('common.teamB')} badge="B" value={b} onChange={setB} myTeams={myTeams} defaultColor={TEAM_COLORS[1]} otherPlayerIds={playerIdsOf(a, rosters)} otherTeamId={a?.kind === 'team' ? a.team.id : null} otherColor={colorOf(a)} ready={sideReady('B')} max={maxPlayersFor(sizeMode)} open={open.B} onToggle={() => setOpen((o) => ({ ...o, B: !o.B }))} testID="side-b" />
+        <SidePicker label={t('common.teamB')} badge="B" value={b} onChange={setB} myTeams={myTeams} defaultColor={TEAM_COLORS[1]} otherPlayerIds={playerIdsOf(a, rosters)} playingCount={idsB?.length ?? null} otherTeamId={a?.kind === 'team' ? a.team.id : null} otherColor={colorOf(a)} ready={sideReady('B')} max={maxPlayersFor(sizeMode)} open={open.B} onToggle={() => setOpen((o) => ({ ...o, B: !o.B }))} testID="side-b" />
         {open.B && <CaptainPicker side="B" value={b} captain={capB} onChange={setCapB} />}
         {needsPick(b) && renderPick('B', b)}
+        {/* 1.4.9 (QA V148-6): a player in both squads – inline, kept in view, Next stays disabled */}
+        <RevealOnShow show={!!bothText} dep={bothText} testID="both-teams-error">
+          <Card>
+            <Text style={{ color: colors.danger, fontWeight: '700' }} accessibilityRole="alert" testID="both-teams-error-text">{bothText}</Text>
+          </Card>
+        </RevealOnShow>
       </View>
       {/* Step 2 – Rules */}
       <View style={shown(1)} testID="new-match-step-rules">
@@ -562,7 +606,10 @@ export default function NewMatch() {
             <Text style={st.sumMuted}>{t('newMatch.scorerNote')}</Text>
           </View>
         </View>
-        {error && <Text style={{ color: colors.danger, fontWeight: '700', marginTop: 8 }} accessibilityRole="alert" testID="new-match-error">{error}</Text>}
+        {/* 1.4.9 (QA V148-7, 48_14): the refusal under the summary scrolls into view */}
+        <RevealOnShow show={!!error} dep={error}>
+          <Text style={{ color: colors.danger, fontWeight: '700', marginTop: 8 }} accessibilityRole="alert" testID="new-match-error">{error}</Text>
+        </RevealOnShow>
       </View>
     </KeyboardAwareScreen>
   );
@@ -638,7 +685,7 @@ const st = StyleSheet.create({
   badge: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   seg: { flexDirection: 'row', backgroundColor: colors.bg, borderRadius: 12, padding: 4, marginBottom: 10 },
   // 1.3.9 (V138-14): minWidth 0 lets a long (Hindi) label wrap onto 2 lines instead of overflowing the tab at 360 px
-  segItem: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 40, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 4 },
+  segItem: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: 44, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 4 },
   segOn: { backgroundColor: colors.white, ...elevation.e1 },
   hidden: { display: 'none' },
   sumSection: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },

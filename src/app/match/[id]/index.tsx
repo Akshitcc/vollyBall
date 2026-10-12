@@ -1,7 +1,7 @@
 /** Match page: real-time scoreboard for followers, stats, timeline, photos. */
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -13,10 +13,16 @@ import { AddPhotoButtons } from '../../../components/PhotoSheet';
 import { PhotoGrid, PhotoViewer } from '../../../components/PhotoGallery';
 import { PotmBadge, PotmPicker } from '../../../components/Potm';
 import { ResultPanel } from '../../../components/ResultBadge';
+import { AbandonPanel } from '../../../components/AbandonPanel';
+import { handoverProblem, reassignProblem } from '../../../core/scorerHandoff';
+import { ownMatchReview } from '../../../core/antifraud';
+import { confirmAsk } from '../../../services/dialogs';
+import { SUPPORT_EMAIL } from '../../../services/config';
+import { VerdictRepairCard } from '../../../components/VerdictRepairCard';
 import { Avatar, Banner, breakWords, Button, Card, Chip, Empty, H2, Loading, LiveBadge, P, Row, Screen } from '../../../components/ui';
 import { rotationState } from '../../../core/rotation';
 import { computeState, timeline, type MatchEvent, type Side } from '../../../core/scoring';
-import { acceptedEvents, creditLabel, KIND_EMOJI, longestRun, playerStats, teamTotals } from '../../../core/stats';
+import { acceptedEvents, creditLabel, kindBreakdown, longestRun, playerStats, teamTotals } from '../../../core/stats';
 import type { Match, MatchPhoto } from '../../../core/types';
 import { backend } from '../../../services/backend';
 import { useOnline } from '../../../services/connectivity';
@@ -26,7 +32,7 @@ import { useWatch } from '../../../state/hooks';
 import { useReviewPrompt } from '../../../state/useReviewPrompt';
 import { useProfiles } from '../../../state/profiles';
 import { canAddMatchPhoto } from '../../../core/photos';
-import { dataLabel, describeRulesT, letterSpacing, matchStatusLabel, shareTextT as shareText } from '../../../i18n/format';
+import { dataLabel, describeRulesT, letterSpacing, matchStatusLabel, shareTextT as shareText, translateError } from '../../../i18n/format';
 import { colors, font, gradients, teamText } from '../../../theme';
 import { shareOrCopy } from '../../../services/share';
 
@@ -42,11 +48,25 @@ export default function MatchPage() {
   const photos = useWatch<MatchPhoto[]>((cb) => backend.watchPhotos(id, cb), [id]) ?? [];
   const [tab, setTab] = useState<Tab>('stats');
   const [viewer, setViewer] = useState<number | null>(null);
+  const [handoverError, setHandoverError] = useState<string | null>(null);
   const interested = useProfiles(m?.interestedIds);
   // 1.3.4 D133-1: offline / queued-photo indicator (no indicator while online with nothing pending)
   const online = useOnline();
   const photoQ = usePhotoQueue(id);
   const uploaders = useProfiles(useMemo(() => [...new Set(photos.map((p) => p.uploadedBy))], [photos]));
+  // 1.4.6 (QA V145-17): after the first rally the handoff chips add the admins who may take over (API / demo)
+  const handPlayed = !!m && (m.events.length > 0 || (m.maxEvents ?? 0) > 0);
+  const handOpen = !!m && m.createdBy === me.id && (m.status === 'live' || m.status === 'scheduled');
+  const handKey = m ? `${m.id}|${m.scorerId}` : '';
+  const [handAdmins, setHandAdmins] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    if (!handPlayed || !handOpen || !backend.handoffAdmins) return setHandAdmins([]);
+    let on = true;
+    backend.handoffAdmins(id).then((l) => on && setHandAdmins(l), () => on && setHandAdmins([]));
+    return () => {
+      on = false;
+    };
+  }, [id, handPlayed, handOpen, handKey]);
 
   const derived = useMemo(() => {
     if (!m) return null;
@@ -126,7 +146,7 @@ export default function MatchPage() {
             </Text>
           </View>
         ) : null}
-        <LiveScoreboard teamA={m.teamA} teamB={m.teamB} st={st} setsNeeded={setsNeeded} live={live} />
+        <LiveScoreboard teamA={m.teamA} teamB={m.teamB} st={st} setsNeeded={setsNeeded} live={live} showCurrent={m.status === 'abandoned'} />
         {(['A', 'B'] as Side[]).map((side) =>
           st.winner === side ? (
             <View key={side} style={[hs.winner, { alignSelf: side === 'A' ? 'flex-start' : 'flex-end' }]} testID={`winner-${side}`}>
@@ -188,7 +208,7 @@ export default function MatchPage() {
       )}
 
       {m.location && (
-        <Pressable
+        <Pressable accessibilityRole="button"
           onPress={() =>
             Linking.openURL(
               Platform.select({
@@ -220,6 +240,8 @@ export default function MatchPage() {
       {m.status === 'finished' && (m.playerOfMatchId ? <PotmBadge match={m} /> : isScorer && <PotmPicker match={m} uid={me.id} />)}
       {/* 1.3.0: result state, the opposing captain's confirmation and admin review */}
       {m.status === 'finished' && <ResultPanel match={m} meId={me.id} isAdmin={isAdmin} nameOf={(uid) => (uid === me.id ? me.name : allPlayers.find((p) => p.id === uid)?.name)} onConfirmed={review.onConfirmed} />}
+      {/* 1.4.5 (QA V144-1/2/3): abandon request / record / report, and an admin's resolutions */}
+      <AbandonPanel match={m} meId={me.id} isAdmin={isAdmin} nameOf={(uid) => (uid === me.id ? me.name : allPlayers.find((p) => p.id === uid)?.name)} />
       <Row style={{ gap: 10 }}>
         <Button title={tr('common.share')} icon="share-social" variant="secondary" onPress={share} style={{ flex: 1 }} />
         {m.status === 'scheduled' && !isParticipant && (
@@ -250,8 +272,58 @@ export default function MatchPage() {
             <Text style={[font.h3, { marginBottom: 6 }]}>{tr('match.scorer')}</Text>
             <P muted style={{ marginBottom: 8 }}>{tr('match.scorerHint')}</P>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-              {[{ id: me.id, name: tr('common.me') }, ...allPlayers.filter((p) => p.id !== me.id)].map((p) => (
-                <Chip key={p.id} label={p.name.split(' ')[0]} active={m.scorerId === p.id} onPress={() => backend.updateMatch(m.id, { scorerId: p.id })} />
+              {/* 1.4.5 (QA V144-8, interim): after the first rally only players of the scorer's own team are offered */}
+              {/* 1.4.6 (QA V145-17) / 1.4.7 (V146-3): never the other (verdict) team; after the first rally the scorer's own side + admins */}
+              {[{ id: me.id, name: tr('common.me') }, ...allPlayers.filter((p) => p.id !== me.id)]
+                .filter((p) => p.id === m.scorerId || !handoverProblem(m, p.id))
+                .map((p) => (
+                  <Chip key={p.id} label={p.name.split(' ')[0]} active={m.scorerId === p.id} testID={`handover-${p.id}`} onPress={() => void backend.updateMatch(m.id, { scorerId: p.id }).catch((e) => setHandoverError(translateError(e)))} />
+                ))}
+              {handPlayed
+                ? handAdmins
+                    .filter((a) => a.id !== me.id && !allPlayers.some((p) => p.id === a.id && (p.id === m.scorerId || !handoverProblem(m, p.id))))
+                    .map((a) => (
+                      <Chip key={a.id} label={tr('match.handoffAdminChip', { name: a.name.split(' ')[0] })} active={m.scorerId === a.id} testID={`handover-admin-${a.id}`} onPress={() => void backend.updateMatch(m.id, { scorerId: a.id }).catch((e) => setHandoverError(translateError(e)))} />
+                    ))
+                : null}
+            </View>
+            {handPlayed && !backend.handoffAdmins ? (
+              <Button
+                title={tr('match.askAdminTakeover')}
+                icon="shield-checkmark-outline"
+                variant="secondary"
+                style={{ marginTop: 8 }}
+                testID="ask-admin-takeover"
+                onPress={() =>
+                  void (async () => {
+                    if (!(await confirmAsk(tr('match.askAdminConfirm'), { title: tr('match.askAdminTakeover'), confirmLabel: tr('match.askAdminSend'), cancelLabel: tr('common.cancel') }))) return;
+                    const body = tr('match.askAdminBody', { id: m.id, a: m.teamA.name, b: m.teamB.name });
+                    if (SUPPORT_EMAIL) await Linking.openURL(`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(tr('match.askAdminTakeover'))}&body=${encodeURIComponent(body)}`).catch(() => shareOrCopy(body));
+                    else await shareOrCopy(body);
+                  })()
+                }
+              />
+            ) : null}
+            {handPlayed ? <P muted style={{ marginTop: 6 }} testID="handover-hint">{tr(backend.handoffAdmins ? 'abandon.handoverHint' : 'abandon.handoverHintAsk')}</P> : null}
+            {/* 1.4.7 (QA V146-3): the other team is never offered – its captain confirms the result */}
+            {!handPlayed && m.captains ? <P muted style={{ marginTop: 6 }} testID="handover-hint-verdict">{tr('abandon.handoverHintVerdict')}</P> : null}
+            {handoverError ? <Text style={{ color: colors.danger, marginTop: 4 }} accessibilityRole="alert" testID="handover-error">{handoverError}</Text> : null}
+          </Card>
+        </View>
+      )}
+
+      {/* 1.4.8 (QA V147-2): an admin repairs a match nobody can confirm */}
+      <VerdictRepairCard match={m} meId={me.id} isAdmin={isAdmin} nameOf={(uid) => allPlayers.find((p) => p.id === uid)?.name} />
+
+      {/* 1.4.5 (QA V144-8): an admin who isn't part of the match can reassign scoring to any participant */}
+      {isAdmin && !ownMatchReview(m, me.id) && (m.status === 'live' || m.status === 'scheduled') && (
+        <View testID="admin-reassign">
+          <Card>
+            <Text style={[font.h3, { marginBottom: 6 }]}>{tr('abandon.reassign')}</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              {/* 1.4.6 / 1.4.7 (QA V145-6, V146-2): never the verdict captain or their team; someone is always left to confirm */}
+              {allPlayers.filter((p) => p.id === m.scorerId || !reassignProblem(m, me.id, true, p.id)).map((p) => (
+                <Chip key={p.id} label={p.name.split(' ')[0]} active={m.scorerId === p.id} testID={`reassign-${p.id}`} onPress={() => void backend.reassignScorer(m.id, p.id).catch((e) => setHandoverError(translateError(e)))} />
               ))}
             </View>
           </Card>
@@ -310,17 +382,23 @@ export default function MatchPage() {
         <>
           <Card>
             <Text style={[font.h3, { marginBottom: 8 }]}>{tr('match.teamStats')}</Text>
-            {[
-              [tr('match.points'), derived.totals.points.A, derived.totals.points.B],
-              // 1.3.2: team-only points ("+1 · Opp. error" – no player credit, never toward POTM)
-              [tr('liveV2.teamPointsNoPlayer'), teamOnly.A, teamOnly.B],
-              [tr('match.spikes'), derived.totals.byKind.A.kill, derived.totals.byKind.B.kill],
-              [tr('match.blocks'), derived.totals.byKind.A.block, derived.totals.byKind.B.block],
-              [tr('match.aces'), derived.totals.byKind.A.ace, derived.totals.byKind.B.ace],
-              [tr('match.tips'), derived.totals.byKind.A.tip, derived.totals.byKind.B.tip],
-              [tr('match.longestRun'), derived.run.A, derived.run.B],
-            ].map(([label, a, b]) => (
-              <Row key={label as string} style={{ paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+            {(
+              [
+                ['points', tr('match.points'), derived.totals.points.A, derived.totals.points.B, true],
+                // 1.3.2: team-only points ("+1 · Opp. error" – no player credit, never toward POTM)
+                ['teamOnly', tr('liveV2.teamPointsNoPlayer'), teamOnly.A, teamOnly.B, false],
+                ['kill', tr('match.spikes'), derived.totals.byKind.A.kill, derived.totals.byKind.B.kill, false],
+                ['block', tr('match.blocks'), derived.totals.byKind.A.block, derived.totals.byKind.B.block, false],
+                ['ace', tr('match.aces'), derived.totals.byKind.A.ace, derived.totals.byKind.B.ace, false],
+                ['tip', tr('match.tips'), derived.totals.byKind.A.tip, derived.totals.byKind.B.tip, false],
+                ['run', tr('match.longestRun'), derived.run.A, derived.run.B, true],
+              ] as [string, string, number, number, boolean][]
+            )
+              // 1.4.3 (QA V142-9): like the career stats, a row that is 0 for both teams is left out (points and the
+              // longest run always show)
+              .filter(([, , a, b, always]) => always || a > 0 || b > 0)
+              .map(([key, label, a, b]) => (
+              <Row key={key} testID={`team-stat-${key}`} style={{ paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.border }}>
                 <Text style={{ width: 50, fontWeight: '900', fontSize: 19, color: teamText(m.teamA.color) }}>{a}</Text>
                 <Text style={{ flex: 1, textAlign: 'center', fontWeight: '700', color: colors.muted }}>{label}</Text>
                 <Text style={{ width: 50, fontWeight: '900', fontSize: 19, textAlign: 'right', color: teamText(m.teamB.color) }}>{b}</Text>
@@ -340,7 +418,7 @@ export default function MatchPage() {
                     {p.name}
                   </Text>
                   <Text style={{ color: colors.muted, fontWeight: '700', marginRight: 10, fontSize: 12 }}>
-                    {line ? `${line.kill}${KIND_EMOJI.kill} ${line.block}${KIND_EMOJI.block} ${line.ace}${KIND_EMOJI.ace} ${line.tip}${KIND_EMOJI.tip}` : '—'}
+                    {kindBreakdown(line)}
                   </Text>
                   <Text style={{ fontWeight: '900', fontSize: 17, width: 30, textAlign: 'right' }}>{line?.points ?? 0}</Text>
                 </Row>

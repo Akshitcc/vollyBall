@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs, useNavigation } from 'expo-router';
 import { useRoute } from 'expo-router/react-navigation';
-import React, { useContext, useEffect } from 'react';
+import React, { useContext, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { inAppLinkPress, leakedTabParams } from '../../services/nav';
-import { Platform, Text, useWindowDimensions, type ColorValue, type TextStyle } from 'react-native';
+import { Platform, Text, useWindowDimensions, View, type ColorValue, type TextStyle } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 import { PressableScale } from '../../components/PressableScale';
 import { colors } from '../../theme';
@@ -59,6 +59,36 @@ export function TabButton({ href, onPress, style, children, web = Platform.OS ==
   );
 }
 
+/**
+ * 1.4.1 (QA V140-14): on the web every tab stays mounted, and an inactive tab was only aria-hidden – its
+ * buttons were still in the Tab order (pressing Tab on Profile walked through the hidden Home screen first and
+ * never seemed to reach Profile's header "Edit"). An inactive tab (or the tabs under a pushed screen) is now
+ * `inert`: out of the Tab order and the accessibility tree, layout and scroll position untouched.
+ */
+export function TabScene({ navigation, children }: { navigation: { isFocused: () => boolean; addListener: (e: 'focus' | 'blur', cb: () => void) => () => void }; children: React.ReactNode }) {
+  const ref = useRef<View>(null);
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const apply = () => {
+      const el = ref.current as unknown as { inert?: boolean } | null;
+      if (el) el.inert = !navigation.isFocused();
+    };
+    apply();
+    const offFocus = navigation.addListener('focus', apply);
+    const offBlur = navigation.addListener('blur', apply);
+    return () => {
+      offFocus();
+      offBlur();
+    };
+  }, [navigation]);
+  if (Platform.OS !== 'web') return <>{children}</>;
+  return (
+    <View ref={ref} style={{ flex: 1 }}>
+      {children}
+    </View>
+  );
+}
+
 export default function TabsLayout() {
   const { t, i18n } = useTranslation();
   const insets = useContext(SafeAreaInsetsContext) ?? { bottom: 0 }; // no provider in unit tests
@@ -68,6 +98,7 @@ export default function TabsLayout() {
   useStripLeakedParams();
   return (
     <Tabs
+      screenLayout={({ navigation, children }) => <TabScene navigation={navigation}>{children}</TabScene>}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.primary,

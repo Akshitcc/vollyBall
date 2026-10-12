@@ -1,6 +1,8 @@
 /**
- * 1.3.7: asks for a Play review at a happy moment on the match detail screen (never on the live
- * scoring screen): the match is finished and the user's side won, or they are Player of the Match.
+ * 1.3.7: asks for a Play review at a happy moment on the match detail screen: the match is finished and the
+ * user's side won, or they are Player of the Match. 1.4.2 (QA V141-9): also on the scoring screen once the
+ * match is over and its result sheet has been closed (never while rallies are being scored; never over a
+ * modal). A short (flagged, < 10 min) match is not excluded.
  * Eligibility (>= 3 completed matches, once per 60 days per user) is in core/reviewPrompt.ts.
  *
  * 1.3.8 (QA V137-4): only right after the match finishes (seen finishing on this screen, or opened within
@@ -13,6 +15,7 @@ import { reviewMomentFor, reviewTriggered } from '../core/reviewPrompt';
 import type { Match } from '../core/types';
 import { backend } from '../services/backend';
 import { maybeAskForReview } from '../services/review';
+import { uiBusy, whenUiIdle } from './uiBusy';
 
 /** Server time when the backend has it (API: from the responses' Date header), else the phone clock. */
 export function reviewNow(): number {
@@ -40,8 +43,9 @@ export function useReviewPrompt(m: Match | null | undefined, uid: string): { onC
       const mo = reviewMomentFor(match, uid);
       if (!mo || asked.current) return () => undefined;
       let off: (() => void) | undefined;
-      // a short pause so the result is seen first
-      const timer = setTimeout(() => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let cancelIdle: (() => void) | undefined;
+      const go = () => {
         const u = backend.watchMyMatches(uid, (mine) => {
           off?.();
           off = undefined;
@@ -52,8 +56,18 @@ export function useReviewPrompt(m: Match | null | undefined, uid: string): { onC
         });
         if (asked.current) u(); // answered synchronously (demo)
         else off = u;
-      }, 1500);
+      };
+      // 1.4.0 (QA V139-7): never over the Player of the Match picker or any modal/dialog – wait until the
+      // result flow is closed, then a short pause so the result is seen first (and check again after it).
+      const afterPause = () => {
+        timer = setTimeout(() => {
+          if (uiBusy()) cancelIdle = whenUiIdle(afterPause);
+          else go();
+        }, 1500);
+      };
+      cancelIdle = whenUiIdle(afterPause);
       return () => {
+        cancelIdle?.();
         clearTimeout(timer);
         off?.();
       };

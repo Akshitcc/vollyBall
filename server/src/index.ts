@@ -10,7 +10,7 @@ import { CompositeVerifier, SessionSigner, SessionTokenVerifier } from './auth/o
 import { loadConfig, type Config } from './config';
 import type { Services } from './context';
 import { createDb, sslFromEnv } from './db/knex';
-import { migrateLocked } from './db/migrate';
+import { checkSchema, migrateLocked } from './db/migrate';
 import { uidForPhone } from './domain/users';
 import { LiveBus } from './live/bus';
 import { attachLive } from './live/ws';
@@ -35,6 +35,9 @@ async function main() {
   setLogger(new Logger(cfg.logLevel, undefined, { svc: 'volleylive-api' }));
   const db = createDb(cfg.databaseUrl, {}, sslFromEnv(process.env, cfg.databaseUrl));
   if (process.env.MIGRATE_ON_START === '1') log.info('migrations', { applied: (await migrateLocked(db)).join(',') || 'none' });
+  // 1.4.10 (QA 0019 notes): the schema checks also run at every start without MIGRATE_ON_START (read-only; a column
+  // dropped / retyped by hand stops the start with a readable message)
+  else await checkSchema(db);
 
   const redis = cfg.redisUrl ? new RedisClient(cfg.redisUrl) : null;
   const rateLimiter = new RateLimiter(undefined, undefined, redis ? new RedisRateStore(redis) : undefined);

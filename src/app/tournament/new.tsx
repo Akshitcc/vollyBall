@@ -114,7 +114,7 @@ export default function NewTournament() {
           <Text style={{ width: 26, fontWeight: '900', color: colors.muted }}>{i + 1}.</Text>
           <TeamDot color={t.color} size={14} style={{ marginRight: 8 }} />
           <Text style={{ flex: 1, fontWeight: '800' }}>{t.name}</Text>
-          <Pressable onPress={() => setTeams(teams.filter((x) => x.id !== t.id))}>
+          <Pressable accessibilityRole="button" onPress={() => setTeams(teams.filter((x) => x.id !== t.id))}>
             <Ionicons name="close-circle" size={22} color={colors.danger} />
           </Pressable>
         </Row>

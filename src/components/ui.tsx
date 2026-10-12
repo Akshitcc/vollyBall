@@ -21,6 +21,7 @@ import { letterSpacing } from '../i18n/format';
 import { clampInput, cleanText } from '../core/text';
 import { colors, font, onColor, radius, readableFill, shadow, space, swatchRing } from '../theme';
 import { PressableScale } from './PressableScale';
+import { PRESSABLE_CARD_ROLE } from './a11yRoles';
 import { useInsets } from './SafeFooter';
 
 const DISABLED = { bg: colors.disabledBg, fg: colors.disabledText };
@@ -144,10 +145,10 @@ export function Button({
 /** Lets a very long word (no spaces) wrap inside its box on web instead of overflowing. */
 export const breakWords = (Platform.OS === 'web' ? { wordBreak: 'break-word', overflowWrap: 'anywhere' } : {}) as TextStyle;
 
-export function Card({ children, style, onPress }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; onPress?: () => void }) {
+export function Card({ children, style, onPress, accessibilityLabel, testID }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; onPress?: () => void; accessibilityLabel?: string; testID?: string }) {
   if (onPress)
     return (
-      <PressableScale onPress={onPress} scaleTo={0.98} style={({ pressed }) => [styles.card, pressed && { opacity: 0.92 }, style]}>
+      <PressableScale accessibilityRole={PRESSABLE_CARD_ROLE} accessibilityLabel={accessibilityLabel} testID={testID} onPress={onPress} scaleTo={0.98} style={({ pressed }) => [styles.card, pressed && { opacity: 0.92 }, style]}>
         {children}
       </PressableScale>
     );
@@ -166,7 +167,8 @@ export function Field({ label, hint, error, inputRef, ...props }: TextInputProps
       <TextInput
         ref={inputRef}
         placeholderTextColor={colors.placeholder}
-        accessibilityLabel={error ? `${label.replace(/\s*\*$/, '')}, ${error}` : props.accessibilityLabel}
+        // 1.4.1 (QA V140-14): the visible label is the field's accessible name unless one is given (web had none)
+        accessibilityLabel={error ? `${label.replace(/\s*\*$/, '')}, ${error}` : (props.accessibilityLabel ?? label.replace(/\s*\*$/, ''))}
         aria-invalid={!!error}
         {...props}
         style={[styles.input, props.style, error ? { borderColor: colors.danger, borderWidth: 2, outlineColor: colors.danger } : null]}
@@ -330,7 +332,7 @@ export function Banner({
       <View style={{ marginLeft: 8, flex: 1 }}>
         <Text style={[font.small, { color: colors.ink, flexShrink: 1 }]}>{text}</Text>
         {action && (
-          <Pressable onPress={action.onPress} accessibilityRole="link" testID={action.testID} hitSlop={8}>
+          <Pressable onPress={action.onPress} accessibilityRole={PRESSABLE_CARD_ROLE} testID={action.testID} hitSlop={8}>
             <Text style={[font.small, { color: colors.primaryText, fontWeight: '800', textDecorationLine: 'underline', marginTop: 4 }]}>{action.label}</Text>
           </Pressable>
         )}
@@ -399,3 +401,5 @@ export const styles = StyleSheet.create({
     marginBottom: space(3),
   },
 });
+
+export { PRESSABLE_CARD_ROLE };

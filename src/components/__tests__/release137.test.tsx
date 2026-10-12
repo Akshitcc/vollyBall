@@ -236,7 +236,10 @@ describe('F135-1: admin review card', () => {
   const AdminReview = require('../../app/admin-review').default;
   const done = (v: object) => ({
     id: 'm1', status: 'finished', teamA: { name: 'A', players: [] }, teamB: { name: 'B', players: [] }, createdBy: 'x', scorerId: 'x', participantIds: [],
-    summary: { setsA: 2, setsB: 0, setScores: [{ a: 25, b: 10 }], winner: 'A' }, finishedAt: 1, updatedAt: 1, events: [], verification: v,
+    summary: { setsA: 2, setsB: 0, setScores: [{ a: 25, b: 10 }], winner: 'A' }, finishedAt: 1, updatedAt: 1, verification: v,
+    // 1.4.5 (V144-2): a real winning log (an empty one is "finished without a winner" – an admin resolution card)
+    rules: { ...require('../../core/rules').presetRules('indoor'), bestOf: 1, decidingSetPoints: 25 }, firstServe: 'A',
+    events: Array.from({ length: 25 }, (_, i) => ({ type: 'point', side: 'A', at: i + 1 })),
   });
   it('says "Waiting for opponent confirmation" and that approval only clears the flag', async () => {
     mockBackend.listFlagged.mockResolvedValueOnce([done({ status: 'pending' })]);
@@ -246,5 +249,16 @@ describe('F135-1: admin review card', () => {
     expect(screen.getByTestId('approve-note')).toBeTruthy();
     expect(screen.getByTestId('open-admin-feedback')).toBeTruthy();
     expect(screen.getByTestId('open-admin-daily')).toBeTruthy();
+  });
+  it('1.4.5 (V144-2): a finished match without a winner gets the resolutions, not approve / void', async () => {
+    mockBackend.listFlagged.mockResolvedValueOnce([{ ...done({ status: 'pending' }), events: [] }]);
+    await render(<AdminReview />);
+    await flush();
+    expect(screen.getByTestId('abandon-panel-m1-winnerless')).toBeTruthy();
+    expect(screen.getByTestId('resolve-reopen-m1')).toBeTruthy();
+    expect(screen.getByTestId('resolve-abandon-m1')).toBeTruthy();
+    expect(screen.getByTestId('resolve-void-m1')).toBeTruthy();
+    expect(screen.queryByTestId('approve-m1')).toBeNull();
+    expect(screen.queryByTestId('flagged-captain-m1')).toBeNull();
   });
 });

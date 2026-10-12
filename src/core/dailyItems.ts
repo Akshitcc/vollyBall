@@ -20,8 +20,17 @@ export interface DailyItem {
   attribution?: string | null;
   sourceUrl?: string | null;
   active: boolean;
-  /** 1.3.9 (V138-7): when an admin added it (server time, ms). Bundled items have none (= always in the rotation). */
+  /** 1.3.9 (V138-7): when an admin added it (server time, ms). Bundled items have none (= always in the rotation). 1.4.0 (V139-4): orders the rotation (pickDaily). */
   createdAt?: number | null;
+  /**
+   * 1.4.1 (QA V140-7): when it was turned off or deleted (server time, ms; set once, never changed). An item
+   * that is off keeps its place in the rotation cycles that had already started (pickDaily), so hiding or
+   * deleting a fact never reshapes the rotation. Turning it back on makes a NEW item (a copy) – each item has
+   * exactly one active span [createdAt, removedAt].
+   */
+  removedAt?: number | null;
+  /** 1.4.1 (V140-7): deleted by an admin – kept only as a tombstone (not listed for admins, never shown). */
+  deleted?: boolean;
 }
 
 const RULES = 'FIVB Official Volleyball Rules';
@@ -117,29 +126,99 @@ export function istDayStart(now = Date.now()): number {
   return Date.parse(`${todayIST(now)}T00:00:00+05:30`);
 }
 
+/** 1.4.0 (QA V139-4): first day of the first rotation cycle (2026-01-01 IST, as istDayNumber). */
+export const DAILY_EPOCH_DAY = 20454;
+
+type Ranked = { item: DailyItem; dated: number | null; join: number; leave: number };
+const byId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const ms = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/**
+ * The rotation, ranked: newest first (createdAt), undated items (bundled, pre-1.3.9 docs) last, ties by id.
+ * `join` = the first IST day a cycle may start with the item in it (the day after it was added); `leave` =
+ * the last such day (the IST day it was turned off / deleted; +∞ while it is on). Only stored server
+ * timestamps are used – never the phone's clock (1.4.1, V140-7: a phone 60 s behind used to treat a fact
+ * added a moment ago as "from the future" and reshape the rotation). An inactive item without removedAt
+ * (turned off before 1.4.1) is in no cycle, as before.
+ */
+function rankDaily(items: readonly DailyItem[]): Ranked[] {
+  return items
+    .filter((i) => i.active || ms(i.removedAt) != null)
+    .map((item) => {
+      const dated = ms(item.createdAt);
+      const removed = item.active ? null : ms(item.removedAt);
+      return { item, dated, join: dated == null ? -Infinity : istDayNumber(dated) + 1, leave: removed == null ? Infinity : istDayNumber(removed) };
+    })
+    .filter((r) => r.join <= r.leave)
+    .sort((a, b) => (b.dated ?? -Infinity) - (a.dated ?? -Infinity) || byId(a.item.id, b.item.id));
+}
+
 /**
  * Today's item (+offset for "next").
  *
- * 1.3.9 (QA V138-7) – stable daily selection:
- *  - the rotation is the active items ORDERED BY ID, and the rotation index is the IST day number
- *    (`list[day % n]`), so every item comes round once in any n consecutive days;
- *  - an item an admin adds today (createdAt ≥ today's IST midnight) joins the rotation from TOMORROW, so
- *    adding a fact never changes today's fact for anyone, and the new fact is shown within the next cycle
- *    (at most n days, n = number of items in the rotation);
- *  - deactivating or deleting an item takes effect at once (an admin hiding a fact expects it gone), which
- *    can change today's fact – documented in KNOWN-GAPS;
- *  - bundled items have no createdAt and are always in the rotation; an item with no createdAt from a backend
- *    (pre-1.3.9 Firebase docs) is treated the same.
+ * 1.4.0 (QA V139-4) – the rotation is a sequence of CYCLES from DAILY_EPOCH_DAY:
+ *  - a cycle starting on IST day c holds the items that were on at the start of day c and added before it
+ *    (undated ones always), in rankDaily order, and lasts as many days as it has items: day c + j shows item
+ *    j. The next cycle starts the day after the last one;
+ *  - so every active item is shown exactly once per cycle; new items lead the next cycle (newest first);
+ *  - adding an item never changes today's fact (it is not in any cycle that has already started).
+ * 1.4.1 (QA V140-7) – cycle membership depends only on server timestamps that never change afterwards
+ * (createdAt, removedAt), so nothing an admin does later changes an earlier cycle:
+ *  - an item turned off or deleted on day R stays a MEMBER of every cycle that started on or before R (its
+ *    slot is kept, so the other items keep their days); its own remaining slot shows a substitute – the next
+ *    active item of that cycle (that one is then seen twice in the cycle). From the next cycle on it is gone;
+ *  - so turning off / deleting an item never changes today's fact unless it IS today's fact;
+ *  - turning an item back on creates a new item (new createdAt), which joins the next cycle like any addition;
+ *  - gaps: an item shown on day d is shown again within (length of its cycle) + (length of the next cycle)
+ *    − 1 days, and normally within the next cycle's length + the items removed during its cycle (each cycle
+ *    is at most the number of items on when it starts);
+ *  - which day it is comes from the phone's clock (the card switches at the phone's IST midnight); nothing
+ *    else does. A createdAt in the future (demo only: phone time) just means the item joins later.
+ * Pure function of (items, IST date): the same on every phone and in every time zone.
  */
 export function pickDaily(items: readonly DailyItem[], now = Date.now(), offset = 0): DailyItem | null {
-  const today = istDayStart(now);
-  const list = items
-    .filter((i) => i.active && !(typeof i.createdAt === 'number' && i.createdAt >= today))
-    .slice()
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  if (!list.length) return null;
-  const n = list.length;
-  return list[(((istDayNumber(now) + offset) % n) + n) % n];
+  return dailySlot(items, istDayNumber(now) + offset)?.item ?? null;
+}
+
+/**
+ * 1.4.1: the cycle that contains IST day `day` (start day, length) and the item shown that day – pickDaily's
+ * engine, exported for tests and support tools.
+ */
+export function dailySlot(items: readonly DailyItem[], day: number): { item: DailyItem; start: number; length: number } | null {
+  const ranked = rankDaily(items);
+  const anyActive = ranked.find((r) => r.item.active);
+  if (!anyActive) return null;
+  const members = (start: number) => ranked.filter((r) => r.join <= start && start <= r.leave);
+  /** slot j of cycle m; a removed item's slot shows the next active member of the cycle (or any active item). */
+  const show = (m: Ranked[], j: number): DailyItem => {
+    for (let k = 0; k < m.length; k++) {
+      const r = m[(j + k) % m.length];
+      if (r.item.active) return r.item;
+    }
+    return anyActive.item;
+  };
+  let c = DAILY_EPOCH_DAY;
+  if (day < c) {
+    const m = members(c).length ? members(c) : ranked;
+    return { item: show(m, (((day - c) % m.length) + m.length) % m.length), start: c - m.length, length: m.length };
+  }
+  for (;;) {
+    const m = members(c);
+    if (!m.length) {
+      // nothing yet (or everything removed): the next cycle starts when the next item may join
+      const next = Math.min(...ranked.map((r) => r.join).filter((j) => j > c));
+      if (!Number.isFinite(next) || next > day) return null;
+      c = next;
+      continue;
+    }
+    if (day < c + m.length) return { item: show(m, day - c), start: c, length: m.length };
+    c += m.length;
+  }
+}
+
+/** 1.4.1 (V140-7): what the public list sends for an item that is off or deleted – only what the rotation needs. */
+export function dailyTombstone(i: DailyItem): DailyItem {
+  return { id: i.id, type: i.type, textEn: '', textHi: '', attribution: null, sourceUrl: null, active: false, createdAt: i.createdAt ?? null, removedAt: i.removedAt ?? null, ...(i.deleted ? { deleted: true } : {}) };
 }
 
 /**
@@ -167,6 +246,8 @@ const bad = (field: string, code = 'daily_invalid') => Object.assign(new CodedEr
 export function checkDailyItem(x: Partial<DailyItem>): Omit<DailyItem, 'id'> {
   const type = x.type;
   if (type !== 'fact' && type !== 'quote') throw bad('type');
+  // 1.4.2 (QA info): active is a real boolean – 'false' / 0 were taken as "on"
+  if (x.active !== undefined && typeof x.active !== 'boolean') throw bad('active');
   const txt = (v: unknown, field: string, max: number, required: boolean) => {
     const s = String(v ?? '').trim();
     if (!s) {

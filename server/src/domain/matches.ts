@@ -5,7 +5,7 @@
  * `Match` shape, so the UI and the event-sourced scoring engine are unchanged.
  */
 import type { RuleSet } from '../../../src/core/rules';
-import { PARTICIPANTS_MESSAGE, ROSTER_LOCKED_MESSAGE, ROSTER_MESSAGES, canonicalParticipants, isAbandonOnly, missingPlayers, participantsMatchRoster, rosterErrors } from '../../../src/core/roster';
+import { PARTICIPANTS_MESSAGE, ROSTER_MESSAGES, canonicalParticipants, isAbandonOnly, missingPlayers, participantsMatchRoster, rosterErrors } from '../../../src/core/roster';
 import { offCourtCredit, rotationTimeline, type Lineups, type RotationState } from '../../../src/core/rotation';
 import { computeState, summarize, type MatchEvent, type Side } from '../../../src/core/scoring';
 import type { Match, MatchPlayer, MatchTeam, StreamInfo } from '../../../src/core/types';
@@ -16,13 +16,24 @@ import { hasStoredRegistration } from '../../../src/core/registration';
 import { dobString } from './users';
 import type { Identity } from '../auth/verifier';
 import { topics } from '../live/bus';
-import { checkNotPast, checkOrder } from '../../../src/core/validate';
+import { checkNotPast, checkOrder, MAX_SCHEDULE_AHEAD_MS, scheduleMsOk, TIME_INVALID_CODE, ValidationError } from '../../../src/core/validate';
+import { ABANDON_PENDING, deleteProblem, finishedFreezeProblem, GUARD_MESSAGES, MATCH_DELETE_FORBIDDEN, MATCH_FINISHED, MATCH_RULES_END, MATCH_SETUP_LOCKED, matchOver, SETUP_FIELDS } from '../../../src/core/matchGuards';
+import { maxEventsOf } from '../../../src/core/lifecycle';
+import { abandonPatch, ABANDON_MESSAGES, answerAbandon, needsAdminAction, planAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../../src/core/abandon';
+import { CodedError } from '../../../src/core/codedError';
+import { REPAIR_INVALID, REPAIR_MESSAGES, repairPatch, type RepairFix } from '../../../src/core/verdictRepair';
+import { eligibleHandoffAdmins, HANDOVER_MESSAGES, handoverProblem, reassignProblem, reassignRecord } from '../../../src/core/scorerHandoff';
+import { reportAbandon } from '../../../src/core/abandon';
 import {
   CAPTAIN_MESSAGES,
   CONFIRM_MESSAGES,
   captainsProblem,
+  MATCH_NO_VERDICT,
+  MATCH_NO_VERDICT_MESSAGE,
+  verdictSetupProblem,
   captainVerdict,
   confirmProblem,
+  currentVerification,
   expectedConfirmer,
   isCompleted,
   isTerminal,
@@ -34,7 +45,7 @@ import {
 } from '../../../src/core/antifraud';
 import type { MatchCaptains, MatchVerification, VerificationStatus } from '../../../src/core/types';
 import { isAdmin } from '../context';
-import { canonical, changedKeys, insertRuleSet, loadRuleSets, minus, newId, nowDate, placeCols, placeFromRow, toDate, toMs, type Trx } from './util';
+import { canonical, changedKeys, insertRuleSet, loadRuleSets, minus, newId, nowDate, txRetry, placeCols, placeFromRow, toDate, toMs, type Trx } from './util';
 
 export const MATCH_NO_WINNER = 'match_no_winner';
 export const MATCH_NO_WINNER_MESSAGE = 'A match can only be finished when a team has won the required sets';
@@ -53,7 +64,11 @@ export type ApiMatch = Match & { rotation: RotationState };
 
 /** Server-only fields (1.3.0): never part of a client document, written by dedicated actions only. */
 type ServerOnly = 'verification' | 'startedServerAt' | 'finishedServerAt' | 'confirmedAt';
-type Doc = Omit<Match, 'id' | 'summary' | 'createdAt' | 'updatedAt' | ServerOnly>;
+/** 1.4.5: written by the abandon / resolve actions and the scoring writes only (core/matchGuards.ts MATCH_ACTION_FIELDS). */
+type ActionOnly = 'maxEvents' | 'wasWon' | 'abandon' | 'abandonRequest' | 'resolution' | 'scorerReassign' | 'reopenEpoch' | 'abandonHistory' | 'abandonRequests' | 'abandonRequestAt' | 'verdictRepair';
+type Doc = Omit<Match, 'id' | 'summary' | 'createdAt' | 'updatedAt' | ServerOnly | ActionOnly>;
+/** The stored match before a write: the document plus what the actions keep. */
+type Stored = Doc & Pick<Match, ActionOnly>;
 export const MATCH_KEYS: (keyof Doc)[] = [
   'title', 'teamA', 'teamB', 'rules', 'firstServe', 'events', 'status', 'createdBy', 'scorerId', 'participantIds', 'location',
   'scheduledAt', 'startedAt', 'finishedAt', 'tournamentId', 'fixtureId', 'challengeId', 'stream', 'interestedIds', 'lineups', 'captains', 'teamSizeMode',
@@ -275,12 +290,26 @@ export async function loadMatches(s: Services, db: Trx, ids: string[], viewer: I
       ...(r.team_size_mode ? { teamSizeMode: r.team_size_mode } : {}),
       verification: verificationFromRow(r, viewer, parts),
       // 1.3.9 (V138-11): the confirmation time (verified_at), apart from the match's own times
-      confirmedAt: r.captain_verdict === 'confirmed' || (!r.captain_verdict && r.verification_status === 'confirmed') ? toMs(r.verified_at ?? null) : null,
+      // 1.4.6 (QA V145-2): only a verdict of the current re-open epoch
+      confirmedAt: (r.captain_verdict === 'confirmed' || (!r.captain_verdict && r.verification_status === 'confirmed')) && Number(r.verdict_epoch ?? 0) === Number(r.reopen_epoch ?? 0) ? toMs(r.verified_at ?? null) : null,
       startedServerAt: toMs(r.started_server_at),
       // finished_at is always the server's clock (QA NB-R3), stamped when the match finished.
       finishedServerAt: r.status === 'finished' ? toMs(r.finished_at) : null,
       createdAt: toMs(r.created_at)!,
       updatedAt: toMs(r.updated_at)!,
+      // 1.4.5 (QA V144-1/2): abandon bookkeeping (migration 0016)
+      maxEvents: Math.max(Number(r.max_events ?? 0), Number(r.event_count ?? 0)),
+      wasWon: !!r.was_won,
+      abandon: jsonCol(r.abandon_info),
+      abandonRequest: jsonCol(r.abandon_request),
+      resolution: jsonCol(r.resolution),
+      scorerReassign: jsonCol(r.scorer_reassign),
+      // 1.4.6 (QA V145-2/5/12, migration 0017)
+      reopenEpoch: Number(r.reopen_epoch ?? 0),
+      abandonHistory: jsonCol(r.abandon_history),
+      abandonRequests: Number(r.abandon_request_count ?? 0),
+      abandonRequestAt: r.abandon_request_at == null ? null : Number(r.abandon_request_at),
+      verdictRepair: jsonCol(r.verdict_repair), // 1.4.8 (QA V147-2, migration 0018)
     };
     // match_participants has no order column (MySQL returns it by user id): rebuild the canonical order.
     m.participantIds = canonicalParticipants(m);
@@ -295,7 +324,7 @@ export async function loadMatches(s: Services, db: Trx, ids: string[], viewer: I
  * scorer, creator, captains); everyone sees the coarse status (QA AF-53).
  */
 function verificationFromRow(
-  r: { id: string; verification_status?: VerificationStatus; verified_by?: string | null; verified_at?: Date | null; dispute_reason?: string | null; captain_verdict?: 'confirmed' | 'rejected' | null; reviewed_by?: string | null; reviewed_at?: Date | null; scorer_id: string; created_by: string; captain_a?: string | null; captain_b?: string | null },
+  r: { id: string; verification_status?: VerificationStatus; verified_by?: string | null; verified_at?: Date | null; dispute_reason?: string | null; captain_verdict?: 'confirmed' | 'rejected' | null; reviewed_by?: string | null; reviewed_at?: Date | null; verdict_epoch?: number | null; scorer_id: string; created_by: string; captain_a?: string | null; captain_b?: string | null },
   viewer: Identity | null,
   parts: { match_id: string; user_id: string }[],
 ): MatchVerification {
@@ -308,6 +337,7 @@ function verificationFromRow(
     reviewedBy: r.reviewed_by ?? null,
     reviewedAt: toMs(r.reviewed_at ?? null),
     captain: r.captain_verdict ?? null,
+    epoch: Number(r.verdict_epoch ?? 0),
   };
 }
 
@@ -316,12 +346,15 @@ export async function getMatch(s: Services, id: string, viewer: Identity | null)
   return m ?? null;
 }
 
+const jsonCol = <T>(v: unknown): T | null => (v == null ? null : typeof v === 'string' ? (JSON.parse(v) as T) : (v as T));
+
 // ---------------- writing ----------------
 const docOf = (m: Match): Doc => {
-  const { id: _i, summary: _s, createdAt: _c, updatedAt: _u, verification: _v, startedServerAt: _ss, finishedServerAt: _fs, confirmedAt: _ca, ...rest } = m as ApiMatch;
+  const { id: _i, summary: _s, createdAt: _c, updatedAt: _u, verification: _v, startedServerAt: _ss, finishedServerAt: _fs, confirmedAt: _ca, maxEvents: _mx, wasWon: _w, abandon: _a, abandonRequest: _ar, resolution: _r, scorerReassign: _sr, reopenEpoch: _re, abandonHistory: _ah, abandonRequests: _arc, abandonRequestAt: _ara, verdictRepair: _vr, ...rest } = m as ApiMatch;
   delete (rest as Partial<ApiMatch>).rotation;
   return { ...rest, interestedIds: rest.interestedIds ?? [], lineups: rest.lineups ?? null };
 };
+const storedOf = (m: Match): Stored => ({ ...docOf(m), maxEvents: m.maxEvents ?? null, wasWon: m.wasWon ?? null, abandon: m.abandon ?? null, abandonRequest: m.abandonRequest ?? null, resolution: m.resolution ?? null, scorerReassign: m.scorerReassign ?? null, reopenEpoch: m.reopenEpoch ?? 0, abandonHistory: m.abandonHistory ?? null, abandonRequests: m.abandonRequests ?? 0, abandonRequestAt: m.abandonRequestAt ?? null, verdictRepair: m.verdictRepair ?? null });
 
 async function existingUsers(trx: Trx, ids: string[]): Promise<Set<string>> {
   if (!ids.length) return new Set();
@@ -333,7 +366,7 @@ async function existingUsers(trx: Trx, ids: string[]): Promise<Set<string>> {
  * Only the parts that changed are rewritten; the event log is diffed so a new
  * rally inserts one row.
  */
-async function writeMatch(s: Services, trx: Trx, id: string, before: Doc | null, after: Doc, branch: MatchBranch | 'create' = 'create', opts: { seed?: boolean } = {}) {
+async function writeMatch(s: Services, trx: Trx, id: string, before: Stored | null, after: Doc, branch: MatchBranch | 'create' = 'create', opts: { seed?: boolean } = {}) {
   const now = nowDate();
   // ----- 1.3.0 anti-fraud: statuses, server times, captains -----
   if (!before) {
@@ -349,8 +382,26 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Doc | null,
     // Scoring can't be handed over once the match is over (QA PM-13).
     if ((before.status === 'finished' || before.status === 'abandoned') && ch.includes('scorerId'))
       throw new HttpError(409, MATCH_TERMINAL, 'This match is over; the scorer can no longer change');
+    // 1.4.2 (QA V141-8): a finished match's score never changes – no undo, no rally, never back to live; only
+    // the credit / shot type of one of the last 3 rallies (core/matchGuards.ts finishedScoreProblem, like the rules)
+    // 1.4.3 (QA V142-1): and nothing else about it either – rules (points per set, deciding set, win-by…),
+    // first serve, lineups, title, place, times, links, stream, "I want to play": every changed key except the
+    // events → 409 match_finished, also before the Player of the Match (core finishedFreezeProblem).
+    if (finishedFreezeProblem(before, ch, after.events, after.status))
+      throw new HttpError(409, MATCH_FINISHED, GUARD_MESSAGES[MATCH_FINISHED]);
     if (!statusMoveOk(before, after.status))
       throw new HttpError(409, MATCH_STATUS_MOVE, `A match can't go from ${before.status} to ${after.status}`);
+    // 1.4.5 (QA V144-1): abandoning is the abandon action's (core/abandon.ts: records who, when, the score, the review)
+    if (after.status === 'abandoned' && before.status !== 'abandoned')
+      throw new HttpError(409, MATCH_STATUS_MOVE, 'Use the abandon action to abandon a match');
+    // 1.4.5 (consent policy): scoring is paused while an abandon request waits for an answer
+    if (before.status === 'live' && before.abandonRequest && (ch.includes('events') || ch.includes('status')))
+      throw new HttpError(409, ABANDON_PENDING, GUARD_MESSAGES[ABANDON_PENDING]);
+    // 1.4.5 (QA V144-4) / 1.4.6 (QA V145-3): the set-up – rules, first server, teams, participants, captains, team size
+    // – is frozen once the first rally ever existed (maxEvents: undo to 0 doesn't reopen it), as in core guardUpdate,
+    // the demo and firestore.rules (core/lifecycle.ts 'editSetup')
+    if (maxEventsOf(before) > 0 && ch.some((k) => (SETUP_FIELDS as readonly string[]).includes(k)))
+      throw new HttpError(409, MATCH_SETUP_LOCKED, GUARD_MESSAGES[MATCH_SETUP_LOCKED]);
   }
   // Server time only (QA AF-14/AF-17): startedAt is stamped by the server when the match first goes
   // live; a client value is ignored.
@@ -370,18 +421,20 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Doc | null,
 
   // QA G13 / G9: finish on or after start; a newly set scheduled time can't already be over.
   if (changed.has('startedAt') || changed.has('finishedAt')) checkOrder('finishedAt', after.startedAt, after.finishedAt);
+  // 1.4.2 (QA V141-7): a safe integer, at most 2 years ahead when newly set (time_invalid before time_in_past)
+  if ((!before || changed.has('scheduledAt')) && after.scheduledAt != null && (!scheduleMsOk(after.scheduledAt) || after.scheduledAt > Date.now() + MAX_SCHEDULE_AHEAD_MS))
+    throw new ValidationError(TIME_INVALID_CODE, 'scheduledAt');
   if ((!before || changed.has('scheduledAt')) && after.status === 'scheduled') checkNotPast('scheduledAt', after.scheduledAt);
   const rosterChanged = !before || !sameRoster(before.teamA, after.teamA) || !sameRoster(before.teamB, after.teamB);
   if (changed.has('teamA') || changed.has('teamB') || changed.has('teamSizeMode')) validateTeams(after.teamA, after.teamB, after.teamSizeMode);
-  // 1.3.6: the team size mode is part of the roster: fixed once the first rally is played.
-  if (before && changed.has('teamSizeMode') && before.events.length > 0) throw forbidden('matches.roster.locked', ROSTER_LOCKED_MESSAGE);
-  // Players can only change before the first rally (the scorer can't rewrite rosters mid-match).
-  if (before && rosterChanged && before.events.length > 0) throw forbidden('matches.roster.locked', ROSTER_LOCKED_MESSAGE);
+  // 1.3.6 / 1.4.6 (QA V145-3): players and the team size mode are part of the set-up lock above (409 match_setup_locked
+  // once maxEvents > 0); a roster that differs only by the server-filled photo is caught here the same way.
+  if (before && (rosterChanged || changed.has('teamSizeMode')) && maxEventsOf(before) > 0) throw new HttpError(409, MATCH_SETUP_LOCKED, GUARD_MESSAGES[MATCH_SETUP_LOCKED]);
   if (rosterChanged || changed.has('teamA') || changed.has('teamB')) Object.assign(after, await resolveRoster(trx, after));
   // Captains (core/antifraud.ts): fixed at creation; may only change with the roster, before the
   // first rally. A registered team's captain is filled in from the team.
   if (!before || rosterChanged || changed.has('captains')) {
-    if (before && before.events.length > 0) throw forbidden('matches.captains.locked', 'Captains are fixed once scoring has started');
+    if (before && maxEventsOf(before) > 0) throw new HttpError(409, MATCH_SETUP_LOCKED, GUARD_MESSAGES[MATCH_SETUP_LOCKED]);
     const teamCaptains = await teamCaptainsOf(trx, after);
     const caps: Partial<MatchCaptains> = { ...(after.captains ?? {}) };
     if (teamCaptains.A) caps.A = teamCaptains.A;
@@ -390,6 +443,12 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Doc | null,
     const problem = opts.seed && !after.captains ? null : captainsProblem(after, teamCaptains);
     if (problem) throw new HttpError(400, problem, CAPTAIN_MESSAGES[problem]);
   }
+  // 1.4.8 (QA V147-1): at create and on every roster / captain / participant edit, someone can confirm the result and
+  // the scorer isn't on that side (core verdictSetupProblem; a scorer-only change is the handoff's, checked there)
+  // 1.4.10 (QA V149-2): with the stored verdict reference (scorerReassign.from) – `after` is the client doc, which
+  // never carries it – like core, the demo and the rules (GU11)
+  if (!opts.seed && (!before || rosterChanged || changed.has('captains') || changed.has('participantIds')) && verdictSetupProblem({ ...after, scorerReassign: before?.scorerReassign ?? null } as unknown as Match))
+    throw new HttpError(400, MATCH_NO_VERDICT, MATCH_NO_VERDICT_MESSAGE);
   // participantIds = both rosters (+ creator/scorer), like participantsOk() in firestore.rules.
   // Checked whenever the rosters or the participants change (a handover alone doesn't re-check, as in the rules).
   if ((!before || rosterChanged || changed.has('participantIds')) && !participantsMatchRoster(after))
@@ -420,6 +479,10 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Doc | null,
   });
   const state = computeState(after.rules, after.events, after.firstServe);
   const summary = summarize(state);
+  // 1.4.4 (QA V143-8): new rules / first serve that make the last rally the winning one would leave a won match
+  // 'live' – refused like the events-after-the-end case above (core rulesEndProblem, also used by the demo)
+  if (before && (changed.has('rules') || changed.has('firstServe')) && after.status === 'live' && after.events.length && state.finished)
+    throw new HttpError(400, MATCH_RULES_END, GUARD_MESSAGES[MATCH_RULES_END]);
   // QA NB-R2 (SCORE-04): 'finished' only when the event log has a winner (the required sets won).
   if (after.status === 'finished' && !state.winner && (!before || changed.has('status') || changed.has('events')))
     throw new HttpError(400, MATCH_NO_WINNER, MATCH_NO_WINNER_MESSAGE);
@@ -449,6 +512,10 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Doc | null,
     team_size_mode: after.teamSizeMode ?? null,
     ...(startedServer ? { started_server_at: startedServer } : after.status === 'scheduled' ? { started_server_at: null } : {}),
     event_count: after.events.length,
+    // 1.4.5 (QA V144-1): only grows (undo never lowers it) / latch once finished
+    max_events: Math.max(before?.maxEvents ?? 0, before?.events.length ?? 0, after.events.length),
+    // 1.4.6 (QA V145-7): also when the replayed events have a winner (whatever status was sent)
+    was_won: before?.wasWon || after.status === 'finished' || state.winner ? 1 : 0,
     summary: JSON.stringify(summary),
     updated_at: now,
   };
@@ -591,7 +658,7 @@ export async function createMatch(s: Services, viewer: Identity, input: Doc, fix
   delete (doc as Partial<Match>).playerOfMatchId; // set only through PUT /player-of-match
   // The server stamps finishedAt (seeds keep their historical times).
   if (!fixedId) doc.finishedAt = serverFinishedAt(null, doc.status);
-  await s.db.transaction((trx) => writeMatch(s, trx, id, null, doc, 'create', { seed: !!fixedId }));
+  await txRetry(s.db, (trx) => writeMatch(s, trx, id, null, doc, 'create', { seed: !!fixedId }));
   const m = await getMatch(s, id, viewer);
   publishMatch(s, m, id);
   if (m && m.status === 'live') notifyLive(s, m);
@@ -601,14 +668,26 @@ export async function createMatch(s: Services, viewer: Identity, input: Doc, fix
 /** Generic update (the old updateDoc): the rule branch is chosen from what changed. */
 export async function patchMatch(s: Services, viewer: Identity, id: string, patch: Partial<Doc>) {
   let wentLive = false;
-  const branch = await s.db.transaction(async (trx) => {
+  const branch = await txRetry(s.db, async (trx) => {
     if (!(await trx('matches').where({ id }).forUpdate().first('id'))) throw notFound('Match not found');
     const [current] = await loadMatches(s, trx, [id], { uid: '\u0000internal', phone: null });
     const full = await withPrivateStream(trx, current);
-    const before = docOf(full);
-    const after: Doc = { ...before, ...patch } as Doc;
+    const before = storedOf(full);
+    // 1.4.5 (QA V144-1): PATCH {status: 'abandoned'} alone (older apps) on a scheduled / live match is the abandon
+    // action; anything else with it (or on a closed match) keeps the 1.4.4 answers (403 / 409 match_terminal)
+    if (patch.status === 'abandoned' && (before.status === 'live' || before.status === 'scheduled')
+      && Object.keys(patch).every((k) => k === 'status' || k === 'updatedAt' || k === 'finishedAt')) {
+      await abandonIn(s, trx, viewer, full);
+      return 'scorer' as MatchBranch;
+    }
+    const after: Doc = { ...docOf(full), ...patch } as Doc;
     after.finishedAt = serverFinishedAt(before, after.status);
     const b = decideMatchUpdate(before, after, viewer);
+    // 1.4.5 (QA V144-8, interim): after the first rally scoring goes only to the scorer's own side (or an admin)
+    if (after.scorerId !== before.scorerId) {
+      const hp = handoverProblem(before, after.scorerId, { targetIsAdmin: isAdmin(s, after.scorerId) });
+      if (hp) throw new HttpError(403, hp, HANDOVER_MESSAGES[hp]);
+    }
     await writeMatch(s, trx, id, before, after, b);
     wentLive = before.status !== 'live' && after.status === 'live';
     return b;
@@ -622,16 +701,16 @@ export async function patchMatch(s: Services, viewer: Identity, id: string, patc
 /** Scorer saving the score (old saveMatchProgress). Summary and status are derived on the server. */
 export async function saveProgress(s: Services, viewer: Identity, id: string, p: { events: MatchEvent[]; startedAt?: number | null; finishedAt?: number | null }) {
   let wentLive = false;
-  await s.db.transaction(async (trx) => {
+  await txRetry(s.db, async (trx) => {
     if (!(await trx('matches').where({ id }).forUpdate().first('id'))) throw notFound('Match not found');
     const [current] = await loadMatches(s, trx, [id], { uid: '\u0000internal', phone: null });
     const full = await withPrivateStream(trx, current);
-    const before = docOf(full);
+    const before = storedOf(full);
     if (before.scorerId !== viewer.uid) throw forbidden('matches.update.scorer', 'Only the assigned scorer can change the score');
     const st = computeState(before.rules, p.events, before.firstServe);
     const finished = st.finished;
     const after: Doc = {
-      ...before,
+      ...docOf(full),
       events: p.events,
       status: finished ? 'finished' : 'live',
       // Server time only (1.3.0): writeMatch stamps startedAt when the match first goes live.
@@ -658,7 +737,7 @@ export async function saveProgress(s: Services, viewer: Identity, id: string, p:
  * (within 24 h of the finish), only once, and only a player of this match.
  */
 export async function setPlayerOfMatch(s: Services, viewer: Identity, id: string, playerId: string) {
-  await s.db.transaction(async (trx) => {
+  await txRetry(s.db, async (trx) => {
     if (!(await trx('matches').where({ id }).forUpdate().first('id'))) throw notFound('Match not found');
     const [m] = await loadMatches(s, trx, [id], { uid: '\u0000internal', phone: null });
     const problem = potmProblem(m, viewer.uid, playerId);
@@ -681,19 +760,33 @@ async function withPrivateStream(trx: Trx, m: ApiMatch): Promise<ApiMatch> {
   return r?.stream_ingest_url ? { ...m, stream: { ...m.stream, ingestUrl: r.stream_ingest_url } } : m;
 }
 
-/** matches delete: createdBy == uid() && status != 'live' */
+/**
+ * matches delete. 1.4.6 (QA V145-1, core/lifecycle.ts 'delete'): only a match that never had a rally (maxEvents == 0 –
+ * undo to 0 doesn't count) and has no abandon record, request or admin re-open; by its creator or an admin who isn't
+ * part of it. 1.4.7 (QA V146-1): check-then-act in ONE transaction – the match row is locked (SELECT … FOR UPDATE,
+ * like saveProgress and every other write), the check runs on the locked state, and the DELETE is conditional again
+ * (max_events = 0, no event rows, no abandon / request / resolution) and must remove exactly one row. Child rows
+ * (sides, players, participants, requests, sets, points, timeouts, lineups, photo rows) go with it in the same
+ * transaction (ON DELETE CASCADE); a save that waited on the lock then finds no match (404).
+ */
 export async function deleteMatch(s: Services, viewer: Identity, id: string) {
-  const r = await s.db('matches').where({ id }).first('created_by', 'status', 'rule_set_id');
-  if (!r) throw notFound('Match not found');
-  if (r.status === 'live') throw forbidden('matches.delete', 'A live match cannot be deleted');
-  // 1.3.0 (QA AF-50/BN-11): a finished match is history (and may carry a result/flag): only an admin deletes it.
-  if (r.status === 'finished') {
-    if (!isAdmin(s, viewer.uid)) throw forbidden('matches.delete.finished', 'A finished match can only be deleted by an admin');
-  } else if (r.created_by !== viewer.uid && !isAdmin(s, viewer.uid)) throw forbidden('matches.delete', 'Only the creator can delete a match that is not live');
-  const photos: { storage_key: string }[] = await s.db('match_photos').where({ match_id: id }).select('storage_key');
-  await s.db.transaction(async (trx) => {
-    await trx('matches').where({ id }).del();
+  const photos = await txRetry(s.db, async (trx) => {
+    const r = await trx('matches').where({ id }).forUpdate().first('rule_set_id');
+    if (!r) throw notFound('Match not found');
+    const [m] = await loadMatches(s, trx, [id], { uid: '\u0000internal', phone: null });
+    if (!m || deleteProblem(m, viewer.uid, isAdmin(s, viewer.uid))) throw new HttpError(403, MATCH_DELETE_FORBIDDEN, GUARD_MESSAGES[MATCH_DELETE_FORBIDDEN]);
+    const keys: { storage_key: string }[] = await trx('match_photos').where({ match_id: id }).select('storage_key');
+    const gone = await trx('matches')
+      .where({ id })
+      .andWhere((q) => q.whereNull('max_events').orWhere('max_events', 0))
+      .whereNull('abandon_info')
+      .whereNull('abandon_request')
+      .whereNull('resolution')
+      .whereNotExists((q) => q.select(trx.raw('1')).from('points').whereRaw('points.match_id = matches.id'))
+      .del();
+    if (gone !== 1) throw new HttpError(409, MATCH_DELETE_FORBIDDEN, GUARD_MESSAGES[MATCH_DELETE_FORBIDDEN]);
     await trx('rule_sets').where({ id: r.rule_set_id }).del();
+    return keys;
   });
   await Promise.all(photos.map((p) => s.storage.delete(p.storage_key)));
   publishMatch(s, null, id);
@@ -704,10 +797,11 @@ const CONFIRM_STATUS: Record<string, number> = { not_completed: 409, already_rev
 
 /** The opposing captain confirms (decision 'confirmed') or rejects ('disputed', flagged for an admin). */
 export async function verifyResult(s: Services, viewer: Identity, id: string, decision: 'confirmed' | 'disputed', reason?: string) {
-  await s.db.transaction(async (trx) => {
+  await txRetry(s.db, async (trx) => {
     if (!(await trx('matches').where({ id }).forUpdate().first('id'))) throw notFound('Match not found');
     const [m] = await loadMatches(s, trx, [id], { uid: '\u0000internal', phone: null });
-    const v = m.verification;
+    // 1.4.6 (QA V145-2): the verdict of the current re-open epoch only
+    const v = currentVerification(m);
     // Idempotent replay of the same decision by the same captain (QA AF-45).
     const verdict = decision === 'confirmed' ? 'confirmed' : 'rejected';
     if (v?.by === viewer.uid && (v.status === decision || (v.status === 'approved' && captainVerdict(m) === verdict))) return;
@@ -720,6 +814,7 @@ export async function verifyResult(s: Services, viewer: Identity, id: string, de
       verified_by: viewer.uid,
       verified_at: nowDate(),
       dispute_reason: decision === 'disputed' ? (reason ?? null) : null,
+      verdict_epoch: m.reopenEpoch ?? 0,
       updated_at: nowDate(),
     });
   });
@@ -735,29 +830,161 @@ export async function verifyResult(s: Services, viewer: Identity, id: string, de
  */
 export async function reviewMatch(s: Services, viewer: Identity, id: string, decision: 'approve' | 'void') {
   if (!isAdmin(s, viewer.uid)) throw forbidden('admin.review', 'Only an admin can review a match');
-  await s.db.transaction(async (trx) => {
+  await txRetry(s.db, async (trx) => {
     if (!(await trx('matches').where({ id }).forUpdate().first('id'))) throw notFound('Match not found');
     const [m] = await loadMatches(s, trx, [id], { uid: '\u0000internal', phone: null });
-    if (!isCompleted(m)) throw new HttpError(409, 'not_completed', CONFIRM_MESSAGES.not_completed);
-    const st = m.verification?.status ?? 'pending';
+    // 1.4.4 (QA V143-7): a 'live' match whose events already have a winner (stuck: an older or seeded row) can be
+    // voided too – it is closed as finished (server time) and voided, so it never counts and leaves "live".
+    const stuck = m.status === 'live' && matchOver(m);
+    // 1.4.5 (QA V144-2): a match stored as finished without a winner (no POTM needed) can be voided too
+    const winnerless = m.status === 'finished' && !matchOver({ ...m, status: 'live' });
+    if (!isCompleted(m) && !((stuck || winnerless) && decision === 'void')) throw new HttpError(409, 'not_completed', CONFIRM_MESSAGES.not_completed);
+    const st = currentVerification(m)?.status ?? 'pending';
     if (st === 'approved' || st === 'voided') throw new HttpError(409, 'already_reviewed', 'This match was already reviewed');
     // 1.3.5 (QA E134-2): never your own match (creator, scorer, captain or player).
     if (ownMatchReview(m, viewer.uid)) throw new HttpError(403, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE);
     // 1.3.8 (V137-1): keep the captain's verdict explicitly (also one only recorded in the older fields)
-    await trx('matches').where({ id }).update({ verification_status: decision === 'approve' ? 'approved' : 'voided', captain_verdict: captainVerdict(m), reviewed_by: viewer.uid, reviewed_at: nowDate(), updated_at: nowDate() });
+    await trx('matches').where({ id }).update({
+      verification_status: decision === 'approve' ? 'approved' : 'voided', captain_verdict: captainVerdict(m), reviewed_by: viewer.uid, reviewed_at: nowDate(), verdict_epoch: m.reopenEpoch ?? 0, updated_at: nowDate(),
+      ...(stuck ? { status: 'finished', finished_at: nowDate() } : {}),
+    });
   });
   const m = await getMatch(s, id, viewer);
   publishMatch(s, m, id);
   return m!;
 }
 
-/** Completed matches waiting for an admin (flagged: too short, no server times, disputed). */
+/**
+ * Matches waiting for an admin: completed results that are flagged (too short, no server times, disputed), and
+ * 1.4.5 (QA V144-1/2) abandoned matches waiting for review, matches stored as finished without a winner, and pending
+ * abandon requests (core/abandon.ts needsAdminAction).
+ */
 export async function listFlagged(s: Services, viewer: Identity) {
   if (!isAdmin(s, viewer.uid)) throw forbidden('admin.review', 'Only an admin can list flagged matches');
-  const ids: string[] = (
-    await s.db('matches').where({ status: 'finished' }).whereNotNull('player_of_match_id').whereNotIn('verification_status', ['approved', 'voided']).orderBy('finished_at', 'desc').limit(200).select('id')
-  ).map((r: { id: string }) => r.id);
-  return (await loadMatches(s, s.db, ids, viewer)).filter(needsReview);
+  const ids = (rows: { id: string }[]) => rows.map((r) => r.id);
+  const [flagged, actions] = await Promise.all([
+    s.db('matches').where({ status: 'finished' }).whereNotNull('player_of_match_id').whereNotIn('verification_status', ['approved', 'voided']).orderBy('finished_at', 'desc').limit(200).select('id'),
+    s.db('matches')
+      .where((q) =>
+        q
+          .where((a) => a.where({ status: 'abandoned' }).where((b) => b.whereRaw("JSON_UNQUOTE(JSON_EXTRACT(abandon_info, '$.review')) = 'pending'").orWhere((c) => c.whereNull('abandon_info').where('event_count', '>', 0))))
+          .orWhere((a) => a.where({ status: 'live' }).whereNotNull('abandon_request'))
+          .orWhere((a) => a.where({ status: 'finished' }).whereNot('verification_status', 'voided').whereRaw("COALESCE(JSON_UNQUOTE(JSON_EXTRACT(summary, '$.winner')), 'null') = 'null'")),
+      )
+      .orderBy('updated_at', 'desc')
+      .limit(200)
+      .select('id'),
+  ]);
+  const all = [...new Set([...ids(actions), ...ids(flagged)])];
+  return (await loadMatches(s, s.db, all, viewer)).filter((m) => needsReview(m) || needsAdminAction(m));
+}
+
+// ---------------- 1.4.5 (QA V144-1/2/3): abandon, consent request, admin resolution ----------------
+const ACTION_STATUS: Record<string, number> = { admin_only: 403, own_match: 403, abandon_not_allowed: 403 };
+function asHttp(e: unknown): never {
+  if (e instanceof CodedError) throw new HttpError(ACTION_STATUS[e.code] ?? 409, e.code, ABANDON_MESSAGES[e.code] ?? e.message);
+  throw e;
+}
+const tryCore = <T>(f: () => T): T => {
+  try {
+    return f();
+  } catch (e) {
+    return asHttp(e);
+  }
+};
+/** Writes an action patch (status / finish time / abandon fields / POTM) straight to the matches row. */
+async function writeAction(trx: Trx, id: string, _m: Match, patch: Partial<Match>) {
+  const now = nowDate();
+  const row: Record<string, unknown> = { updated_at: now, version: trx.raw('version + 1') };
+  if (patch.status !== undefined) {
+    row.status = patch.status;
+    // server times only: finished_at is the server's clock when the match ends (finished or abandoned)
+    row.finished_at = patch.status === 'finished' || patch.status === 'abandoned' ? now : null;
+    if (patch.status === 'finished') row.was_won = 1;
+  }
+  if (patch.wasWon !== undefined) row.was_won = patch.wasWon ? 1 : 0;
+  if (patch.playerOfMatchId !== undefined) row.player_of_match_id = patch.playerOfMatchId;
+  // (the core gets the server's Date.now(), so every time in these records is server time)
+  if (patch.abandon !== undefined) row.abandon_info = patch.abandon == null ? null : JSON.stringify(patch.abandon);
+  if (patch.abandonRequest !== undefined) row.abandon_request = patch.abandonRequest == null ? null : JSON.stringify(patch.abandonRequest);
+  if (patch.resolution !== undefined) row.resolution = patch.resolution == null ? null : JSON.stringify(patch.resolution);
+  if (patch.scorerReassign !== undefined) row.scorer_reassign = patch.scorerReassign == null ? null : JSON.stringify(patch.scorerReassign);
+  if (patch.scorerId !== undefined) row.scorer_id = patch.scorerId;
+  // 1.4.6 (QA V145-2/5/12): re-open epoch (+ the cleared verdict / review), append-only history, request rate limit
+  if (patch.reopenEpoch !== undefined) row.reopen_epoch = patch.reopenEpoch ?? 0;
+  if (patch.verification === null)
+    Object.assign(row, { verification_status: 'pending', captain_verdict: null, verified_by: null, verified_at: null, dispute_reason: null, reviewed_by: null, reviewed_at: null, verdict_epoch: null });
+  if (patch.abandonHistory !== undefined) row.abandon_history = patch.abandonHistory == null ? null : JSON.stringify(patch.abandonHistory);
+  if (patch.abandonRequests !== undefined) row.abandon_request_count = patch.abandonRequests ?? 0;
+  if (patch.abandonRequestAt !== undefined) row.abandon_request_at = patch.abandonRequestAt ?? null;
+  // 1.4.8 (QA V147-2): the admin verdict repair – a confirmer (captains) and its audit record
+  if (patch.captains !== undefined) Object.assign(row, { captain_a: patch.captains?.A ?? null, captain_b: patch.captains?.B ?? null });
+  if (patch.verdictRepair !== undefined) row.verdict_repair = patch.verdictRepair == null ? null : JSON.stringify(patch.verdictRepair);
+  await trx('matches').where({ id }).update(row);
+}
+async function loadForAction(s: Services, trx: Trx, id: string) {
+  if (!(await trx('matches').where({ id }).forUpdate().first('id'))) throw notFound('Match not found');
+  const [m] = await loadMatches(s, trx, [id], { uid: '\u0000internal', phone: null });
+  return m;
+}
+async function abandonIn(s: Services, trx: Trx, viewer: Identity, m: Match) {
+  const now = Date.now();
+  const plan = tryCore(() => planAbandon(m, viewer.uid, now));
+  await writeAction(trx, m.id, m, abandonPatch(plan, now));
+  return plan.kind;
+}
+/** The scorer's ⋮ Abandon: abandoned (before the first rally / 'flag' policy) or a request ('consent'). */
+export async function abandonMatch(s: Services, viewer: Identity, id: string) {
+  const kind = await txRetry(s.db, async (trx) => abandonIn(s, trx, viewer, await loadForAction(s, trx, id)));
+  const m = await getMatch(s, id, viewer);
+  publishMatch(s, m, id);
+  // 1.4.6 (QA V145-12): one notification per NEW request (a refused / rate-limited / repeated call notifies nobody;
+  // at most ABANDON_REQUEST_LIMIT.MAX_PER_MATCH requests per match, COOLDOWN_MS apart)
+  if (m && kind === 'request' && m.abandonRequest) {
+    const need = (m.captains ? (m.abandonRequest.side === 'A' ? [m.captains.B] : m.abandonRequest.side === 'B' ? [m.captains.A] : [m.captains.A, m.captains.B]) : []).filter(Boolean);
+    if (need.length) notify(s, need, '⏸ Abandon requested', `${m.teamA.name} vs ${m.teamB.name} – the scorer asks to abandon the match. Agree or decline.`, { type: 'match', matchId: m.id });
+  }
+  return { match: m!, result: kind === 'request' ? 'requested' : 'abandoned' };
+}
+/** Consent policy: the opposing captain(s) agree / decline, or the requester cancels. */
+export async function answerAbandonRequest(s: Services, viewer: Identity, id: string, action: AbandonAnswer) {
+  await txRetry(s.db, async (trx) => {
+    const m = await loadForAction(s, trx, id);
+    await writeAction(trx, id, m, tryCore(() => answerAbandon(m, viewer.uid, action, Date.now())));
+  });
+  const m = await getMatch(s, id, viewer);
+  publishMatch(s, m, id);
+  return m!;
+}
+/** Admin: reinstate / confirm an abandon, re-open or abandon a finished match without a winner, decide a request. */
+export async function resolveMatch(s: Services, viewer: Identity, id: string, action: ResolveAction) {
+  if (!isAdmin(s, viewer.uid)) throw forbidden('admin.resolve', 'Only an admin can resolve a match');
+  await txRetry(s.db, async (trx) => {
+    const m = await loadForAction(s, trx, id);
+    await writeAction(trx, id, m, tryCore(() => resolvePatch(m, viewer.uid, true, action, Date.now())));
+  });
+  const m = await getMatch(s, id, viewer);
+  publishMatch(s, m, id);
+  return m!;
+}
+
+/** 1.4.8 (QA V147-2): an admin outside the match repairs a match nobody can confirm (core/verdictRepair.ts). */
+export async function repairVerdict(s: Services, viewer: Identity, id: string, fix: RepairFix) {
+  if (!isAdmin(s, viewer.uid)) throw forbidden('admin.repair', 'Only an admin can repair a match');
+  await txRetry(s.db, async (trx) => {
+    const m = await loadForAction(s, trx, id);
+    let patch: Partial<Match>;
+    try {
+      patch = repairPatch(m, viewer.uid, true, fix, Date.now());
+    } catch (e) {
+      if (e instanceof CodedError && REPAIR_MESSAGES[e.code]) throw new HttpError(e.code === REPAIR_INVALID ? 400 : 409, e.code, REPAIR_MESSAGES[e.code]);
+      return asHttp(e);
+    }
+    await writeAction(trx, id, m, patch);
+  });
+  const m = await getMatch(s, id, viewer);
+  publishMatch(s, m, id);
+  return m!;
 }
 
 // ---------------- queries ----------------
@@ -772,4 +999,44 @@ export async function listMatchIds(db: Trx, q: { status?: string[]; participant?
   if (q.withLocation) query.whereNotNull('matches.location_name');
   if (q.participant) query.join('match_participants as mp', 'mp.match_id', 'matches.id').where('mp.user_id', q.participant);
   return (await query).map((r: { id: string }) => r.id);
+}
+
+/** 1.4.5: the opposing captain reports an abandoned match to admin review (core/abandon.ts reportAbandon). */
+export async function reportAbandonedMatch(s: Services, viewer: Identity, id: string) {
+  await txRetry(s.db, async (trx) => {
+    const m = await loadForAction(s, trx, id);
+    await writeAction(trx, id, m, tryCore(() => reportAbandon(m, viewer.uid, Date.now())));
+  });
+  const m = await getMatch(s, id, viewer);
+  publishMatch(s, m, id);
+  return m!;
+}
+/** 1.4.5 (QA V144-8): an admin who isn't part of the match moves scoring to any participant (recorded after the first rally). */
+/**
+ * 1.4.6 (QA V145-17): the admins this match's creator / scorer may hand scoring to (registered ADMIN_UIDS, minus the
+ * scorer and the verdict captains). Only the creator and the scorer may ask – it is the list behind their handoff
+ * chips, nothing more (id + display name).
+ */
+export async function handoffAdmins(s: Services, viewer: Identity, id: string): Promise<{ id: string; name: string }[]> {
+  const m = await getMatch(s, id, { uid: '\u0000internal', phone: null });
+  if (!m) throw notFound('Match not found');
+  if (viewer.uid !== m.createdBy && viewer.uid !== m.scorerId) throw forbidden('Only the creator or the scorer can hand scoring over');
+  if (m.status !== 'live' && m.status !== 'scheduled') return []; // 1.4.7: nothing to hand over on a closed match
+  const ids = [...(s.adminUids ?? [])];
+  if (!ids.length) return [];
+  const rows = (await s.db('users').whereIn('id', ids).select('id', 'name')) as { id: string; name: string }[];
+  return eligibleHandoffAdmins(m, rows.map((r) => ({ id: r.id, name: r.name }))).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function reassignScorer(s: Services, viewer: Identity, id: string, scorerId: string) {
+  await txRetry(s.db, async (trx) => {
+    const m = await loadForAction(s, trx, id);
+    const p = reassignProblem(m, viewer.uid, isAdmin(s, viewer.uid), scorerId);
+    if (p) throw new HttpError(p === 'match_terminal' ? 409 : 403, p, HANDOVER_MESSAGES[p] ?? ABANDON_MESSAGES[p] ?? p);
+    const rec = reassignRecord(m, viewer.uid, scorerId, Date.now());
+    await writeAction(trx, id, m, { scorerId, ...(rec ? { scorerReassign: rec } : {}) });
+  });
+  const m = await getMatch(s, id, viewer);
+  publishMatch(s, m, id);
+  return m!;
 }
