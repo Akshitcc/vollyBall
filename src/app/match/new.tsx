@@ -10,7 +10,7 @@ import { card } from '../../components/Hero';
 import { PressableScale } from '../../components/PressableScale';
 import { LocationPicker, placeReady } from '../../components/LocationPicker';
 import { RulesEditor } from '../../components/RulesEditor';
-import { KeyboardAwareScreen, RevealOnShow, ScrollRevealContext } from '../../components/KeyboardAwareScreen';
+import { KeyboardAwareScreen, RevealOnShow, ScrollRevealContext, RevealOnFocus } from '../../components/KeyboardAwareScreen';
 import { Button, Card, Chip, Field, H2, P, Row, styles as ui } from '../../components/ui';
 import { placeFromCourt, type Place } from '../../core/geo';
 import { INDOOR_RULES, type RuleSet } from '../../core/rules';
@@ -78,6 +78,7 @@ function SidePicker({
   // 1.4.6 (QA V145-13): the results under a focused search field scroll into view above the keyboard / footer
   const reveal = useContext(ScrollRevealContext);
   const resultsRef = useRef<View>(null);
+  const searchRef = useRef<View>(null);
   const searchFocused = useRef(false);
   useEffect(() => {
     if (!results.length || !searchFocused.current) return;
@@ -146,6 +147,9 @@ function SidePicker({
       {mode === 'team' ? (
         <>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>{myTeams.filter((t) => t.id !== otherTeamId).map(teamChip)}</View>
+          {/* 1.4.14 (QA V1413-5): the field itself scrolls clear of the sticky footer / keyboard when focused (also with no
+              keyboard event – a desktop browser or a hardware keyboard), again after the keyboard has opened */}
+          <View ref={searchRef} collapsable={false} testID={`${testID}-search-box`}>
           <Field
             label={tr('newMatch.findTeam')}
             value={q}
@@ -155,10 +159,11 @@ function SidePicker({
             testID={`${testID}-search`}
             onFocus={() => {
               searchFocused.current = true;
-              if (results.length) setTimeout(() => reveal(resultsRef.current, 24), 60);
+              for (const ms of [60, 400]) setTimeout(() => reveal(results.length ? resultsRef.current : searchRef.current, 24), ms);
             }}
             onBlur={() => (searchFocused.current = false)}
           />
+          </View>
           <View ref={resultsRef} style={{ flexDirection: 'row', flexWrap: 'wrap', minHeight: q.trim().length >= 2 ? 44 : 0 }} testID={`${testID}-results`}>{results.filter((t) => t.id !== otherTeamId && !myTeams.some((m) => m.id === t.id)).map(teamChip)}</View>
           {/* 1.3.4: the only match is the team already on the other side – say so instead of showing nothing */}
           {otherTeamId && results.some((t) => t.id === otherTeamId) && !results.some((t) => t.id !== otherTeamId) ? (
@@ -221,6 +226,8 @@ export default function NewMatch() {
   // a player in both squads (e.g. in two registered teams) is caught here, before Next – the match-level check stays
   const inBoth = idsA && idsB ? idsA.filter((id) => idsB.includes(id)) : [];
   const nameIn = (id: string) => [...(a?.kind === 'build' ? a.players : a?.kind === 'team' ? rosters[a.team.id]?.players ?? [] : []), ...(b?.kind === 'build' ? b.players : b?.kind === 'team' ? rosters[b.team.id]?.players ?? [] : [])].find((p) => p.id === id)?.name ?? id;
+  // 1.4.11 (QA V1410-4): in Custom a clashing player can't play for either side – left out of the "will play" count
+  const playCount = (ids: string[] | null) => (ids ? (sizeMode === 'custom' ? ids.filter((id) => !inBoth.includes(id)).length : ids.length) : null);
   const bothText = inBoth.length ? t('newMatch.inBothTeams', { count: inBoth.length, names: inBoth.map(nameIn).join(', ') }) : null;
   const [rules, setRules] = useState<RuleSet>({ ...INDOOR_RULES });
   const [firstServe, setFirstServe] = useState<Side>('A');
@@ -428,7 +435,7 @@ export default function NewMatch() {
       <SafeFooter testID="new-match-footer">
         <Button
           // R136-20: the label states the rule of the chosen mode (exactly 6 / 6–12 / pick 6)
-          title={`${teamsReady ? t('newMatch.nextRules') : inBoth.length && !problem && !pickProblem ? t('newMatch.nextRulesBoth') : pickProblem && !problem ? t('newMatch.nextRulesPick', { count: MIN_PLAYERS }) : sizeMode === 'exact' ? t('newMatch.nextRulesNeedsExact', { count: MIN_PLAYERS }) : t('newMatch.nextRulesNeedsCustom', { min: MIN_PLAYERS, max: maxPlayersFor('custom') })} →`}
+          title={`${teamsReady ? t('newMatch.nextRules') : inBoth.length && !problem && !pickProblem ? t('newMatch.nextRulesBoth') : pickProblem && !problem ? t('newMatch.nextRulesPick', { count: MIN_PLAYERS }) : sizeMode === 'exact' ? t('newMatch.nextRulesNeedsExact', { count: MIN_PLAYERS }) : t('newMatch.nextRulesNeedsCustom', { min: MIN_PLAYERS, max: maxPlayersFor('custom') })}\u00a0→`}
           disabled={!teamsReady}
           disabledHint={hint(problem) ?? (pickProblem ? t('newMatch.pickSix', { count: MIN_PLAYERS }) : bothText ?? undefined)}
           onPress={() => goTo(1)}
@@ -439,7 +446,7 @@ export default function NewMatch() {
       <SafeFooter testID="new-match-footer">
         <Row style={{ gap: 10 }}>
           <Button title={t('newMatch.back')} variant="secondary" onPress={back} style={{ flex: 1 }} testID="step-back" />
-          <Button title={`${t('newMatch.nextStart')} →`} disabled={!rulesReady} disabledHint={rulesProblem ?? undefined} onPress={() => goTo(2)} style={{ flex: 2 }} testID="next-start" />
+          <Button title={`${t('newMatch.nextStart')}\u00a0→`} disabled={!rulesReady} disabledHint={rulesProblem ?? undefined} onPress={() => goTo(2)} style={{ flex: 2 }} testID="next-start" />
         </Row>
       </SafeFooter>
     ) : (
@@ -519,10 +526,10 @@ export default function NewMatch() {
           <P muted style={{ fontSize: 12 }} testID="team-size-hint">{sizeMode === 'exact' ? t('newMatch.sizeExactHint') : t('newMatch.sizeCustomHint')}</P>
           </View>
         </Card>
-        <SidePicker label={t('common.teamA')} badge="A" value={a} onChange={setA} myTeams={myTeams} defaultColor={TEAM_COLORS[0]} otherPlayerIds={playerIdsOf(b, rosters)} playingCount={idsA?.length ?? null} otherTeamId={b?.kind === 'team' ? b.team.id : null} otherColor={colorOf(b)} ready={sideReady('A')} max={maxPlayersFor(sizeMode)} open={open.A} onToggle={() => setOpen((o) => ({ ...o, A: !o.A }))} testID="side-a" />
+        <SidePicker label={t('common.teamA')} badge="A" value={a} onChange={setA} myTeams={myTeams} defaultColor={TEAM_COLORS[0]} otherPlayerIds={playerIdsOf(b, rosters)} playingCount={playCount(idsA)} otherTeamId={b?.kind === 'team' ? b.team.id : null} otherColor={colorOf(b)} ready={sideReady('A')} max={maxPlayersFor(sizeMode)} open={open.A} onToggle={() => setOpen((o) => ({ ...o, A: !o.A }))} testID="side-a" />
         {open.A && <CaptainPicker side="A" value={a} captain={capA} onChange={setCapA} />}
         {needsPick(a) && renderPick('A', a)}
-        <SidePicker label={t('common.teamB')} badge="B" value={b} onChange={setB} myTeams={myTeams} defaultColor={TEAM_COLORS[1]} otherPlayerIds={playerIdsOf(a, rosters)} playingCount={idsB?.length ?? null} otherTeamId={a?.kind === 'team' ? a.team.id : null} otherColor={colorOf(a)} ready={sideReady('B')} max={maxPlayersFor(sizeMode)} open={open.B} onToggle={() => setOpen((o) => ({ ...o, B: !o.B }))} testID="side-b" />
+        <SidePicker label={t('common.teamB')} badge="B" value={b} onChange={setB} myTeams={myTeams} defaultColor={TEAM_COLORS[1]} otherPlayerIds={playerIdsOf(a, rosters)} playingCount={playCount(idsB)} otherTeamId={a?.kind === 'team' ? a.team.id : null} otherColor={colorOf(a)} ready={sideReady('B')} max={maxPlayersFor(sizeMode)} open={open.B} onToggle={() => setOpen((o) => ({ ...o, B: !o.B }))} testID="side-b" />
         {open.B && <CaptainPicker side="B" value={b} captain={capB} onChange={setCapB} />}
         {needsPick(b) && renderPick('B', b)}
         {/* 1.4.9 (QA V148-6): a player in both squads – inline, kept in view, Next stays disabled */}
@@ -569,7 +576,9 @@ export default function NewMatch() {
               </Row>
             </>
           )}
-          <Field label={t('newMatch.title')} value={title} onChangeText={setTitle} placeholder={t('newMatch.titlePlaceholder')} maxLength={LIMITS.matchTitle.max} testID="match-title" />
+          <RevealOnFocus testID="match-title-box">
+            {(onFocus) => <Field label={t('newMatch.title')} value={title} onChangeText={setTitle} placeholder={t('newMatch.titlePlaceholder')} maxLength={LIMITS.matchTitle.max} testID="match-title" onFocus={onFocus} />}
+          </RevealOnFocus>
         </Card>
         <H2>{t('common.where')}</H2>
         <LocationPicker value={location} onChange={setLocation} />

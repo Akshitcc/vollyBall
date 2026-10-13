@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pressable, type GestureResponderEvent, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, Pressable, type GestureResponderEvent, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 
@@ -17,7 +17,10 @@ type Props = Omit<PressableProps, 'style'> & {
  * by a short opacity dip. Same API as Pressable, including function styles.
  */
 export function PressableScale({ style, scaleTo = 0.96, onPressIn, onPressOut, disabled, children, ...rest }: Props) {
-  const reduce = useReduceMotion();
+  // 1.4.15 (QA: web clicks not registering): on web the press target must not shrink – react-native-web cancels a press
+  // when the pointer moves outside the element's (scaled) box, so a click near an edge with a 1 px wiggle was lost
+  // (measured: 3 of 12 edge clicks missed). Web uses the opacity dip (as with Reduce Motion); native keeps the scale.
+  const reduce = useReduceMotion() || Platform.OS === 'web';
   const [pressed, setPressed] = useState(false);
   const v = useSharedValue(1);
   const anim = useAnimatedStyle(() => (reduce ? { opacity: v.value } : { transform: [{ scale: v.value }] }));

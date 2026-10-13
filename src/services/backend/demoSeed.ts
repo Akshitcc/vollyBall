@@ -286,6 +286,33 @@ export function makeSeed(now = Date.now()): DemoDB {
     location: { lat: HOME.lat + 0.03, lng: HOME.lng - 0.02, name: 'Rajouri Garden Community Court' },
   };
 
+  // 1.4.11 (QA): two older-data shapes for the admin repair card, DEMO ONLY (this file is swapped for a stub in
+  // production bundles – metro.config.js DEMO_STUBS, checked by scripts/check-strip.js – and never written to a real
+  // backend). GU11: the scorer was handed over from a team-B player (scorerReassign.from on B, creator on A) – nobody
+  // can confirm; a scorer repair fixes it. Captain mismatch: team B's captain is a team-A player – only a captain repair
+  // (a team-B player) fixes it. Both scheduled, so the repair card shows on the admin review list and the match page.
+  const legacyGu11: Match = {
+    ...mk('match_demo_gu11', INDOOR_RULES, [], { status: 'scheduled' }),
+    status: 'scheduled',
+    scheduledAt: now + 3 * DAY,
+    scorerReassign: { from: pB[1].id, to: 'seed1', by: DEMO_QA_ADMIN.id, at: now - DAY },
+  };
+  const legacyCaptain: Match = {
+    ...mk('match_demo_capmix', INDOOR_RULES, [], { status: 'scheduled' }),
+    status: 'scheduled',
+    scheduledAt: now + 4 * DAY,
+    captains: { A: teamA.captainId, B: pA[1].id },
+  };
+  // 1.4.12 (QA): the same captain mix on a FINISHED match awaiting confirmation (DEMO ONLY, as above) – the admin
+  // repairs team B's captain, then that new captain confirms the result (match page).
+  const legacyCaptainDone = mk('match_demo_capmix_done', INDOOR_RULES, genEvents(INDOOR_RULES, 23, 400, pA, pB), {
+    finishedAt: now - DAY / 3,
+    updatedAt: now - DAY / 3,
+    captains: { A: teamA.captainId, B: pA[1].id },
+  });
+  legacyCaptainDone.playerOfMatchId = pickPlayerOfMatch(legacyCaptainDone);
+  finishedSample(legacyCaptainDone, 65, null);
+
   const tournament: Tournament = {
     id: 'tour_monsoon',
     name: 'Monsoon Cup 2026',
@@ -316,7 +343,7 @@ export function makeSeed(now = Date.now()): DemoDB {
   return {
     users,
     teams,
-    matches: { [live.id]: live, [old1.id]: old1, [old2.id]: old2, [old3.id]: old3, [beach.id]: beach, [awaiting.id]: awaiting, [flagged.id]: flagged, [upcoming.id]: upcoming },
+    matches: { [live.id]: live, [old1.id]: old1, [old2.id]: old2, [old3.id]: old3, [beach.id]: beach, [awaiting.id]: awaiting, [flagged.id]: flagged, [upcoming.id]: upcoming, [legacyGu11.id]: legacyGu11, [legacyCaptain.id]: legacyCaptain, [legacyCaptainDone.id]: legacyCaptainDone },
     photos: demoPhotos(now, [
       [old1.id, 'seed1', 0],
       [old1.id, 'seed3', 1],

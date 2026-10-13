@@ -8,7 +8,7 @@ import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { AccessibilityInfo, StyleSheet, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
-import { ADMIN_APPROVAL, ANTI_FRAUD, captainVerdict, confirmProblem, expectedConfirmer, matchFlags, resultState, verificationStatus, type FraudFlag, type ResultState } from '../core/antifraud';
+import { ADMIN_APPROVAL, ANTI_FRAUD, captainVerdict, confirmProblem, expectedConfirmer, matchFlags, resultState, verificationStatus, type FraudFlag, type ResultState, verdictCaptains } from '../core/antifraud';
 import type { Match } from '../core/types';
 import { translateError } from '../i18n/format';
 import { backend } from '../services/backend';
@@ -32,17 +32,25 @@ const LOOK: Record<Exclude<ResultState, 'not_finished' | 'abandoned'>, { icon: k
   approved_rejected: { icon: 'close-circle', bg: colors.lossBg, fg: colors.lossText },
 };
 
-export function ResultBadge({ match }: { match: Match }) {
+/** 1.4.15 (QA V1414-5): yourTurn = the viewer is the captain who confirms now (the pill says so instead of waiting for the other captain). */
+export function ResultBadge({ match, yourTurn = false }: { match: Match; yourTurn?: boolean }) {
   const { t } = useTranslation();
   const state = resultState(match);
   if (state === 'not_finished' || state === 'abandoned') return null;
+  // 1.4.14 (QA V1413-6): waiting, but nobody can give the verdict (e.g. a captain who plays for the other team) – the pill
+  // says the match needs an admin's repair instead of "Waiting for the other captain"
+  const waiting = state === 'awaiting_confirmation' || state === 'approved_awaiting_confirmation';
+  const needsRepair = waiting && !!match.captains && verdictCaptains(match).length === 0;
+  // 1.4.15 (QA V1414-5): who is viewing – the captain who confirms sees "your turn"; a match without captains (older data)
+  // never says "waiting for the other captain" (there is none)
+  const pill = !waiting ? null : yourTurn ? 'yourTurn' : !match.captains ? 'noCaptains' : needsRepair ? 'needsRepair' : null;
   const look = LOOK[state];
   const flags = state === 'flagged' ? matchFlags(match) : [];
   return (
-    <View style={[s.badge, { backgroundColor: look.bg }]} accessible accessibilityRole="text" testID={`result-${state}`}>
+    <View style={[s.badge, { backgroundColor: look.bg }]} accessible accessibilityRole="text" testID={pill === 'needsRepair' ? 'result-needs_repair' : pill === 'yourTurn' ? 'result-your_turn' : pill === 'noCaptains' ? 'result-no_captains' : `result-${state}`}>
       <Ionicons name={look.icon} size={18} color={look.fg} />
       <View style={{ flex: 1 }}>
-        <Text style={[type.body, { color: look.fg, fontWeight: '800' }]}>{t(`verify.${state}`)}</Text>
+        <Text style={[type.body, { color: look.fg, fontWeight: '800' }]}>{pill === 'needsRepair' ? t('verify.needsRepairStatus') : pill === 'yourTurn' ? t('verify.yourTurnStatus') : pill === 'noCaptains' ? t('verify.noCaptainsStatus') : t(`verify.${state}`)}</Text>
         {flags.length ? <Text style={[type.caption, { color: look.fg, marginTop: 2 }]}>{flagText(flags, t)}</Text> : null}
       </View>
     </View>
@@ -97,7 +105,7 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
   const reviewable = isAdmin && match.playerOfMatchId && !['approved', 'voided'].includes(verificationStatus(match));
   return (
     <View style={{ marginBottom: 10 }} testID="result-panel">
-      <ResultBadge match={match} />
+      <ResultBadge match={match} yourTurn={canConfirm} />
       {verdictLine ? (
         <View style={s.notice} accessible testID={`result-verdict-${verdictLine}`}>
           <Ionicons name={verdictLine === 'confirmed' ? 'checkmark-circle' : 'close-circle'} size={16} color={verdictLine === 'confirmed' ? colors.successStrong : colors.lossText} />
@@ -119,6 +127,10 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
       ) : null}
       {(state === 'awaiting_confirmation' || state === 'approved_awaiting_confirmation') && !canConfirm && confirmer ? (
         <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]}>{t('verify.waitingFor', { name: nameOf(confirmer) ?? '—' })}</Text>
+      ) : null}
+      {/* 1.4.13 (QA V1412-1): nobody can confirm (e.g. a captain who plays for the other team) – say so, name nobody */}
+      {(state === 'awaiting_confirmation' || state === 'approved_awaiting_confirmation') && !canConfirm && !confirmer && match.captains ? (
+        <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]} testID="result-needs-repair">{t('verify.needsRepair')}</Text>
       ) : null}
       {canConfirm ? (
         <View style={s.panel} testID="confirm-panel">

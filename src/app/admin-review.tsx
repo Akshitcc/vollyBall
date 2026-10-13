@@ -18,7 +18,7 @@ import { colors, type } from '../theme';
 import { AdminReviewButtons, flagText, reviewScoreText } from '../components/ResultBadge';
 import { AbandonPanel, abandonedLine, abandonWhy } from '../components/AbandonPanel';
 import { needsAdminAction } from '../core/abandon';
-import { showsVerdictRepair, VerdictRepairCard } from '../components/VerdictRepairCard';
+import { repairedRecently, showsVerdictRepair, VerdictRepairCard } from '../components/VerdictRepairCard';
 
 // a player's name from the match's own rosters (the review list has no profiles loaded)
 const nameOf = (m: Match, uid: string): string | undefined => [...m.teamA.players, ...m.teamB.players].find((p) => p.id === uid)?.name;
@@ -83,7 +83,7 @@ export default function AdminReviewScreen() {
             ) : null}
             {own ? (
               <Text style={[type.caption, { color: colors.muted, marginTop: 10 }]} testID={`own-${m.id}`}>{t('errors.codes.own_match')}</Text>
-            ) : showsVerdictRepair(m, user?.uid ?? '', isAdmin) ? (
+            ) : showsVerdictRepair(m, user?.uid ?? '', isAdmin) || repairedRecently(m.id) ? (
               /* 1.4.8 (QA V147-2): nobody can confirm – repair first (a valid scorer or confirmer) */
               <View style={{ marginTop: 10 }}>
                 <VerdictRepairCard match={m} meId={user?.uid ?? ''} isAdmin={isAdmin} nameOf={(uid) => nameOf(m, uid)} onChanged={load} testID={`verdict-repair-${m.id}`} />

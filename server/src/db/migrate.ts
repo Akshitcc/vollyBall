@@ -191,7 +191,10 @@ export class SchemaCheckError extends Error {
  */
 export function readableMigrationError(file: string, e: unknown): unknown {
   const m = /Unknown column '(\d{4}: [^']+)'/.exec(String((e as { message?: string })?.message ?? e));
-  return m ? new SchemaCheckError(`Migration ${file} stopped: ${m[1].slice(6)}`, file) : e;
+  if (!m) return e;
+  // 1.4.11: 0019's own text ("… found text - fix the column by hand") gets the same ALTER hint as checkSchema
+  const msg = m[1].slice(6).replace(/ - fix the column by hand$/, ' – fix the column by hand (ALTER TABLE matches MODIFY verdict_repair JSON NULL) and run the migrations again');
+  return new SchemaCheckError(`Migration ${file} stopped: ${msg}`, file);
 }
 /**
  * 1.4.10 (QA 0019 notes): what the recorded migrations promise must still be there. Today: 0018 recorded ⇒

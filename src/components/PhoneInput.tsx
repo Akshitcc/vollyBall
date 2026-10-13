@@ -50,6 +50,9 @@ export interface PhoneInputProps {
    * with a short "digits only" note, instead of keeping the refused text visible next to an error.
    */
   digitsOnly?: boolean;
+  /** 1.4.17 (QA V1416-3): called on focus (e.g. the shared scroll-into-view, useFocusReveal). */
+  onFocus?: () => void;
+  blurOnSubmit?: boolean;
 }
 
 /**
@@ -60,7 +63,7 @@ export interface PhoneInputProps {
 export const showPhoneError = (value: string, touched: boolean) => touched && value !== '' && !isValidMobile(value);
 
 export const PhoneInput = forwardRef<TextInput, PhoneInputProps>(function PhoneInput(
-  { value, onChangeText, label, hint, testID = 'phone', size = 'md', editable = true, onSubmitEditing, returnKeyType = 'done', autoFocus, onShownInvalid, digitsOnly = false },
+  { value, onChangeText, label, hint, testID = 'phone', size = 'md', editable = true, onSubmitEditing, returnKeyType = 'done', autoFocus, onShownInvalid, digitsOnly = false, onFocus, blurOnSubmit },
   ref,
 ) {
   const { t } = useTranslation();
@@ -124,6 +127,7 @@ export const PhoneInput = forwardRef<TextInput, PhoneInputProps>(function PhoneI
           onFocus={() => {
             setFocused(true);
             setLeft(false);
+            onFocus?.();
           }}
           onBlur={() => {
             setFocused(false);
@@ -144,6 +148,7 @@ export const PhoneInput = forwardRef<TextInput, PhoneInputProps>(function PhoneI
           autoFocus={autoFocus}
           onSubmitEditing={onSubmitEditing}
           returnKeyType={returnKeyType}
+          blurOnSubmit={blurOnSubmit}
           style={[{ flex: 1, fontSize: lg ? 18 : 16, paddingVertical: lg ? 14 : 12, fontWeight: '700', color: colors.text }, NO_WEB_OUTLINE]}
           testID={testID}
         />

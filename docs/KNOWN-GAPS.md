@@ -411,6 +411,75 @@ the worst cases with 10 pads on create and 30 on update.
   rules field; not done.
 - **Abandon policy:** still interim ('review'), pending Akshit's decision.
 
+## 1.4.18 – QA V1417
+
+- Web touch: a tap within a few px of a switch row still goes to the row (browser touch adjustment); the Testing tools heading itself is now a tap target.
+- After the 6th player an empty line keeps the old warning's space.
+
+## 1.4.17 – QA V1416
+
+- Create with more than 12 on a side is team_too_large on core/demo like the API.
+- Home's rank card refetches on my match changes and on focus (like Profile). A change to a match I'm not in reaches Home on the next focus, not live.
+- After adding a player by number the builder keeps its height until the next number is typed (a blank where the found card was).
+
+## 1.4.16 – QA V1415
+
+- More than 12 players on a side is refused with its own message on core/demo like the API (with or without captains).
+- Web switch rows are one Tab stop; the inner switch is hidden from the a11y tree.
+
+## 1.4.15 – QA V1414
+
+- wasWon changes only with the finishing write on every backend.
+- A stored doc with more than 12 players on a side gives no verdict (rules and core).
+- The result pill depends on the viewer (your turn / waiting / needs repair / no captains).
+- Web press feedback is an opacity dip (no scale) so edge clicks register.
+
+## 1.4.14 – QA V1413
+
+- Older docs with participantIds out of roster order: renames and valid swaps are allowed on the rules like core.
+- A player on both rosters (older data) gives no verdict on any backend; the API can't store one.
+- While nobody can confirm, the status pill says the match needs an admin fix.
+
+## 1.4.13 – QA V1412
+
+- Sides come from the rosters everywhere (confirm, dispute, verdict captains, reporter, abandon agree, rules).
+- The rules now refuse a repeat captain repair and a repair of a match that isn't broken, even for an admin
+  (replaces the 1.4.12 note below).
+- Consent policy (not the default): on a captain-mix match both captains are on one side, so an abandon request can't
+  get the other side's agreement until an admin repairs the match.
+- "Match repaired" shows ~4 s after a repair, also across a re-mount (per-match, in memory only).
+- A tie on ranking points reads "Tied on points … – 1 pt to pass"; order unchanged (wins, POTM, points, fewer matches, id).
+
+## 1.4.12 – QA V1411
+
+- **Open decision for Akshit (still open):** a player in two registered teams (unchanged: allowed).
+- **One behaviour for edits that keep the verdict set-up** (player ids in order, participants, captains, creator –
+  core `verdictSetupChanged`; the rules also keep each side's registered team): allowed on core, demo, API and rules,
+  on healthy and on already-broken matches (GU11, GU7, captain mix): rename, colour, player display names. Any change
+  of those runs the captain check (API `captain_not_on_side`, rules `captainsOk`) and the verdict check as before.
+  Rules: `verdictSetupSame` compares side sizes + participantIds (validRoster ties them to the player ids in order).
+- The API's captain check already ran only when the player ids, a side's team or the captains changed (1.4.11 code);
+  QA's 400 on a captain-mix rename was not reproduced on the API with a plain rename, a display-name change or a
+  resend of the same captains / participants (server tests fixes1412) – it is covered now either way.
+- Demo now refuses `captains: null` / a half-set pair (captains_required) and a creator change (forbidden), like the
+  API and rules; an older doc already without captains may keep null.
+- The rules still allow a second captain repair on a doc that is still broken (documented in 1.4.10/1.4.11; unchanged).
+- Demo seed has three older-data matches (demo only, stripped): `match_demo_capmix_done` is finished and pending.
+- No rename UI in the app; renames are test-covered only.
+
+## 1.4.11 – QA V1410
+
+- **Open decision for Akshit (still open):** a player in two registered teams (unchanged: allowed).
+- A rename / colour change of an older, already-broken match is allowed on every backend (only players, participants,
+  captains or creator changes are checked). The match stays unconfirmable until an admin repairs it.
+  **Correction (1.4.12, QA V1411-1/2):** in 1.4.11 that was not true everywhere – the rules compared whole player
+  entries (a display-name change on a GU11/GU7 doc was refused) and re-ran the captain check on every roster write
+  (a rename of a captain-mix doc was refused). Fixed in 1.4.12, see below.
+- The rules' captain repair now proves the new captain can confirm; the documented looseness that remains: the rules
+  don't prove the match was broken in core terms before (neutral scorer and creator).
+- Demo seed has two older-data matches (demo only, stripped from production bundles).
+- No rename UI in the app; the GU11 rename is test-covered only.
+
 ## 1.4.10 – QA V149
 
 - **Open decision for Akshit (still open):** may a player be a member of two registered teams? Unchanged (allowed).

@@ -128,7 +128,8 @@ export function lcRoles(m: LcMatch, uid: string, isAdmin: boolean): Set<LcRole> 
     const by = m.abandon?.by ?? m.scorerId;
     const side = sideOfPlayer(m, by);
     const mine = uid === m.captains.A ? 'A' : 'B';
-    if (side !== mine) out.add('reporter');
+    // 1.4.13 (QA V1412-1 audit): a captain who plays for the other team (captain mix) reports for nobody
+    if (side !== mine && sideOfPlayer(m, uid) === mine) out.add('reporter');
   }
   const own = ownMatchReview(m, uid);
   if (isAdmin && !own) out.add('admin');
@@ -343,7 +344,7 @@ export function lifecycleStateProblem(action: LcAction, m: LcMatch, opts: { now?
 /** States every backend's walk builds (bo1 to 5, win by 1: the shortest win is 5 events). */
 export type LcStateName =
   | 'sched0' | 'live0' | 'live3' | 'undo0' | 'long8' | 'wonPending' | 'wonConfirmed' | 'nowin3'
-  | 'abDirect' | 'abPending' | 'abConfirmed' | 'abLegacy' | 'reinstated' | 'abWonLog' | 'noConfirm' | 'noConfirmLive';
+  | 'abDirect' | 'abPending' | 'abConfirmed' | 'abLegacy' | 'reinstated' | 'abWonLog' | 'noConfirm' | 'noConfirmLive' | 'capMix';
 export interface LcStateSpec {
   name: LcStateName;
   text: string;
@@ -358,6 +359,8 @@ export interface LcStateSpec {
   recordMode?: AbandonRecord['mode'];
   /** 1.4.8 (QA V147-2): older data nobody can confirm – the scorer plays for B (the creator for A) */
   noConfirmer?: boolean;
+  /** 1.4.13 (QA V1412-1): older captain-mix data – team B's captain is a team-A player (the walk's teammate) */
+  captainMix?: boolean;
 }
 export const LC_STATES: readonly LcStateSpec[] = [
   { name: 'sched0', text: 'scheduled, never played', status: 'scheduled', events: 'none', maxEvents: 0 },
@@ -378,6 +381,9 @@ export const LC_STATES: readonly LcStateSpec[] = [
   // 1.4.8 (QA V147-2): older data nobody can confirm (scorer on B, creator on A) – only the admin repair helps
   { name: 'noConfirm', text: 'finished, won, POTM, nobody can confirm (scorer on B, creator on A – older data)', status: 'finished', events: 'B5', maxEvents: 5, wasWon: true, potm: true, noConfirmer: true },
   { name: 'noConfirmLive', text: 'live, 3 rallies, nobody can confirm (older data)', status: 'live', events: 'B3', maxEvents: 3, noConfirmer: true },
+  // 1.4.13 (QA V1412-1, High): team B's captain plays for team A – that captain must not confirm A's result; only the
+  // admin's captain repair helps
+  { name: 'capMix', text: 'finished, won, POTM, team B\u2019s captain is a team-A player (older data) – nobody can confirm', status: 'finished', events: 'B5', maxEvents: 5, wasWon: true, potm: true, captainMix: true },
 ];
 /** Who the walk fixtures name (each backend maps them to its own users). */
 export interface LcWalkCast {
@@ -387,6 +393,8 @@ export interface LcWalkCast {
   bPlayer: string;
   /** the admin who decided the confirmed / reinstated records (not a walker) */
   pastAdmin: string;
+  /** 1.4.13: a player of side A who isn't a captain (the 'teammate' walker; team B's captain in capMix) */
+  teammate?: string;
 }
 /** The events of a walk state (bo1 to 5, win by 1). */
 export function walkEvents(kind: LcStateSpec['events'], t0: number): Match['events'] {
@@ -403,6 +411,7 @@ export function walkFields(spec: LcStateSpec, cast: LcWalkCast, t0: number): Par
   const out: Partial<Match> = { status: spec.status, events, maxEvents: spec.maxEvents, wasWon: !!spec.wasWon };
   if (spec.potm) out.playerOfMatchId = cast.bPlayer;
   if (spec.noConfirmer) out.scorerId = cast.bPlayer;
+  if (spec.captainMix) out.captains = { A: cast.scorer, B: cast.teammate ?? '' };
   if (spec.verdict) out.verification = { status: 'confirmed', captain: 'confirmed', by: cast.oppCaptain, at: end };
   if (spec.record) {
     out.abandon = {

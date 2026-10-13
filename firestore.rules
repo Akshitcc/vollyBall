@@ -688,7 +688,9 @@ service cloud.firestore {
     function agreeOk(d, ks, r, o, n) {
       let need = agreersOf(r, o);
       let ag = o.agreedBy.concat([uid()]);
+      // 1.4.13 (QA V1412-1 audit): an agreeing captain never plays on the requester's side (core answerAbandon)
       return uid() in need && !(uid() in o.agreedBy)
+        && !(o.side == 'A' ? onSide(r, true, uid()) : (o.side == 'B' && onSide(r, false, uid())))
         && n == {'by': o.by, 'at': o.at, 'side': o.side, 'agreedBy': ag}
         && (ag.hasAll(need)
           ? ks.hasOnly(['abandonRequest', 'status', 'finishedAt', 'abandon', 'updatedAt']) && d.status == 'abandoned'
@@ -735,9 +737,10 @@ service cloud.firestore {
     // scorer's own side (a scorer on neither side: to another participant on neither side). Never anything else.
     function handoverOk(r, to) {
       let fr = r.scorerId;
-      return maxEv(r) == 0 || (onSide(r, true, fr) ? onSide(r, true, to)
-        : (onSide(r, false, fr) ? onSide(r, false, to)
-          : (to in r.participantIds && !onSide(r, true, to) && !onSide(r, false, to))));
+      let s = sidesOf(r);
+      return maxEv(r) == 0 || (fr in s[0] ? to in s[0]
+        : (fr in s[1] ? to in s[1]
+          : (to in r.participantIds && !(to in s[0]) && !(to in s[1]))));
     }
     // 1.4.7 (QA V146-2/3, core/scorerHandoff.ts scorerTargetProblem): after any scorer change a match with captains
     // still has a verdict captain, and the scorer is neither one nor on one's side (computed on the written doc).
@@ -747,8 +750,8 @@ service cloud.firestore {
     // creator scoring (the usual create) can only be on one side, so the other side is free.
     function setupVerdictOk(d) {
       return d.get('captains', null) == null || d.scorerId == d.createdBy
-        || (!onSide(d, true, d.scorerId) && !onSide(d, true, d.createdBy))
-        || (!onSide(d, false, d.scorerId) && !onSide(d, false, d.createdBy));
+        || (!onSideP(d, true, d.scorerId) && !onSideP(d, true, d.createdBy))
+        || (!onSideP(d, false, d.scorerId) && !onSideP(d, false, d.createdBy));
     }
     // 1.4.9 (QA V148-2, GU11): on an update, an older doc's verdict reference (scorerReassign.from) counts too, like
     // core verdictSetupProblem – one side must have none of the scorer, the reference and the creator. (A create never
@@ -756,13 +759,46 @@ service cloud.firestore {
     // 1.4.10 (QA V149-1): skipped when the roster, captains and participants are unchanged (a rename), and the
     // reference form binds each side's id slice once (let) instead of six onSide() slices – a 12-a-side doc with
     // scorerReassign stayed over the 1000-expression budget.
+    // 1.4.12 (QA V1411-1): ids, not whole player entries. validRoster(d) (and the stored doc) tie the participantIds
+    // prefix to the players' ids in order, so equal side sizes + equal participantIds = the same player ids in order.
+    // 1.4.14 (QA V1413-1/3): the roster edit. Same participants, captains, side sizes and team sources (cheap, no lists)
+    // → sameKeysOk (the ids are compared from both docs' ROSTERS – an older doc's participantIds may be out of roster
+    // order, which made 1.4.13 refuse a plain rename there, and a valid swap ran out of the 1000-expression budget);
+    // anything else is a set-up change: verdict check, then captainsOk, then validRoster (?: stops at the first refusal).
+    function rosterEditOk(d, r) {
+      return d.participantIds == r.participantIds && d.get('captains', null) == r.get('captains', null)
+          && d.teamA.players.size() == r.teamA.players.size() && d.teamB.players.size() == r.teamB.players.size()
+          && d.teamA.get('teamId', null) == r.teamA.get('teamId', null) && d.teamB.get('teamId', null) == r.teamB.get('teamId', null)
+        ? sameKeysOk(d, r)
+        : (setupVerdictUpdOk(d) ? (captainsOk(d) ? validRoster(d) : false) : false);
+    }
+    // d's ids are built once here (a let binding passed down is not re-evaluated; a function argument is)
+    function sameKeysOk(d, r) {
+      let pa = playerIds(d.teamA.players);
+      let pb = playerIds(d.teamB.players);
+      return (pa == playerIds(r.teamA.players) ? pb == playerIds(r.teamB.players) : false)
+        // the same ids on the same sides (core verdictSetupChanged false): only the entries' own fields – the
+        // participants and their order are the stored doc's
+        ? keptRosterOk(d)
+        // players only moved between the sides (nobody new: their profiles / memberships were checked when they joined):
+        // the verdict check, the rosters in participantIds order, each captain on their side, registered-team membership
+        : (d.get('captains', null) != null && setupVerdictUpdOk(d) ? movedOnlyOk(d, pa, pb) : false);
+    }
+    function keptRosterOk(d) {
+      return sideOk(d.teamA) && sideOk(d.teamB)
+        && (d.status != 'live' || (d.teamA.players.size() >= minPlayers() && d.teamB.players.size() >= minPlayers()));
+    }
+    function movedOnlyOk(d, pa, pb) {
+      return d.participantIds[0:d.teamA.players.size() + d.teamB.players.size()] == pa.concat(pb)
+        && d.captains.A in pa && d.captains.B in pb && keptRosterOk(d)
+        && (d.teamA.get('teamId', null) == null || get(/databases/$(database)/documents/teams/$(d.teamA.teamId)).data.memberIds.hasAll(pa))
+        && (d.teamB.get('teamId', null) == null || get(/databases/$(database)/documents/teams/$(d.teamB.teamId)).data.memberIds.hasAll(pb));
+    }
     function setupVerdictUpdOk(d) {
-      let r = resource.data;
-      return (d.teamA.players == r.teamA.players && d.teamB.players == r.teamB.players
-          && d.participantIds == r.participantIds && d.get('captains', null) == r.get('captains', null))
-        || d.get('captains', null) == null
-        || (d.get('scorerReassign', null) == null ? setupVerdictOk(d)
-          : setupVerdictRefOk(d, d.scorerReassign.get('from', d.scorerId)));
+      return d.get('captains', null) == null
+        // 1.4.11 (QA V1410-1): the cheap let-bound form for every update (no reassign: the reference is the scorer) –
+        // the four onSide() slices of setupVerdictOk put a 12-a-side invalid move over the budget
+        || setupVerdictRefOk(d, d.get('scorerReassign', null) == null ? d.scorerId : d.scorerReassign.get('from', d.scorerId));
     }
     function setupVerdictRefOk(d, f) {
       let n = d.teamA.players.size();
@@ -771,24 +807,32 @@ service cloud.firestore {
       return !(d.scorerId in a || d.createdBy in a || f in a) || !(d.scorerId in b || d.createdBy in b || f in b);
     }
     function scorerTargetOk(d) {
+      let s = sidesOf(d);
+      return scorerTargetOkS(d, s);
+    }
+    function scorerTargetOkS(d, s) {
       let c = d.get('captains', null);
-      let va = c != null && verdictCapt(d, c.A);
-      let vb = c != null && verdictCapt(d, c.B);
+      let va = c != null && verdictCaptS(d, s, c.A);
+      let vb = c != null && verdictCaptS(d, s, c.B);
       return c == null || ((va || vb)
-        && !(va && (d.scorerId == c.A || onSide(d, true, d.scorerId)))
-        && !(vb && (d.scorerId == c.B || onSide(d, false, d.scorerId))));
+        && !(va && (d.scorerId == c.A || d.scorerId in s[0]))
+        && !(vb && (d.scorerId == c.B || d.scorerId in s[1])));
     }
     // 1.4.5: the opposing captain reports an abandoned match (core/abandon.ts reportersOf): a captain whose side the
     // abandoner (record's `by`, else the scorer) doesn't play on; back to review 'pending' with reportedBy / reportedAt.
     // Not after an admin decided (reviewedBy, admin abandon, reinstated), a report, or a 'consent' abandon (agreed to).
     // 1.4.6 (QA V145-11): only with a stored record and a match that had a rally (an older abandoned match without a
     // record goes to admin review on its own – no report record is created any more).
+    function reporterOk(r, s, by) {
+      return uid() == r.captains.A ? uid() in s[0] && !(by in s[0]) : (uid() == r.captains.B && uid() in s[1] && !(by in s[1]));
+    }
     function reportOk(d, ks) {
       let r = resource.data;
       let o = r.get('abandon', null);
       let n = d.abandon;
       return ks.hasOnly(['abandon', 'updatedAt']) && o != null && maxEv(r) > 0 && r.get('captains', null) != null
-        && (uid() == r.captains.A ? !onSide(r, true, o.get('by', r.scorerId)) : (uid() == r.captains.B && !onSide(r, false, o.get('by', r.scorerId))))
+        // 1.4.13 (QA V1412-1 audit): the reporting captain plays for the side they captain
+        && reporterOk(r, sidesOf(r), o.get('by', r.scorerId))
         && n.review == 'pending' && n.reportedBy == uid() && n.reportedAt == request.time
         && o.get('reportedBy', null) == null && o.get('reviewedBy', null) == null && !(o.mode in ['admin', 'consent']) && o.review != 'reinstated'
         && n.diff(o).affectedKeys().hasOnly(['review', 'reportedBy', 'reportedAt']);
@@ -990,7 +1034,15 @@ service cloud.firestore {
 
     // ---------- result confirmation (1.3.0, src/core/antifraud.ts confirmProblem) ----------
     // x plays for side A / B (participantIds start with exactly team A's then team B's players).
+    // 1.4.13 (QA V1412-3): the side a player is on comes from the team roster itself, not from the participantIds order
+    // (an older doc's participantIds may not follow its players)
     function onSide(r, sideIsA, x) {
+      return x in playerIds(sideIsA ? r.teamA.players : r.teamB.players);
+    }
+    // both sides' ids once (bind with let and pass the binding down: each onSide() would rebuild the list)
+    function sidesOf(r) { return [playerIds(r.teamA.players), playerIds(r.teamB.players)]; }
+    // the participantIds slice form – ONLY for a doc validRoster() has just checked (ids in roster order): the create
+    function onSideP(r, sideIsA, x) {
       return x in (sideIsA ? r.participantIds[0:r.teamA.players.size()]
         : r.participantIds[r.teamA.players.size():r.teamA.players.size() + r.teamB.players.size()]);
     }
@@ -1012,23 +1064,41 @@ service cloud.firestore {
     // A captain who gives the verdict (core/antifraud.ts verdictCaptains): not the scorer as at the first rally or the
     // creator, and on neither one's side.
     function verdictCapt(r, x) {
+      let s = sidesOf(r);
+      return verdictCaptS(r, s, x);
+    }
+    // 1.4.13 (QA V1412-1, High): and the captain PLAYS for the side they captain (a team-B captain who is a team-A
+    // player is not the opposing captain) – core verdictCaptains / confirmProblem. s = sidesOf(r) (rosters, V1412-3).
+    function verdictCaptS(r, s, x) {
       let sc = r.get('scorerReassign', null) == null ? r.scorerId : r.scorerReassign.from;
       let c = r.get('captains', null);
       return c != null && x != sc && x != r.createdBy
-        && (x == c.A ? !onSide(r, true, sc) && !onSide(r, true, r.createdBy)
-          : (x == c.B && !onSide(r, false, sc) && !onSide(r, false, r.createdBy)));
+        // 1.4.15: an (older, invalid) doc with more than 12 on a side gives no verdict – playerIds reads 12 ids per side, so
+        // a duplicate in 13th place was not seen (core: the same refusal)
+        && r.teamA.players.size() <= maxPlayers() && r.teamB.players.size() <= maxPlayers()
+        // 1.4.14 (QA V1413-4): and not on the other roster too (a player on both – older data – gives no verdict, like core)
+        && (x == c.A ? x in s[0] && !(x in s[1]) && !(sc in s[0]) && !(r.createdBy in s[0])
+          : (x == c.B && x in s[1] && !(x in s[0]) && !(sc in s[1]) && !(r.createdBy in s[1])));
     }
     // 1.4.8 (QA V147-2, core/verdictRepair.ts, lifecycle 'repairVerdict'): an admin outside the match repairs a match
     // nobody can confirm (scorerTargetOk fails now, passes after), with no captain verdict and no review yet: either a
     // participant becomes the scorer (scorerReassign removed: the verdict reference is that scorer) or a player of one
     // side becomes that side's captain. Audited in verdictRepair (by me, server time, what was there).
+    function repairSideClean(r, side) {
+      let f = r.get('scorerReassign', null) == null ? r.scorerId : r.scorerReassign.get('from', r.scorerId);
+      return !(r.scorerId in side) && !(r.createdBy in side) && !(f in side);
+    }
     function verdictRepairOk(d, ks) {
       let r = resource.data;
       let v = d.verdictRepair;
       let c = r.get('captains', null);
+      // the repair never changes the rosters (ks below): one id list per side for r and d
+      let s = sidesOf(r);
       // 1.4.10 (QA V149-3): scorerTargetOk can't see a captain who plays for the other team (it checks the captain's
       // slot, not the player's side), so a captain repair proves "broken" by that captain being off its side instead
-      return isAdmin() && !ownMatch(r) && c != null && (v.kind == 'confirmer' || !scorerTargetOk(r)) && scorerTargetOk(d)
+      // 1.4.13 (KNOWN-GAPS): verdictCapt now checks the side a captain plays for, so scorerTargetOk(r) sees a captain
+      // mix too – every repair (scorer or captain) needs a broken doc, like core's noConfirmer (repair_not_needed)
+      return isAdmin() && !ownMatch(r) && c != null && !scorerTargetOkS(r, s) && scorerTargetOkS(d, s)
         && vStatus(r) == 'pending' && captainOf(r) == null
         && v.keys().hasOnly(['by', 'at', 'kind', 'to', 'side', 'prevScorer', 'prevFrom', 'prevCaptainA', 'prevCaptainB'])
         && v.by == uid() && v.at == request.time && v.prevScorer == r.scorerId
@@ -1040,9 +1110,12 @@ service cloud.firestore {
             && d.scorerId in r.participantIds && d.get('scorerReassign', null) == null
           : v.kind == 'confirmer' && ks.hasOnly(['verdictRepair', 'captains', 'updatedAt']) && v.side in ['A', 'B']
             && d.captains.keys().hasOnly(['A', 'B'])
+            // 1.4.11 (QA V1410-3): and the new captain really can confirm (core verdictSetupProblem after the fix): the
+            // repaired side has none of the scorer, the verdict reference and the creator – a repeat / a fix of the
+            // scorer's own side that leaves nobody to confirm is refused, like core (repair_invalid)
             && (v.side == 'A'
-              ? d.captains.A == v.to && d.captains.B == c.B && !onSide(r, true, c.A) && onSide(r, true, v.to)
-              : d.captains.B == v.to && d.captains.A == c.A && !onSide(r, false, c.B) && onSide(r, false, v.to)));
+              ? repairSideClean(r, s[0]) && d.captains.A == v.to && d.captains.B == c.B && !(c.A in s[0]) && v.to in s[0]
+              : repairSideClean(r, s[1]) && d.captains.B == v.to && d.captains.A == c.A && !(c.B in s[1]) && v.to in s[1]));
     }
     // 1.4.6: never the CURRENT scorer (V145-6), and a verdict belongs to the current re-open epoch (V145-2: `epoch`, only
     // written after a re-open, equals reopenEpoch).
@@ -1183,10 +1256,11 @@ service cloud.firestore {
       return matchKeysOk(ks, 'title')
         && (ks.hasAny(['playerOfMatchId']) ? potmOk(d, ks) : true)
         && (ks.hasAny(['events']) ? eventsOk(d) && resource.data.get('abandonRequest', null) == null : true)
-        // 1.4.5 (V144-1): maxEvents only grows with the events; wasWon only latches (the finishing write sets it);
+        // 1.4.5 (V144-1): maxEvents only grows with the events; wasWon is set only by the finishing write;
         // the abandon record only comes with the abandon (statusMoveOk → scorerAbandonOk)
         && (ks.hasAny(['events', 'maxEvents']) ? maxEvOk(d) : true)
-        && (ks.hasAny(['wasWon']) ? d.wasWon == true : true)
+        // 1.4.15 (QA V1414-2): only the finishing write (finishingWriteOk) sets wasWon – core guardUpdate: server_field
+        && !ks.hasAny(['wasWon'])
         && (ks.hasAny(['abandon']) ? ks.hasAny(['status']) && d.status == 'abandoned' : true)
         && (ks.hasAny(['summary']) ? summaryShapeOk(d.get('summary', null)) : true)
         // V143-3: the replay's inputs are fixed once the first rally exists (and the write adding it can't change them).
@@ -1237,7 +1311,16 @@ service cloud.firestore {
         return (ks.hasAny(['teamA', 'teamB', 'participantIds', 'captains', 'teamSizeMode'])
                 // 1.4.6 (QA V145-3): the set-up is frozen once a rally EVER existed (maxEvents; undo to 0 doesn't reopen it)
                 // 1.4.8 (QA V147-1): and the roster edit keeps the verdict invariant (setupVerdictOk)
-                ? (maxEv(resource.data) == 0 && d.get('events', []).size() == 0 && validRoster(d) && captainsOk(d) && teamSizeOk(d) && setupVerdictUpdOk(d))
+                // 1.4.12 (QA V1411-1/2): an edit that keeps the verdict set-up (player ids in order, participants,
+                // captains, team sources – core verdictSetupChanged) skips the captain and verdict checks, so a rename
+                // or a display-name change on an older broken doc (GU11/GU7/captain mix) is allowed like on core/API
+                // 1.4.13 (QA V1412-2): a set-up change runs the cheap verdict / captain checks FIRST (?: stops there), so an edit
+                // they refuse on a big broken doc never pays for validRoster's per-player checks (it was refused through the
+                // 1000-expression limit); a kept set-up still gets validRoster. Both orders refuse / allow the same writes.
+                ? (maxEv(resource.data) == 0 && d.get('events', []).size() == 0 && teamSizeOk(d)
+                  // 1.4.14 (QA V1413-1/3): a kept set-up checks only the entries; players moved between by-number sides with
+                  // the same participants and captains skip captainsOk's profile reads (validRoster first, then the cheap check)
+                  && rosterEditOk(d, resource.data))
                 : (enoughPlayers(d) ? true : abandonOnly()));
       }
       // 1.4.5 (QA V144-1/2/3): an admin who isn't part of the match resolves it (first: before the finished branch – a
@@ -1263,7 +1346,10 @@ service cloud.firestore {
             // The assigned scorer controls the score (but can't silently change who the scorer is here).
             // Players can only change before the first rally; scoring needs minPlayers() per team.
             : (isScorer() && d.scorerId == resource.data.scorerId)
-              ? (scorerWriteOk(ks, d) ? true : interestedToggle() && termsOk())
+              // 1.4.13 (QA V1412-2): a refused set-up edit doesn't also pay for the "I want to play" fallback (it changes
+              // only interestedIds, so it can't be one) – that put refusals on big broken docs over the budget
+              ? (scorerWriteOk(ks, d) ? true
+                : (ks.hasAny(['teamA', 'teamB', 'participantIds', 'captains', 'teamSizeMode']) ? false : interestedToggle() && termsOk()))
               // The creator or the current scorer can hand scoring to someone else (that field only),
               // while the match isn't over (QA PM-13).
               : ((((resource.data.createdBy == uid() || isScorer()) && ks.hasOnly(['scorerId', 'updatedAt'])

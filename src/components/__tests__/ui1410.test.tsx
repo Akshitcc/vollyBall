@@ -75,7 +75,8 @@ import { KeyboardAwareScreen } from '../KeyboardAwareScreen';
 import { Screen } from '../ui';
 
 import { AdminReviewButtons, reviewScoreText } from '../ResultBadge';
-import { VerdictRepairCard } from '../VerdictRepairCard';
+import { VerdictRepairCard, resetRepairedForTests } from '../VerdictRepairCard';
+afterEach(() => resetRepairedForTests());
 import { presetRules } from '../../core/rules';
 import type { Match } from '../../core/types';
 import en from '../../i18n/locales/en';

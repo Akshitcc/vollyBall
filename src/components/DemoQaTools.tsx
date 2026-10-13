@@ -5,7 +5,8 @@
  */
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Switch, Text, View } from 'react-native';
+import { Platform, Text, View } from 'react-native';
+import { ToolRow } from './ToolRow';
 import { card } from './Hero';
 import { DEMO_MODE } from '../services/config';
 import { backend } from '../services/backend';
@@ -15,16 +16,11 @@ import { connectivity, useOnline } from '../services/connectivity';
 import { useAuth } from '../state/AuthContext';
 import { colors } from '../theme';
 
-function ToolRow({ label, hint, value, onChange, testID }: { label: string; hint: string; value: boolean; onChange: (v: boolean) => void; testID: string }) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingVertical: 6 }}>
-      <View style={{ flex: 1 }}>
-        <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14 }}>{label}</Text>
-        <Text style={{ color: colors.muted, fontWeight: '600', fontSize: 12 }}>{hint}</Text>
-      </View>
-      <Switch value={value} onValueChange={onChange} testID={testID} accessibilityLabel={label} accessibilityHint={hint} />
-    </View>
-  );
+/** web: make a plain element a tap target for the browser's touch adjustment (QA V1416-5) without a Tab stop. */
+export function tapTargetOnWeb(el: unknown): void {
+  const n = el as { setAttribute?: (k: string, v: string) => void } | null;
+  if (Platform.OS !== 'web' || !n?.setAttribute) return;
+  n.setAttribute('tabindex', '-1');
 }
 
 /** Demo builds only (renders nothing elsewhere). */
@@ -39,7 +35,19 @@ export function DemoQaTools() {
   const uid = user?.uid ?? '';
   return (
     <View style={card} testID="demo-qa-tools">
-      <Text style={{ color: colors.text, fontWeight: '800', fontSize: 15 }}>{t('about.qaTools')}</Text>
+      {/* 1.4.17 (QA V1416-5): a 10 px gap under the heading.
+          1.4.18 (QA V1416-5 again): with touch input (DevTools touch emulation, phones) Chrome's touch adjustment moves
+          a tap that lands on a non-target to the nearest tappable element inside the finger's area – a tap on the
+          heading's bottom edge went to the Demo admin row 10 px below (elementFromPoint said H1). The heading is now a
+          tap target itself on web (tabindex -1: mouse-focusable, not a Tab stop, no outline), so a tap on it stays on it. */}
+      <Text
+        ref={tapTargetOnWeb as never}
+        style={[{ color: colors.text, fontWeight: '800', fontSize: 15, marginBottom: 10 }, Platform.OS === 'web' ? ({ outlineStyle: 'none' } as object) : null]}
+        accessibilityRole="header"
+        testID="demo-qa-tools-heading"
+      >
+        {t('about.qaTools')}
+      </Text>
       {/* 1.3.5 (QA E134-2): only the fixed demo admin account (+919000000001) sees this switch */}
       {demo.canBeDemoAdmin(uid) ? (
         <ToolRow

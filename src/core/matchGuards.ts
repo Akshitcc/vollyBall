@@ -4,6 +4,11 @@
  * backends refuse the same writes with the same codes (QA N121-1..3, AF-14, AF-18, AF-50).
  */
 import { CodedError } from './codedError';
+import { MAX_PLAYERS } from './roster';
+/** 1.4.16 (QA V1415-1): a side over MAX_PLAYERS (core / demo; the API answers 400 with ROSTER_MESSAGES.tooMany). */
+export const TEAM_TOO_LARGE = 'team_too_large';
+/** 1.4.18: a side without a players list (null / not an array) – a coded error instead of a TypeError. */
+export const TEAM_INVALID = 'team_invalid';
 import { captainsProblem, CAPTAIN_MESSAGES, isTerminal, MATCH_NO_VERDICT, MATCH_NO_VERDICT_MESSAGE, statusMoveOk, verdictSetupProblem } from './antifraud';
 export { MATCH_NO_VERDICT };
 import type { Match, MatchCaptains } from './types';
@@ -64,6 +69,13 @@ export function guardCreate(m: CreateInput, teamCaptains: { A?: string | null; B
   if (m.playerOfMatchId != null || m.finishedAt != null) fail(MATCH_BAD_STATUS);
   if (MATCH_SERVER_FIELDS.some((k) => m[k] != null)) fail(SERVER_FIELD);
   if (MATCH_ACTION_FIELDS.some((k) => m[k] != null)) fail(SERVER_FIELD);
+  // 1.4.18: each side must have a players list before anything reads it (captains / verdict checks)
+  for (const k of ['teamA', 'teamB'] as const) {
+    const t = (m as { [x: string]: { players?: unknown } | null | undefined })[k];
+    if (!t || typeof t !== 'object' || !Array.isArray(t.players)) fail(TEAM_INVALID);
+  }
+  // 1.4.17 (QA V1416-1): more than 12 on a side gets its own error, before the captain / verdict checks (like the API)
+  for (const k of ['teamA', 'teamB'] as const) if (((m as { [x: string]: { players?: unknown[] } | null | undefined })[k]?.players?.length ?? 0) > MAX_PLAYERS) fail(TEAM_TOO_LARGE);
   const c = captainsProblem(m, teamCaptains);
   if (c) throw new CodedError(c, CAPTAIN_MESSAGES[c]);
   // 1.4.8 (QA V147-1): someone must be able to confirm the result, and the scorer is never on that side
@@ -71,6 +83,26 @@ export function guardCreate(m: CreateInput, teamCaptains: { A?: string | null; B
 }
 /** 1.4.8 (QA V147-1): the roster / captain / participant keys after which the verdict invariant is re-checked. */
 export const VERDICT_SETUP_KEYS = ['teamA', 'teamB', 'participantIds', 'captains', 'teamSizeMode', 'createdBy'] as const;
+type VerdictSetup = { teamA?: { players?: { id: string }[]; teamId?: string | null } | null; teamB?: { players?: { id: string }[]; teamId?: string | null } | null; participantIds?: string[] | null; captains?: unknown; createdBy?: string | null };
+/**
+ * 1.4.11 (QA V1410-2): does an edit touch what the verdict invariant depends on – the players (ids, in order),
+ * participants, captains or creator? A rename / colour / team size change doesn't: allowed even on an older,
+ * already-broken match. Same test in core, the demo, the API and the rules ("unchanged" skip in setupVerdictUpdOk).
+ */
+const capKey = (c: unknown): string => {
+  if (c == null || typeof c !== 'object') return JSON.stringify(c ?? null);
+  const o = c as Record<string, unknown>;
+  return JSON.stringify(Object.keys(o).sort().map((k) => [k, o[k]]));
+};
+export function verdictSetupChanged(before: VerdictSetup, after: VerdictSetup): boolean {
+  const ids = (t: VerdictSetup['teamA']) => JSON.stringify((t?.players ?? []).map((p) => p.id));
+  return ids(before.teamA) !== ids(after.teamA) || ids(before.teamB) !== ids(after.teamB)
+    || JSON.stringify(before.participantIds ?? null) !== JSON.stringify(after.participantIds ?? null)
+    // 1.4.13 (QA V1412-4): captains compared by value (key order ignored); a side's registered team counts (API / rules)
+    || capKey(before.captains) !== capKey(after.captains)
+    || (before.teamA?.teamId ?? null) !== (after.teamA?.teamId ?? null) || (before.teamB?.teamId ?? null) !== (after.teamB?.teamId ?? null)
+    || (before.createdBy ?? null) !== (after.createdBy ?? null);
+}
 
 /**
  * A metadata update (PATCH): no client times or server fields (N121-3, INFO), nothing on a terminal
@@ -94,8 +126,12 @@ export function guardUpdate(before: Match, patch: Partial<Match>, now = Date.now
   // team size – is frozen once the first rally EVER existed (maxEvents; undo to 0 doesn't reopen it) on every backend
   // (core/lifecycle.ts 'editSetup'): a scorer can't wipe the log, swap in a friendly "opposing captain" and re-score
   if (changed.some((k) => (SETUP_FIELDS as readonly string[]).includes(k)) && maxEventsOf(before) > 0) fail(MATCH_SETUP_LOCKED);
+  // 1.4.16 (QA V1415-1): more than MAX_PLAYERS on a side is its own error (the API's 400 "at most 12"), answered before the
+  // verdict check (it said match_no_verdict with captains) – and with no captains too (it passed core before)
+  for (const k of ['teamA', 'teamB'] as const) if (changed.includes(k) && (patch[k]?.players?.length ?? 0) > MAX_PLAYERS) fail(TEAM_TOO_LARGE);
   // 1.4.8 (QA V147-1): a roster / captain edit keeps the verdict invariant (a scorer-only change is the handoff's)
-  if (changed.some((k) => (VERDICT_SETUP_KEYS as readonly string[]).includes(k)) && verdictSetupProblem({ ...before, ...patch } as Match)) fail(MATCH_NO_VERDICT);
+  // 1.4.11 (QA V1410-2): only when players / participants / captains / creator change (a rename passes)
+  if (changed.some((k) => (VERDICT_SETUP_KEYS as readonly string[]).includes(k)) && verdictSetupChanged(before, { ...before, ...patch }) && verdictSetupProblem({ ...before, ...patch } as Match)) fail(MATCH_NO_VERDICT);
   // 1.4.0 (QA V139-5): the creation time and id are the server's; a new time for a scheduled match can't be
   // in the past (API patchMatch: changed scheduledAt + resulting status scheduled → checkNotPast).
   if (changed.includes('createdAt') || changed.includes('id')) fail(SERVER_FIELD);

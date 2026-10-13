@@ -1,4 +1,4 @@
-# Deploying VolleyLive (1.4.10)
+# Deploying VolleyLive (1.4.18)
 
 Nothing in this repo creates accounts, keys or cloud resources, and nothing is deployed for you. The
 builds handed over so far (`volleylive-latest.apk`) are **demo builds, debug-signed** – they must not go
@@ -216,6 +216,39 @@ EXPO_PUBLIC_BACKEND=api EXPO_PUBLIC_API_AUTH=otp EXPO_PUBLIC_STRIP_DEMO=1 APP_VA
   (core `scorerTargetProblem`, rules `scorerTargetOk`). The walks assert it in every state on core/demo, API and rules.
 - `scripts/run-policy-suites.sh` now exits with the suites' real status (strict mode; full log in `$LOG`, default
   `/tmp/policy-suites.log`) and always restores 'review'.
+
+## 1.4.18 – QA V1417
+
+- No migration. App only (New match reveal, Testing tools heading, add-by-number queue, team_invalid); rules and API unchanged.
+
+## 1.4.17 – QA V1416
+
+- No migration. App only (core/demo create check, Home rankings refresh, New match inputs, Testing tools gap); rules and API unchanged.
+
+## 1.4.16 – QA V1415
+
+- No migration. App only (core/demo roster-size code, web a11y, layout); rules unchanged; the API change is tests only.
+
+## 1.4.15 – QA V1414
+
+- No migration. Rules + app together (wasWon, 13-entry sides).
+
+## 1.4.14 – QA V1413
+
+- No migration. Rules + app together (cheaper roster-edit checks, both-rosters captain); the API change is tests only.
+
+## 1.4.13 – QA V1412
+
+- No migration. API + rules + app together (sides from the rosters; stricter repair; cheaper set-up checks).
+
+## 1.4.12 – QA V1411
+
+- No migration. Rules + app together (rules compare player ids for the set-up skip; no captain re-check on a rename).
+  The API change is tests only.
+
+## 1.4.11 – QA V1410
+
+- No migration. API + rules + app together (rename on a broken match, cheaper roster check, stricter captain repair).
 
 ## 1.4.10 – QA V149
 

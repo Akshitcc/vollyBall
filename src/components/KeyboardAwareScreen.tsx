@@ -66,6 +66,41 @@ export function RevealOnShow({ show, dep, below = 24, children, testID, style }:
   );
 }
 /** Web: the on-screen keyboard shrinks the visual viewport. */
+/**
+ * 1.4.17 (QA V1416-3): the shared focus reveal (the 1.4.14 V1413-5 fix as a helper). Put `ref` on a View around the
+ * input (collapsable={false}) and pass `onFocus` to the input: the box scrolls clear of the sticky footer / keyboard
+ * when focused – also with no keyboard event (desktop browser, hardware keyboard) – and again after the keyboard has
+ * opened (400 ms). `extra` runs first (e.g. remember the field is focused).
+ */
+export function useFocusReveal(below = 24) {
+  const reveal = useContext(ScrollRevealContext);
+  const ref = useRef<View>(null);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  const onFocus = useCallback(() => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [...FOCUS_REVEAL_MS, 900].map((ms) => setTimeout(() => reveal(ref.current, below), ms));
+  }, [reveal, below]);
+  return { ref, onFocus };
+}
+/**
+ * 1.4.18 (QA V1416-3): render-anywhere wrapper. useFocusReveal reads ScrollRevealContext, so it only works in a
+ * component rendered INSIDE KeyboardAwareScreen; the New match title called it in the screen component itself (above
+ * the provider) and got the no-op default – focus never scrolled. This wrapper is always inside.
+ */
+export function RevealOnFocus({ children, below = 24, testID }: { children: (onFocus: () => void) => React.ReactNode; below?: number; testID?: string }) {
+  const { ref, onFocus } = useFocusReveal(below);
+  return <View ref={ref} collapsable={false} testID={testID}>{children(onFocus)}</View>;
+}
+export const FOCUS_REVEAL_MS = [60, 400] as const;
+/** 1.4.18: the margin kept between a revealed field and the footer / keyboard. */
+export const REVEAL_BELOW = 24;
+const flatPad = (...st: unknown[]): number => {
+  let pb = 0;
+  for (const x of st.flat(5)) if (x && typeof x === 'object') { const o = x as { paddingBottom?: number; padding?: number; paddingVertical?: number }; pb = o.paddingBottom ?? o.paddingVertical ?? o.padding ?? pb; }
+  return typeof pb === 'number' ? pb : 0;
+};
+
 export const webKeyboardOpen = (inner: number, visual: number): boolean => inner - visual > 120;
 type VisualViewportLike = { height: number; offsetTop?: number };
 /**
@@ -161,6 +196,19 @@ export function KeyboardAwareScreen({
     );
   }, [keyboardOffset, webReveal]);
 
+  /** 1.4.18: the focused field with a small margin (no keyboard): footer resize, focus. */
+  const revealFocusedBelow = useCallback((below: number) => {
+    const input = (TextInput.State.currentlyFocusedInput?.() ?? (Platform.OS === 'web' ? webFocusedInput() : null)) as unknown as { measureLayout?: Function } | null;
+    if (!input) return;
+    const sv = scroll.current;
+    const inner = (sv as unknown as { getInnerViewRef?: () => unknown } | null)?.getInnerViewRef?.();
+    if (Platform.OS === 'web' && webReveal(input, below)) return;
+    if (!input.measureLayout || !sv || !inner) return;
+    input.measureLayout(inner, (_x: number, y: number, _w: number, h: number) => {
+      if (y + h + below > offsetY.current + viewport.current) sv.scrollTo({ y: Math.max(0, y + h + below - viewport.current), animated: true });
+    }, () => {});
+  }, [webReveal]);
+
   const reveal = useCallback<ScrollReveal>((node, below = space(6)) => {
     const n = node as { measureLayout?: Function } | null;
     const sv = scroll.current;
@@ -221,9 +269,18 @@ export function KeyboardAwareScreen({
     };
   }, [revealFocused]);
 
+  // 1.4.18 (QA V1416-3): the sticky footer can change height after a field was revealed (a validation line such as
+  // "Give the place a name." appears on focus / blur) – the scroll area shrinks and covered the field. Whenever the
+  // scroll area's height changes, the focused field is revealed again (keyboard or not), measured against the
+  // ScrollView itself.
+  const lastH = useRef(0);
   const onLayout = (e: LayoutChangeEvent) => {
-    viewport.current = e.nativeEvent.layout.height;
+    const h = e.nativeEvent.layout.height;
+    const changed = lastH.current !== 0 && Math.abs(h - lastH.current) > 1;
+    lastH.current = h;
+    viewport.current = h;
     if (keyboardUp.current) revealFocused();
+    else if (changed) setTimeout(() => revealFocusedBelow(REVEAL_BELOW), 30);
   };
 
   const insets = useInsets();
@@ -247,7 +304,7 @@ export function KeyboardAwareScreen({
           scrollEventThrottle={32}
           // Focus moving between inputs while the keyboard is open (no new keyboard event).
           onTouchEnd={() => keyboardUp.current && setTimeout(revealFocused, 60)}
-          contentContainerStyle={[inner, center && { flexGrow: 1, justifyContent: 'center' }, contentContainerStyle, webInset > 0 && { paddingBottom: webInset + space(10) }]}
+          contentContainerStyle={[inner, center && { flexGrow: 1, justifyContent: 'center' }, contentContainerStyle, footer ? { paddingBottom: Math.max(flatPad(inner, contentContainerStyle), REVEAL_BELOW + space(4)) } : null, webInset > 0 && { paddingBottom: webInset + space(10) }]}
         >
           <ScrollRevealContext.Provider value={reveal}>
             <View>{children}</View>

@@ -7,6 +7,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
+import { toPassText } from '../components/rankText';
 import React, { useCallback, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -162,7 +163,7 @@ export default function RankingsScreen() {
               {`${t('rankings.you')} · ${t('home.rankPts', { pts: mineRow.rankingPoints })}`}
             </Text>
             <Text style={{ color: colors.onInkMuted, fontSize: 12 }} numberOfLines={2}>
-              {mineRow.rank ? (ahead ? t('rankings.toNext', { gap: ahead.rankingPoints - mineRow.rankingPoints, n: ahead.rank, name: ahead.name ?? '' }) : t('rankings.top')) : t('rankings.playMore', { count: left })}
+              {mineRow.rank ? (ahead ? toPassText(t, mineRow.rankingPoints, ahead) /* 1.4.15 (QA V1414-4): one helper with the Home card */ : t('rankings.top')) : t('rankings.playMore', { count: left })}
             </Text>
           </View>
           <PressableScale onPress={() => router.push('/match/new')} accessibilityRole="button" style={s.play} testID="rankings-play">

@@ -26,7 +26,7 @@ import { DemoBackend } from '../../services/backend/demoBackend';
 import { useAuth, useMe } from '../../state/AuthContext';
 import { placeParts } from '../../core/placeNamesHi';
 import { useWatch } from '../../state/hooks';
-import { useRankings } from '../../state/useRankings';
+import { myMatchesKey, useRankings } from '../../state/useRankings';
 import { useMemories } from '../../state/useMemories';
 import { dataLabel, positionLabel } from '../../i18n/format';
 import { colors, elevation, type } from '../../theme';
@@ -81,7 +81,7 @@ export default function Profile() {
   const teams = useWatch<Team[]>((cb) => backend.watchMyTeams(me.id, cb), [me.id]) ?? [];
   const pos = positionLabel(me.position, t);
   // refetch rankings / memories when one of my matches changes (finished, POTM confirmed, photo added)
-  const changeKey = matches.map((m) => `${m.id}:${m.updatedAt}`).join(',');
+  const changeKey = myMatchesKey(matches);
   const rankings = useRankings(me.id, changeKey);
   const memories = useMemories(me.id, changeKey);
   // QA C130-8 (1.3.1): Career stats use the same counted matches as the rank card (and the wallet):

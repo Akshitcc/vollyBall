@@ -116,6 +116,9 @@ export function answerAbandon(m: M, uid: string, action: AbandonAnswer, now: num
   if (!need.includes(uid)) fail(ABANDON_NOT_ALLOWED);
   if (action === 'decline') return { abandonRequest: null };
   if (req!.agreedBy.includes(uid)) fail(ABANDON_NOT_ALLOWED);
+  // 1.4.13 (QA V1412-1 audit): an agreeing captain never plays on the requester's side (captain mix: that request then
+  // waits for a withdrawal or an admin)
+  if (req!.side !== 'N' && sideOfPlayer(m, uid) === req!.side) fail(ABANDON_NOT_ALLOWED);
   const agreedBy = [...req!.agreedBy, uid];
   const next: AbandonRequest = { ...req!, agreedBy };
   if (!need.every((x) => agreedBy.includes(x))) return { abandonRequest: next };

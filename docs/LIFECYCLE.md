@@ -64,6 +64,7 @@ kept in abandonHistory), the captain verdict of the current re-open epoch, appro
 | abWonLog | abandoned with a won log (wasWon), review pending |
 | noConfirm | finished, won, POTM, nobody can confirm (scorer on B, creator on A – older data) |
 | noConfirmLive | live, 3 rallies, nobody can confirm (older data) |
+| capMix | finished, won, POTM, team B’s captain is a team-A player (older data) – nobody can confirm |
 
 Walked actions: delete, unschedule, editSetup, abandon, report, confirmAbandon, reinstate, reopen, adminAbandon, void, verdict, repairVerdict. Walkers: scorer, oppCaptain, teammate, admin, stranger.
 

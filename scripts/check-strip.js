@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 
 /** Strings that exist only in the demo backend / demo seed / demo QA tools. */
-const DEMO_MARKERS = ['volleylive-demo-db-v2', 'volleylive-demo-auth-v1', 'volleylive-demo-qa-admin-v1', 'volleylive-demo-sim-offline-v1', '+919000000001', 'seed_admin', 'demo-qa-tools', 'demo-admin-switch'];
+const DEMO_MARKERS = ['volleylive-demo-db-v2', 'volleylive-demo-auth-v1', 'volleylive-demo-qa-admin-v1', 'volleylive-demo-sim-offline-v1', '+919000000001', 'seed_admin', 'demo-qa-tools', 'demo-admin-switch', 'match_demo_gu11', 'match_demo_capmix', 'match_demo_capmix_done'];
 
 function files(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((d) => {

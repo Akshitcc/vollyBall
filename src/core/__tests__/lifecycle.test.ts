@@ -20,7 +20,7 @@ import * as path from 'path';
 const WR = { ...presetRules('indoor'), bestOf: 1 as const, pointsPerSet: 5, decidingSetPoints: 5, winBy: 1 };
 const A = ['cap', 'a1', 'a2', 'a3', 'a4', 'a5'];
 const B = ['b0', 'b1', 'b2', 'b3', 'b4', 'b5'];
-const CAST = { scorer: 'cap', oppCaptain: 'b0', bPlayer: 'b1', pastAdmin: 'adm2' };
+const CAST = { scorer: 'cap', oppCaptain: 'b0', bPlayer: 'b1', pastAdmin: 'adm2', teammate: 'a1' };
 const WHO = { scorer: 'cap', oppCaptain: 'b0', teammate: 'a1', admin: 'adm', stranger: 'zz' } as const;
 const team = (ids: string[], name: string) => ({ teamId: null, name, color: '#123456', players: ids.map((id) => ({ id, name: id })) });
 const mk = (name: string, over: Partial<Match> = {}): Match =>
@@ -181,7 +181,7 @@ describe('1.4.7 (QA V146-2/3/5)', () => {
     const targets = [...A, ...B, 'adm', 'neutral'];
     let n = 0;
     // (1.4.8: the noConfirm* states are older data that breaks it on purpose – only the admin repair fixes those)
-    for (const st of LC_STATES.filter((x) => !x.noConfirmer)) {
+    for (const st of LC_STATES.filter((x) => !x.noConfirmer && !x.captainMix)) {
       const m = mk(st.name, { participantIds: [...A, ...B, 'neutral'] });
       check(st.name, m);
       for (const to of targets) {

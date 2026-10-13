@@ -18,7 +18,8 @@ const mockConfirm = jest.fn(async () => true);
 jest.mock('../../services/dialogs', () => ({ confirmAsk: (...a: unknown[]) => (mockConfirm as (...x: unknown[]) => unknown)(...a), notify: jest.fn() }));
 
 import { abandonedLine, abandonScoreOf, scoreText } from '../AbandonPanel';
-import { VerdictRepairCard } from '../VerdictRepairCard';
+import { VerdictRepairCard, resetRepairedForTests } from '../VerdictRepairCard';
+afterEach(() => resetRepairedForTests());
 import { webFocusedInput } from '../KeyboardAwareScreen';
 import { abandonedAt } from '../../core/abandon';
 

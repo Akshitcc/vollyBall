@@ -210,3 +210,21 @@ test('1.3.8 (V137-14): Profile header has Edit beside the title; the pincode lin
     await i18n.changeLanguage('en');
   });
 });
+
+test('V1413-7 (1.4.14): tapping a testing-tool row (its label) flips the switch; the row is one accessible switch', async () => {
+  await signedIn();
+  await (app() as unknown as Promise<unknown>);
+  await settle(1500);
+  const { connectivity } = require('../../services/connectivity');
+  const row = await screen.findByTestId('simulate-offline-switch-row');
+  expect(row.props.accessibilityRole).toBe('switch');
+  expect(row.props.accessibilityState).toEqual({ checked: false });
+  await fireEvent.press(screen.getByText('Simulate offline'));
+  await settle();
+  expect(connectivity.isSimulatedOffline()).toBe(true);
+  expect(screen.getByTestId('simulate-offline-switch-row').props.accessibilityState).toEqual({ checked: true });
+  expect(screen.getByTestId('simulate-offline-switch').props.value).toBe(true);
+  await fireEvent.press(screen.getByTestId('simulate-offline-switch-row'));
+  await settle();
+  expect(connectivity.isSimulatedOffline()).toBe(false);
+});

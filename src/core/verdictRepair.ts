@@ -78,3 +78,15 @@ export function repairOptions(m: M): { scorers: string[]; confirmers: { side: 'A
   }
   return { scorers, confirmers };
 }
+
+/**
+ * 1.4.13 (walk tests): the repair the lifecycle walk tries – a captain for a side whose captain plays for the other team
+ * (captain mix: no scorer can fix that), else the given scorer.
+ */
+export function walkRepairFix(m: M, scorer: string): RepairFix {
+  for (const side of ['A', 'B'] as const) {
+    const p = (side === 'A' ? m.teamA : m.teamB).players.find((x) => captainFixAllowed(m, side, x.id) && x.id !== m.createdBy && x.id !== m.scorerId);
+    if (p) return { captain: { side, id: p.id } };
+  }
+  return { scorerId: scorer };
+}

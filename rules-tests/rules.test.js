@@ -2626,7 +2626,7 @@ describe('1.4.6: lifecycle walk + V145 items', () => {
   const A12 = ['cap', ...Array.from({ length: 11 }, (_, i) => `a${i + 1}`)];
   const B12 = Array.from({ length: 12 }, (_, i) => `b${i}`);
   const WR = { ...RULES, bestOf: 1, pointsPerSet: 5, decidingSetPoints: 5, winBy: 1 }; // shortest win: 5 events
-  const CAST = { scorer: 'cap', oppCaptain: 'b0', bPlayer: 'b1', pastAdmin: 'adm2' };
+  const CAST = { scorer: 'cap', oppCaptain: 'b0', bPlayer: 'b1', pastAdmin: 'adm2', teammate: 'a1' };
   const WHO = { scorer: 'cap', oppCaptain: 'b0', teammate: 'a1', admin: 'adm', stranger: 'zz' };
   const fx = { stamp: serverTimestamp(), del: deleteField() };
   const asDb = (who) => env.authenticatedContext(who, { phone_number: '+919000000009', ...(who === 'adm' ? { admin: true } : {}) }).firestore();
@@ -2657,7 +2657,7 @@ describe('1.4.6: lifecycle walk + V145 items', () => {
       case 'adminAbandon': return DOCS.resolveDoc(raw, m, AB.resolveBody(m, me, 'abandon', now), me, fx, now);
       case 'void': return DOCS.reviewDoc(raw, me, 'void', AF.captainVerdict(m), fx, now);
       case 'verdict': return DOCS.verifyDoc(raw, me, 'confirmed', undefined, fx, now);
-      case 'repairVerdict': return DOCS.repairDoc(app('src/core/verdictRepair.ts').repairBody(m, me, { scorerId: 'cap' }, now), fx, now); // 1.4.8 (V147-2)
+      case 'repairVerdict': { const VRw = app('src/core/verdictRepair.ts'); return DOCS.repairDoc(VRw.repairBody(m, me, VRw.walkRepairFix(m, 'cap'), now), fx, now); } // 1.4.8 (V147-2); 1.4.13: a captain fix on capMix
       default: throw new Error(action);
     }
   };
@@ -2827,7 +2827,7 @@ describe('1.4.6: lifecycle walk + V145 items', () => {
       const ss = AF.sideOfPlayer(m, m.scorerId);
       return caps.includes(m.scorerId) || caps.some((c) => ss !== null && AF.sideOfPlayer(m, c) === ss) ? `scorer ${m.scorerId} on the verdict side` : null;
     };
-    for (const st of LC.LC_STATES.filter((x) => !x.noConfirmer)) { // (1.4.8: noConfirm* = older data, repaired by an admin)
+    for (const st of LC.LC_STATES.filter((x) => !x.noConfirmer && !x.captainMix)) { // (1.4.8: noConfirm* = older data, repaired by an admin)
       const { m, raw } = build(st);
       const p0 = broken(m);
       if (p0) bad.push(`${st.name}: ${p0}`);
@@ -2987,6 +2987,301 @@ describe('1.4.6: lifecycle walk + V145 items', () => {
     await seed('v149c', { ...base, scorerReassign: badFrom });
     await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/v149c'), { teamB: { ...base.teamB, name: 'Renamed B' }, updatedAt: Date.now() })).catch((e) => { throw new Error('step 4 ' + e.message); });
     await assertFails(rawUpdateDoc(doc(asDb('cap'), 'matches/v149c'), edit)).catch((e) => { throw new Error('step 5 ' + e.message); });
+  });
+  // ---------- 1.4.11 (QA V1410-1/2/3) ----------
+  test('V1410-1: 12-a-side – the scorer or the creator moving to team B is refused by the logic (no expression-limit error); a valid edit passes', async () => {
+    const base = build(spec('sched0')).raw;
+    expect(base.teamA.players.length).toBe(12);
+    await env.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), 'terms/a2'), { version: TERMS_VERSION, acceptedAt: new Date() });
+      for (const u of ['cap', 'a1', 'a2', 'a3', 'b0', 'b1', 'b2']) await setDoc(doc(c.firestore(), `users/${u}`), { name: u });
+    });
+    const roster = (A, B) => ({ teamA: { ...base.teamA, players: A.map((id) => ({ id, name: id.toUpperCase() })) }, teamB: { ...base.teamB, players: B.map((id) => ({ id, name: id.toUpperCase() })) }, participantIds: [...A, ...B], updatedAt: Date.now() });
+    const moveA2 = roster(A12.filter((x) => x !== 'a2').concat('b11'), B12.slice(0, 11).concat('a2'));
+    const logicDeny = async (p) => {
+      const e = await p.then(() => null, (x) => x);
+      expect(e && e.code).toBe('permission-denied');
+      expect(e.message).not.toMatch(/maximum of 1000 expressions/);
+    };
+    await seed('v1410a', { ...base, scorerId: 'a2' }); // the scorer a2 moves himself to B, creator cap on A
+    await logicDeny(rawUpdateDoc(doc(asDb('a2'), 'matches/v1410a'), moveA2));
+    await seed('v1410b', { ...base, scorerId: 'a3' }); // the creator moves to B (scorer a3 stays on A)
+    const moveCap = roster(A12.filter((x) => x !== 'cap').concat('b11'), B12.slice(0, 11).concat('cap'));
+    await logicDeny(rawUpdateDoc(doc(asDb('a3'), 'matches/v1410b'), { ...moveCap, captains: { A: 'a1', B: base.captains.B } }));
+    await seed('v1410c', base); // valid: a2 (not scorer / creator) moves
+    await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/v1410c'), moveA2));
+  });
+  test('V1410-2: a rename on an already-broken older doc (GU11) passes in core and the rules; a roster edit there does not', async () => {
+    const MG = app('src/core/matchGuards.ts');
+    const base = build(spec('sched0')).raw;
+    await env.withSecurityRulesDisabled(async (c) => {
+      for (const u of ['cap', 'a1', 'a2', 'a3', 'b0', 'b1', 'b2']) await setDoc(doc(c.firestore(), `users/${u}`), { name: u }); // by-number sides
+    });
+    const gu11 = { ...base, scorerReassign: { from: 'b2', by: 'adm', at: T0 } };
+    const rename = { teamB: { ...base.teamB, name: 'Renamed B' } };
+    expect(() => MG.guardUpdate(gu11, rename)).not.toThrow();
+    expect(MG.verdictSetupChanged(gu11, { ...gu11, ...rename })).toBe(false);
+    await seed('v1410d', gu11);
+    await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/v1410d'), { ...rename, updatedAt: Date.now() }));
+  });
+  test('V1410-3: a captain repair only when the new captain can confirm – a fix of the scorer\'s side or a repeat is refused, like core', async () => {
+    const VR = app('src/core/verdictRepair.ts');
+    const w = build(spec('noConfirm'));
+    const { scorerReassign: _r, ...raw0 } = w.raw;
+    const { scorerReassign: _m, ...m0 } = w.m;
+    const over = { captains: { A: 'b3', B: 'a3' }, scorerId: w.raw.createdBy }; // both captains off their sides
+    const raw = { ...raw0, ...over };
+    const m = { ...m0, ...over };
+    const fixA = { captain: { side: 'A', id: 'a1' } };
+    const fixB = { captain: { side: 'B', id: 'b2' } };
+    expect(VR.repairProblem(m, 'adm', true, fixA)).toBe(VR.REPAIR_INVALID); // A holds the scorer and the creator
+    expect(VR.repairProblem(m, 'adm', true, fixB)).toBeNull();
+    await seed('v1410e', raw);
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/v1410e'), DOCS.repairDoc(VR.repairBody(m, 'adm', fixA, Date.now()), fx, Date.now())));
+    await assertSucceeds(rawUpdateDoc(doc(asDb('adm'), 'matches/v1410e'), DOCS.repairDoc(VR.repairBody(m, 'adm', fixB, Date.now()), fx, Date.now())));
+    // a second captain repair after that (A's captain is still off its side): core says not needed, the rules refuse
+    const m2 = { ...m, captains: { A: 'b3', B: 'b2' } };
+    expect(VR.repairProblem(m2, 'adm', true, fixA)).not.toBeNull();
+    await seed('v1410f', { ...raw, captains: { A: 'b3', B: 'b2' } });
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/v1410f'), DOCS.repairDoc(VR.repairBody(m2, 'adm', fixA, Date.now()), fx, Date.now())));
+  });
+  // ---------- 1.4.12 (QA V1411-1/2) ----------
+  test('V1411-1/2: 12-a-side broken docs (GU11, GU7, captain mix) – a display-name change or rename passes (ids compared, like core verdictSetupChanged); a roster or captain change is still checked, under the limit', async () => {
+    const MG = app('src/core/matchGuards.ts');
+    const base = build(spec('sched0')).raw;
+    expect(base.teamA.players.length).toBe(12);
+    await env.withSecurityRulesDisabled(async (c) => {
+      for (const u of ['cap', 'a1', 'a2', 'a3', 'b0', 'b1', 'b2']) await setDoc(doc(c.firestore(), `users/${u}`), { name: u });
+    });
+    const noLimit = async (p, ok) => {
+      const e = await p.then(() => null, (x) => x);
+      if (ok) { expect(e && e.message).toBeFalsy(); return; }
+      expect(e && e.code).toBe('permission-denied');
+      expect(e.message).not.toMatch(/maximum of 1000 expressions/);
+    };
+    const shown = (t) => ({ ...t, players: t.players.map((p, i) => (i === 3 ? { ...p, name: 'Shown Name' } : p)) });
+    const docs = {
+      gu11: { ...base, scorerReassign: { from: 'b2', by: 'adm', at: T0 } },
+      gu7: { ...base, scorerId: 'b1' }, // older doc: scorer on B, creator on A – nobody can confirm
+      capmix: { ...base, captains: { A: base.captains.A, B: 'a1' } }, // team B's captain plays for team A
+    };
+    const who = { gu11: 'cap', gu7: 'b1', capmix: 'cap' };
+    let i = 0;
+    for (const [k, d] of Object.entries(docs)) {
+      const nameEdit = { teamA: shown(d.teamA), teamB: { ...d.teamB, name: 'Renamed B' } };
+      expect(MG.verdictSetupChanged(d, { ...d, ...nameEdit })).toBe(false);
+      expect(() => MG.guardUpdate(d, nameEdit)).not.toThrow();
+      const id = `v1411${i++}`;
+      await seed(id, d);
+      await noLimit(rawUpdateDoc(doc(asDb(who[k]), `matches/${id}`), { ...nameEdit, updatedAt: Date.now() }), true);
+      // same ids, other order on B: a verdict-setup change → checked (and refused on these broken docs)
+      const rb = [...d.teamB.players].reverse();
+      await noLimit(rawUpdateDoc(doc(asDb(who[k]), `matches/${id}`), { teamB: { ...d.teamB, players: rb }, participantIds: [...d.teamA.players.map((p) => p.id), ...rb.map((p) => p.id)], updatedAt: Date.now() }), false);
+      await noLimit(rawUpdateDoc(doc(asDb(who[k]), `matches/${id}`), { captains: { A: d.captains.A, B: k === 'capmix' ? 'a2' : 'a1' }, updatedAt: Date.now() }), false);
+    }
+  });
+  // ---------- 1.4.13 (QA V1412-1/2/3, KNOWN-GAPS) ----------
+  test('V1412-1 (High): captain mix – the team-B captain who plays for A can\'t confirm or dispute (A or B won); the repair works; then the new captain confirms', async () => {
+    const VR = app('src/core/verdictRepair.ts');
+    const AF = app('src/core/antifraud.ts');
+    await env.withSecurityRulesDisabled(async (c) => {
+      for (const u of ['a1', 'b0', 'b2']) await setDoc(doc(c.firestore(), `terms/${u}`), { version: TERMS_VERSION, acceptedAt: new Date() });
+    });
+    const b5 = build(spec('capMix'));
+    const aEv = b5.m.events.map((e) => ({ ...e, side: 'A' }));
+    const a5 = { m: { ...b5.m, events: aEv, playerOfMatchId: 'a2' }, raw: { ...b5.raw, events: aEv, playerOfMatchId: 'a2' } };
+    let i = 0;
+    for (const w of [b5, a5]) {
+      expect(w.raw.captains).toEqual({ A: 'cap', B: 'a1' });
+      expect(AF.confirmProblem(w.m, 'a1')).toBe('not_captain');
+      const id = `v1412a${i++}`;
+      await seed(id, w.raw);
+      await assertFails(rawUpdateDoc(doc(asDb('a1'), `matches/${id}`), DOCS.verifyDoc(w.raw, 'a1', 'confirmed', undefined, fx, Date.now())));
+      await assertFails(rawUpdateDoc(doc(asDb('a1'), `matches/${id}`), DOCS.verifyDoc(w.raw, 'a1', 'disputed', 'wrong score', fx, Date.now())));
+      await assertFails(rawUpdateDoc(doc(asDb('b0'), `matches/${id}`), DOCS.verifyDoc(w.raw, 'b0', 'confirmed', undefined, fx, Date.now())));
+      // the admin's captain repair is allowed (the doc is broken by the side rule now) …
+      const fix = { captain: { side: 'B', id: 'b2' } };
+      expect(VR.repairProblem(w.m, 'adm', true, fix)).toBeNull();
+      await assertSucceeds(rawUpdateDoc(doc(asDb('adm'), `matches/${id}`), DOCS.repairDoc(VR.repairBody(w.m, 'adm', fix, Date.now()), fx, Date.now())));
+      // … then b2 confirms and a1 still can't
+      const fixedRaw = { ...w.raw, captains: { A: 'cap', B: 'b2' } };
+      const id2 = `v1412a${i++}`;
+      await seed(id2, fixedRaw);
+      await assertFails(rawUpdateDoc(doc(asDb('a1'), `matches/${id2}`), DOCS.verifyDoc(fixedRaw, 'a1', 'confirmed', undefined, fx, Date.now())));
+      await assertSucceeds(rawUpdateDoc(doc(asDb('b2'), `matches/${id2}`), DOCS.verifyDoc(fixedRaw, 'b2', 'confirmed', undefined, fx, Date.now())));
+    }
+  });
+  test('KNOWN-GAPS (1.4.13): the rules refuse a repeat captain repair and a repair of a match that isn\'t broken, even for an admin', async () => {
+    const VR = app('src/core/verdictRepair.ts');
+    const w = build(spec('capMix'));
+    const fixed = { ...w.raw, captains: { A: 'cap', B: 'b2' } };
+    const fm = { ...w.m, captains: { A: 'cap', B: 'b2' } };
+    await seed('kg1', fixed); // repaired once: a second captain repair of B
+    expect(VR.repairProblem(fm, 'adm', true, { captain: { side: 'B', id: 'b3' } })).not.toBeNull();
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/kg1'), DOCS.repairDoc(VR.repairBody(fm, 'adm', { captain: { side: 'B', id: 'b3' } }, Date.now()), fx, Date.now())));
+    const ok = build(spec('wonPending')); // healthy: nobody needs a repair
+    await seed('kg2', ok.raw);
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/kg2'), DOCS.repairDoc(VR.repairBody(ok.m, 'adm', { scorerId: 'a1' }, Date.now()), fx, Date.now())));
+    const neutral = { ...ok.raw, captains: { A: 'cap', B: 'a1' }, scorerId: 'zz' }; // a neutral scorer, creator on A: A's captain-creator…
+    await seed('kg3', { ...neutral, createdBy: 'zz' }); // … not broken in core terms (A's captain cap confirms)
+    expect(VR.repairProblem({ ...ok.m, captains: { A: 'cap', B: 'a1' }, scorerId: 'zz', createdBy: 'zz' }, 'adm', true, { captain: { side: 'B', id: 'b2' } })).not.toBeNull();
+    await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/kg3'), DOCS.repairDoc(VR.repairBody({ ...ok.m, captains: { A: 'cap', B: 'a1' }, scorerId: 'zz', createdBy: 'zz' }, 'adm', { captain: { side: 'B', id: 'b2' } }, Date.now()), fx, Date.now())));
+  });
+  test('V1412-3: sides come from the rosters – on an older doc with participantIds out of order, moving captain B to A or the reference to B is a set-up change (refused like core)', async () => {
+    const MG = app('src/core/matchGuards.ts');
+    const base = build(spec('sched0')).raw;
+    await env.withSecurityRulesDisabled(async (c) => {
+      for (const u of [...A12, ...B12]) await setDoc(doc(c.firestore(), `users/${u}`), { name: u });
+    });
+    const P = (ids) => ids.map((id) => ({ id, name: id.toUpperCase() }));
+    const logicDeny = async (p) => {
+      const e = await p.then(() => null, (x) => x);
+      expect(e && e.code).toBe('permission-denied');
+      expect(e.message).not.toMatch(/maximum of 1000 expressions/);
+    };
+    // LX1: stored participantIds list B first; the write swaps the rosters to that order (captain B b0 → team A)
+    const lx1 = { ...base, participantIds: [...B12, ...A12] };
+    const mv1 = { teamA: { ...base.teamA, players: P(B12) }, teamB: { ...base.teamB, players: P(A12) }, updatedAt: Date.now() };
+    expect(MG.verdictSetupChanged(lx1, { ...lx1, ...mv1 })).toBe(true);
+    await seed('lx1', lx1);
+    await logicDeny(rawUpdateDoc(doc(asDb('cap'), 'matches/lx1'), mv1));
+    // LX4: a GU11-style reference a2; stored participantIds have a2 and b5 swapped; the write moves a2 to B
+    const A2 = A12.map((x) => (x === 'a2' ? 'b5' : x));
+    const B2 = B12.map((x) => (x === 'b5' ? 'a2' : x));
+    const lx4 = { ...base, participantIds: [...A2, ...B2], scorerReassign: { from: 'a2', by: 'adm', at: T0 } };
+    const mv4 = { teamA: { ...base.teamA, players: P(A2) }, teamB: { ...base.teamB, players: P(B2) }, updatedAt: Date.now() };
+    expect(MG.verdictSetupChanged(lx4, { ...lx4, ...mv4 })).toBe(true);
+    await seed('lx4', lx4);
+    await logicDeny(rawUpdateDoc(doc(asDb('cap'), 'matches/lx4'), mv4));
+  });
+  test('V1412-2: set-up changes on broken GU7 / GU11 docs at 10, 11 and 12 a side are refused by the logic, not the expression limit', async () => {
+    const base = build(spec('sched0')).raw;
+    await env.withSecurityRulesDisabled(async (c) => {
+      for (const u of [...A12, ...B12]) await setDoc(doc(c.firestore(), `users/${u}`), { name: u });
+    });
+    const P = (ids) => ids.map((id) => ({ id, name: id.toUpperCase() }));
+    const logicDeny = async (p, what) => {
+      const e = await p.then(() => null, (x) => x);
+      expect([what, e && e.code]).toEqual([what, 'permission-denied']);
+      expect([what, /maximum of 1000 expressions/.test(e.message)]).toEqual([what, false]);
+    };
+    let i = 0;
+    for (const n of [10, 11, 12]) {
+      const A = A12.slice(0, n);
+      const B = B12.slice(0, n);
+      const sized = { ...base, teamA: { ...base.teamA, players: P(A) }, teamB: { ...base.teamB, players: P(B) }, participantIds: [...A, ...B] };
+      for (const [k, d, who] of [['gu7', { ...sized, scorerId: 'b1' }, 'b1'], ['gu11', { ...sized, scorerReassign: { from: 'b2', by: 'adm', at: T0 } }, 'cap']]) {
+        const rb = [...B].reverse();
+        const edits = {
+          captain: { captains: { A: 'cap', B: 'b3' } },
+          reorder: { teamB: { ...d.teamB, players: P(rb) }, participantIds: [...A, ...rb] },
+          teamId: { teamA: { ...d.teamA, teamId: 'team_x' } },
+        };
+        for (const [e, body] of Object.entries(edits)) {
+          const id = `v1412b${i++}`;
+          await seed(id, d);
+          await logicDeny(rawUpdateDoc(doc(asDb(who), `matches/${id}`), { ...body, updatedAt: Date.now() }), `${k} ${n} ${e}`);
+        }
+      }
+    }
+  });
+  test('V1413-1 / V1413-3: on older docs with participantIds out of roster order, a valid swap (LX3) and a plain rename / display-name change (LX2, LX8) are allowed at 6..12 a side, under the expression limit', async () => {
+    const MG = app('src/core/matchGuards.ts');
+    const base = build(spec('sched0')).raw;
+    await env.withSecurityRulesDisabled(async (c) => {
+      for (const u of [...A12, ...B12]) await setDoc(doc(c.firestore(), `users/${u}`), { name: u });
+    });
+    const P = (ids) => ids.map((id) => ({ id, name: id.toUpperCase() }));
+    const ok = async (p, what) => {
+      const e = await p.then(() => null, (x) => x);
+      expect([what, e && e.message]).toEqual([what, null]);
+    };
+    let i = 0;
+    for (let n = 6; n <= 12; n++) {
+      const A = A12.slice(0, n);
+      const B = B12.slice(0, n);
+      const last = A[n - 1];
+      // stored rosters canonical, participantIds with a(n-1) and b1 swapped (an older doc)
+      const lp = [...A.slice(0, n - 1), 'b1', last, 'b0', ...B.slice(2)];
+      const lg = { ...base, teamA: { ...base.teamA, players: P(A) }, teamB: { ...base.teamB, players: P(B) }, participantIds: lp };
+      const edits = {
+        LX3: { teamA: { ...lg.teamA, players: P(lp.slice(0, n)) }, teamB: { ...lg.teamB, players: P(lp.slice(n)) } },
+        LX2: { teamA: { ...lg.teamA, name: 'Renamed' } },
+        LX8: { teamA: { ...lg.teamA, players: lg.teamA.players.map((x, k) => (k === 2 ? { ...x, name: 'Zed' } : x)) } },
+      };
+      for (const [k, e] of Object.entries(edits)) {
+        const after = { ...lg, ...e };
+        expect([k, n, MG.guardUpdate ? (() => { try { MG.guardUpdate(lg, e); return 'ok'; } catch (x) { return x.message; } })() : 'ok']).toEqual([k, n, 'ok']);
+        const id = `lx14_${i++}`;
+        await seed(id, lg);
+        await ok(rawUpdateDoc(doc(asDb('cap'), `matches/${id}`), { ...e, updatedAt: Date.now() }), `${k} ${n}`);
+      }
+      // the same swap between two REGISTERED teams (both hold every player): captainsOk + validRoster path, under the limit
+      await env.withSecurityRulesDisabled(async (c) => {
+        await setDoc(doc(c.firestore(), 'teams/lxta'), { name: 'TA', captainId: 'cap', memberIds: [...A12, ...B12] });
+        await setDoc(doc(c.firestore(), 'teams/lxtb'), { name: 'TB', captainId: 'b0', memberIds: [...A12, ...B12] });
+      });
+      const lt = { ...lg, teamA: { ...lg.teamA, teamId: 'lxta' }, teamB: { ...lg.teamB, teamId: 'lxtb' } };
+      const tid = `lx14_${i++}`;
+      await seed(tid, lt);
+      await ok(rawUpdateDoc(doc(asDb('cap'), `matches/${tid}`), { teamA: { ...lt.teamA, players: P(lp.slice(0, n)) }, teamB: { ...lt.teamB, players: P(lp.slice(n)) }, updatedAt: Date.now() }), `LX3 teams ${n}`);
+      // … but not into a registered team the moved player isn't a member of
+      await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'teams/lxtc'), { name: 'TC', captainId: 'b0', memberIds: [...B12] }));
+      const lc = { ...lt, teamB: { ...lt.teamB, teamId: 'lxtc' } };
+      const cid = `lx14_${i++}`;
+      await seed(cid, lc);
+      const ce = await rawUpdateDoc(doc(asDb('cap'), `matches/${cid}`), { teamA: { ...lc.teamA, players: P(lp.slice(0, n)) }, teamB: { ...lc.teamB, players: P(lp.slice(n)) }, updatedAt: Date.now() }).then(() => null, (x) => x);
+      expect([n, ce && ce.code, ce && /maximum of 1000/.test(ce.message)]).toEqual([n, 'permission-denied', false]);
+      // the refusal side still holds: a rename that also moves captain B b0 to A is refused by the logic
+      const bad = { teamA: { ...lg.teamA, name: 'R', players: P([...A.slice(0, n - 1), 'b0']) }, teamB: { ...lg.teamB, players: P([last, ...B.slice(1)]) } };
+      const id = `lx14_${i++}`;
+      await seed(id, lg);
+      const e = await rawUpdateDoc(doc(asDb('cap'), `matches/${id}`), { ...bad, updatedAt: Date.now() }).then(() => null, (x) => x);
+      expect([n, e && e.code]).toEqual([n, 'permission-denied']);
+      expect([n, /maximum of 1000 expressions/.test(e.message)]).toEqual([n, false]);
+    }
+  });
+  test('V1414-2: the scorer can\'t write wasWon outside the finishing write (CThwon) – like core (server_field)', async () => {
+    const MG = app('src/core/matchGuards.ts');
+    const w = build(spec('sched0'));
+    expect((() => { try { MG.guardUpdate(w.m, { wasWon: true }); return 'ok'; } catch (e) { return e.message; } })()).not.toBe('ok');
+    for (const [k, extra] of [['cthwon', {}], ['cthwon2', { title: 'T2' }]]) {
+      await seed(k, w.raw);
+      const e = await rawUpdateDoc(doc(asDb('cap'), `matches/${k}`), { wasWon: true, ...extra, updatedAt: Date.now() }).then(() => null, (x) => x);
+      expect([k, e && e.code, e && /maximum of 1000/.test(e.message)]).toEqual([k, 'permission-denied', false]);
+    }
+    // 1.4.16 (optional): wasWon:false added to a scheduled doc without the field is refused too (core: server_field)
+    const { wasWon: _ww, ...noWw } = w.raw;
+    await seed('cthwon4', noWw);
+    const e4 = await rawUpdateDoc(doc(asDb('cap'), 'matches/cthwon4'), { wasWon: false, updatedAt: Date.now() }).then(() => null, (x) => x);
+    expect([e4 && e4.code, e4 && /maximum of 1000/.test(e4.message)]).toEqual(['permission-denied', false]);
+    await seed('cthwon3', w.raw); // control: the same write without wasWon
+    await assertSucceeds(rawUpdateDoc(doc(asDb('cap'), 'matches/cthwon3'), { title: 'T2', updatedAt: Date.now() }));
+  });
+  test('1.4.15: an older doc with 13 entries on a side (duplicate captain in 13th place) gives no verdict – like core', async () => {
+    const AF = app('src/core/antifraud.ts');
+    const w = build(spec('wonPending'));
+    const raw13 = { ...w.raw, teamA: { ...w.raw.teamA, players: [...w.raw.teamA.players, { id: 'b0', name: 'B0' }] } };
+    const m13 = { ...w.m, teamA: { ...w.m.teamA, players: [...w.m.teamA.players, { id: 'b0', name: 'B0' }] } };
+    expect(AF.confirmProblem(m13, 'b0')).toBe('not_captain');
+    expect(AF.verdictCaptains(m13)).toEqual([]);
+    await seed('dup13', raw13);
+    await assertFails(rawUpdateDoc(doc(asDb('b0'), 'matches/dup13'), DOCS.verifyDoc(raw13, 'b0', 'confirmed', undefined, fx, Date.now())));
+  });
+  test('V1413-4: a captain on BOTH rosters (older data) can\'t confirm or dispute – like core (DUPb0)', async () => {
+    const AF = app('src/core/antifraud.ts');
+    const w = build(spec('wonPending'));
+    const dupRaw = { ...w.raw, teamA: { ...w.raw.teamA, players: w.raw.teamA.players.map((x, k) => (k === w.raw.teamA.players.length - 1 ? { id: 'b0', name: 'B0' } : x)) } }; // 12 a side: b0 replaces the last A player on A's roster only
+    const dupM = { ...w.m, teamA: { ...w.m.teamA, players: w.m.teamA.players.map((x, k) => (k === w.m.teamA.players.length - 1 ? { id: 'b0', name: 'B0' } : x)) } };
+    expect(w.raw.captains.B).toBe('b0');
+    expect(AF.confirmProblem(w.m, 'b0')).toBeNull();
+    expect(AF.confirmProblem(dupM, 'b0')).toBe('not_captain');
+    expect(AF.verdictCaptains(dupM)).toEqual([]);
+    await seed('dupb0', dupRaw);
+    await assertFails(rawUpdateDoc(doc(asDb('b0'), 'matches/dupb0'), DOCS.verifyDoc(dupRaw, 'b0', 'confirmed', undefined, fx, Date.now())));
+    await assertFails(rawUpdateDoc(doc(asDb('b0'), 'matches/dupb0'), DOCS.verifyDoc(dupRaw, 'b0', 'disputed', 'wrong score', fx, Date.now())));
+    await seed('dupb0ok', w.raw); // control: the same captain on one roster confirms
+    await assertSucceeds(rawUpdateDoc(doc(asDb('b0'), 'matches/dupb0ok'), DOCS.verifyDoc(w.raw, 'b0', 'confirmed', undefined, fx, Date.now())));
   });
   test('minor: a verdict from an earlier epoch does not block a reopen (as in core); one from this epoch does', async () => {
     const stale = build(spec('nowin3'), { reopenEpoch: 1, verification: { status: 'confirmed', by: 'b0', at: T0, captain: 'confirmed', epoch: 0 } });

@@ -22,6 +22,7 @@
  */
 import type { Match, MatchCaptains, MatchVerification, VerificationStatus, ResultCheck } from './types';
 import { computeState, type Side } from './scoring';
+import { MAX_PLAYERS } from './roster';
 import { rankingPoints, totalsFromMatches, type PlayerTotals, type RankableMatch } from './ranking';
 
 export const ANTI_FRAUD = Object.freeze({
@@ -432,6 +433,11 @@ export function captainsProblem(
 }
 
 /** Side whose roster contains the user (null = not a player). */
+/** 1.4.14 (QA V1413-4): `uid` is on `side`'s roster (a player on both rosters – older data – is on both; firestore.rules `x in s[0]`). */
+export const playsFor = (m: Pick<Match, 'teamA' | 'teamB'>, side: Side, uid: string): boolean =>
+  (side === 'A' ? m.teamA : m.teamB).players.some((p) => p.id === uid);
+const oversized = (m: Pick<Match, 'teamA' | 'teamB'>): boolean => m.teamA.players.length > MAX_PLAYERS || m.teamB.players.length > MAX_PLAYERS;
+const other = (s: Side): Side => (s === 'A' ? 'B' : 'A');
 export function sideOfPlayer(m: Pick<Match, 'teamA' | 'teamB'>, uid: string): Side | null {
   if (m.teamA.players.some((p) => p.id === uid)) return 'A';
   if (m.teamB.players.some((p) => p.id === uid)) return 'B';
@@ -456,12 +462,17 @@ export function confirmProblem(m: CountableMatch, uid: string): ConfirmProblem |
   if (!isCompleted(m)) return 'not_completed';
   if (!m.captains) return 'no_captains';
   const side: Side | null = m.captains.A === uid ? 'A' : m.captains.B === uid ? 'B' : null;
-  if (!side) return 'not_captain';
+  // 1.4.13 (QA V1412-1, High): the captain must PLAY for the side they captain – a team-B captain who is a team-A player
+  // (older captain-mix data) is not the opposing captain and can't confirm / dispute team A's result
+  // 1.4.14 (QA V1413-4): and only for that side – a player on BOTH rosters (older data) is nobody's opposing captain
+  if (!side || !playsFor(m, side, uid) || playsFor(m, other(side), uid)) return 'not_captain';
+  // 1.4.15: an (older, invalid) doc with more than MAX_PLAYERS on a side gives no verdict – the rules read 12 ids per side
+  if (oversized(m)) return 'not_captain';
   // 1.4.5 (QA V144-8): the scorer as at the first rally (an admin reassignment doesn't move the verdict)
   const scorer = m.scorerReassign?.from ?? m.scorerId;
   // 1.4.6 (QA V145-6): and whoever scores NOW never gives the verdict either
   if (uid === scorer || uid === m.scorerId || uid === m.createdBy) return 'scoring_side';
-  if (sideOfPlayer(m, scorer) === side || sideOfPlayer(m, m.createdBy) === side) return 'scoring_side';
+  if (playsFor(m, side, scorer) || playsFor(m, side, m.createdBy)) return 'scoring_side';
   const st = verificationStatus(m);
   // 1.3.8 (V137-1): an answer recorded in the older fields (1.3.6: `by` without a verdict) counts as answered
   if (st !== 'pending' && !(st === 'approved' && captainVerdict(m) === null)) return 'already_reviewed';
@@ -474,13 +485,15 @@ export function confirmProblem(m: CountableMatch, uid: string): ConfirmProblem |
  * creator play on neither side.
  */
 export function verdictCaptains(m: Pick<CountableMatch, 'captains' | 'teamA' | 'teamB' | 'scorerId' | 'createdBy' | 'scorerReassign'>): string[] {
-  if (!m.captains) return [];
+  if (!m.captains || oversized(m)) return [];
   const scorer = m.scorerReassign?.from ?? m.scorerId;
   const out: string[] = [];
   for (const side of ['A', 'B'] as Side[]) {
     const c = m.captains[side];
     if (c === scorer || c === m.createdBy) continue;
-    if (sideOfPlayer(m, scorer) === side || sideOfPlayer(m, m.createdBy) === side) continue;
+    // 1.4.13 (QA V1412-1): by the side the captain plays for, not the captain slot
+    if (!playsFor(m, side, c) || playsFor(m, other(side), c)) continue; // 1.4.14 (QA V1413-4): not on both rosters
+    if (playsFor(m, side, scorer) || playsFor(m, side, m.createdBy)) continue;
     out.push(c);
   }
   return out;

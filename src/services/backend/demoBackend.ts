@@ -18,8 +18,8 @@ import i18next from 'i18next';
 import type { AuthUser, Backend, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
-import { byMatchDateDesc, CONFIRM_MESSAGES, captainVerdict, currentVerification, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
-import { GUARD_MESSAGES, guardCreate, guardProgress, guardUpdate, MATCH_STATUS_MOVE, matchOver, rulesEndProblem, stampTimes } from '../../core/matchGuards';
+import { byMatchDateDesc, CAPTAIN_MESSAGES, captainsProblem, CONFIRM_MESSAGES, captainVerdict, currentVerification, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
+import { GUARD_MESSAGES, guardCreate, guardProgress, guardUpdate, MATCH_STATUS_MOVE, verdictSetupChanged, matchOver, rulesEndProblem, stampTimes } from '../../core/matchGuards';
 import { abandonPatch, answerAbandon, needsAdminAction, nextMaxEvents, planAbandon, reportAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../core/abandon';
 import { eligibleHandoffAdmins, HANDOVER_MESSAGES, handoverProblem, reassignProblem, reassignRecord } from '../../core/scorerHandoff';
 import { TERMS_NOT_ACCEPTED, TERMS_NOT_ACCEPTED_MESSAGE, TERMS_VERSION, TERMS_VERSION_MISMATCH, termsAccepted, type TermsAcceptance } from '../../core/terms';
@@ -439,7 +439,7 @@ export class DemoBackend implements Backend {
     if (!meProfile || !hasStoredRegistration({ firstName: meProfile.firstName ?? null, lastName: meProfile.lastName ?? null, dob: meProfile.dob ?? null, pincode: meProfile.pincode ?? null }))
       throw new CodedError('profile_incomplete', 'Complete your profile (name, date of birth and pincode) to create a match');
     // 1.3.0: scheduled/live only, captains, no POTM / finish / server fields (core/matchGuards.ts).
-    const cap = (t: Match['teamA']) => (t.teamId ? this.db.teams[t.teamId]?.captainId ?? null : null);
+    const cap = (t: Match['teamA'] | null | undefined) => (t?.teamId ? this.db.teams[t.teamId]?.captainId ?? null : null);
     const { startedAt: _s, startedServerAt: _ss, ...rest } = m0;
     guardCreate(rest, { A: cap(m0.teamA), B: cap(m0.teamB) });
     // Same canonical participantIds order as the API server and firestore.rules.
@@ -571,7 +571,26 @@ export class DemoBackend implements Backend {
       await this.abandonMatch(id);
       return;
     }
+    // 1.4.13: the captains' shape first (guardUpdate's verdict check would call a half pair 'match_no_verdict'); a
+    // finished / abandoned match keeps its frozen-field codes
+    if (m.status !== 'finished' && m.status !== 'abandoned' && patch.captains !== undefined && !(patch.captains == null && m.captains == null)) {
+      const c = patch.captains as { A?: unknown; B?: unknown } | null;
+      if (!c || typeof c.A !== 'string' || typeof c.B !== 'string' || !c.A || !c.B) throw new CodedError('captains_required', CAPTAIN_MESSAGES.captains_required);
+      // 1.4.13 (QA V1412-4): only the A and B keys (API / rules)
+      if (Object.keys(c).some((k) => k !== 'A' && k !== 'B')) throw new CodedError('captains_required', CAPTAIN_MESSAGES.captains_required);
+    }
     guardUpdate(m, patch);
+    // 1.4.12 (QA V1411-3, API / rules parity; after guardUpdate's frozen / lock codes): the creator never changes (API 403, rules matchKeysOk), and the captains
+    // can't be cleared or left half-set (API / rules 400 captains_required) – an older doc without captains may keep null
+    if (patch.createdBy !== undefined && patch.createdBy !== m.createdBy) throw new CodedError('forbidden', 'The creator of a match can\u2019t change');
+    // 1.4.13 (QA V1412-4, API parity): a set-up change (players, captains, a side's team…) re-checks the captains like the
+    // API writeMatch – a captain who isn't a player of their side (e.g. an unknown id) or not the registered team's captain
+    if (verdictSetupChanged(m, { ...m, ...patch } as Match)) {
+      const cap = (t: Match['teamA']) => (t?.teamId ? this.db.teams[t.teamId]?.captainId ?? null : null);
+      const nx = { ...m, ...patch } as Match;
+      const cp = nx.captains ? captainsProblem(nx, { A: cap(nx.teamA), B: cap(nx.teamB) }) : null;
+      if (cp) throw new CodedError(cp, CAPTAIN_MESSAGES[cp]);
+    }
     // 1.4.6 (QA V145, API parity – decideMatchUpdate / firestore.rules): only the scorer edits a match; the creator or
     // the scorer may hand scoring over (that field only); anyone may toggle their own "I want to play".
     const me = this.authUser?.uid;

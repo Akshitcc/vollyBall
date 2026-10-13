@@ -5,6 +5,7 @@
  */
 import { DemoBackend } from '../backend/demoBackend';
 import type { Match } from '../../core/types';
+import { walkRepairFix } from '../../core/verdictRepair';
 import { LC_NOT_ON, LC_STATES, LC_WALK, LC_WALKERS, walkExpect, walkFields, walkSkip, type LcAction } from '../../core/lifecycle';
 import { ABANDON_POLICY } from '../../core/abandonPolicy';
 import { presetRules } from '../../core/rules';
@@ -53,7 +54,7 @@ describe('1.4.6 demo lifecycle walk', () => {
         id: 'lw', rules: WR, firstServe: 'A', summary: null, teamA: team(A, 'Alpha'), teamB: team(B, 'Beta'), captains: { A: 'cap', B: 'b0' },
         createdBy: 'cap', scorerId: 'cap', participantIds: [...A, ...B], scheduledAt: null, startedAt: spec.status === 'scheduled' ? null : 1, finishedAt: spec.status === 'finished' || spec.status === 'abandoned' ? 2 : null,
         finishedServerAt: spec.status === 'finished' ? 2 : null, interestedIds: [], updatedAt: 1, createdAt: 1,
-        ...walkFields(spec, { scorer: 'cap', oppCaptain: 'b0', bPlayer: 'b1', pastAdmin: 'adm2' }, Date.now() - 3_600_000),
+        ...walkFields(spec, { scorer: 'cap', oppCaptain: 'b0', bPlayer: 'b1', pastAdmin: 'adm2', teammate: 'a1' }, Date.now() - 3_600_000),
       }) as unknown as Match;
     const act = (a: LcAction): Promise<unknown> => {
       switch (a) {
@@ -67,7 +68,7 @@ describe('1.4.6 demo lifecycle walk', () => {
         case 'adminAbandon': return b.resolveMatch('lw', 'abandon');
         case 'void': return b.reviewMatch('lw', 'void');
         case 'verdict': return b.confirmResult('lw');
-        case 'repairVerdict': return b.repairVerdict('lw', { scorerId: 'cap' });
+        case 'repairVerdict': return b.repairVerdict('lw', walkRepairFix(inner.db.matches.lw as never, 'cap')); // 1.4.13: a captain fix on capMix
         default: throw new Error(a);
       }
     };
@@ -110,7 +111,7 @@ describe('1.4.6 demo lifecycle walk', () => {
     };
     const inv: string[] = [];
     let changes = 0;
-    for (const spec of LC_STATES.filter((x) => !x.noConfirmer)) { // (1.4.8: noConfirm* = older data, repaired by an admin)
+    for (const spec of LC_STATES.filter((x) => !x.noConfirmer && !x.captainMix)) { // (1.4.8: noConfirm* = older data, repaired by an admin)
       const p0 = broken(mk(spec));
       if (p0) inv.push(`${spec.name}: ${p0}`);
       for (const to of ['a1', 'a3', 'b0', 'b1', 'b3', 'zz', adminUid]) {

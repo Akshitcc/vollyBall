@@ -4,6 +4,7 @@
  */
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import { toPassText } from './rankText';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { StyleSheet, Text, View } from 'react-native';
@@ -67,9 +68,10 @@ export function RankCard({ rankings, style }: { rankings: RankingsResult | null 
         <View style={{ marginTop: 12 }}>
           <ProgressBar value={progress} thumb testID="profile-rank-progress" />
           <View style={{ flexDirection: 'row', marginTop: 6 }}>
-            <Text style={[type.caption, { color: colors.muted, flex: 1 }]}>{t('home.rankPts', { pts: row?.rankingPoints ?? 0 })}</Text>
-            <Text style={[type.caption, { color: colors.primaryText, fontWeight: '700' }]} testID={ranked ? undefined : 'profile-rank-hint'} numberOfLines={2}>
-              {ranked ? (ahead ? t('rankings.toNext', { gap: ahead.rankingPoints - row!.rankingPoints, n: ahead.rank, name: ahead.name ?? '' }) : t('rankings.top')) : t('rankings.playMore', { count: left })}
+            {/* 1.4.16 (QA V1415-3): the points never shrink or wrap ("53" / "pts" on two lines); the "to pass" text takes the rest */}
+            <Text style={[type.caption, { color: colors.muted, flexShrink: 0, marginRight: 8 }]} numberOfLines={1} testID="profile-rank-pts">{t('home.rankPts', { pts: row?.rankingPoints ?? 0 })}</Text>
+            <Text style={[type.caption, { color: colors.primaryText, fontWeight: '700', flex: 1, textAlign: 'right' }]} testID={ranked ? undefined : 'profile-rank-hint'} numberOfLines={2}>
+              {ranked ? (ahead ? toPassText(t, row!.rankingPoints, ahead) /* 1.4.15 (QA V1414-4): one helper with the Home card */ : t('rankings.top')) : t('rankings.playMore', { count: left })}
             </Text>
           </View>
         </View>

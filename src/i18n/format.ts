@@ -187,6 +187,9 @@ const CODED = new Set([
   'abandon_rate_limited', 'reassign_verdict_captain', 'handover_no_verdict',
   // 1.4.8
   'match_no_verdict', 'repair_invalid', 'repair_not_needed',
+  // 1.4.16 (QA V1415-1)
+  'team_too_large',
+  'team_invalid',
 ]);
 /** "teamA.name" -> errors.fields.teamA; unknown fields read "This field". */
 function fieldLabel(field: string | undefined, t: TFunction): string {

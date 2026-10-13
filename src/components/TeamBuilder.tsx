@@ -17,7 +17,7 @@ import { swatchLabel, translateError } from '../i18n/format';
 import { backend } from '../services/backend';
 import { colors, contrast, radius, swatchRing } from '../theme';
 import { Avatar, Button, Field, Row, styles as ui } from './ui';
-import { RevealOnShow, ScrollRevealContext } from './KeyboardAwareScreen';
+import { RevealOnShow, ScrollRevealContext, useFocusReveal } from './KeyboardAwareScreen';
 
 export interface BuiltTeam {
   kind: 'build';
@@ -96,19 +96,62 @@ export function TeamBuilder({
           ? t('newMatch.teamFull', { max })
           : null;
 
+  // 1.4.17 (QA V1416-3): the name and phone fields scroll clear of the sticky footer / keyboard when focused
+  const nameReveal = useFocusReveal();
+  const phoneReveal = useFocusReveal();
+  const phoneInput = useRef<TextInput>(null);
+  // 1.4.17 (QA V1416-4): after an add the builder keeps at least its height until the next number is typed, so what's
+  // below (the captain control) doesn't move up under the finger when the found card goes; focus goes back to the
+  // phone field for the next number.
+  const height = useRef(0);
+  const [hold, setHold] = useState(0);
   const add = () => {
     if (!found || problem) return;
+    setHold(height.current);
+    // a full side drops the phone field: the gap goes after a moment (long enough for a second tap not to land below)
+    if (value.players.length + 1 >= max) setTimeout(() => setHold(0), 1200);
+    // 1.4.18 (QA V1417-3): the box is emptied right now (not on the next render), so digits typed straight after
+    // the add go into an empty field instead of being appended to – and refused after – the old number
+    phoneInput.current?.clear?.();
     onChange({ ...value, players: [...value.players, { id: found.id, name: found.name, photoURL: found.photoURL ?? null }] });
     setPhone('');
     setLookup({ state: 'idle' });
+    pendingAdd.current = false;
+    phoneInput.current?.focus?.();
   };
-  const remove = (id: string) => onChange({ ...value, players: value.players.filter((p) => p.id !== id) });
+  // 1.4.18 (QA V1417-1): Enter while the number is still being looked up queues the add; it runs once when the
+  // lookup finds the player (nothing is re-looked-up). A refusal / not registered / a new number drops the queue.
+  const pendingAdd = useRef(false);
+  const submit = () => {
+    if (lookup.state === 'looking') { pendingAdd.current = true; return; }
+    add();
+  };
+  useEffect(() => {
+    if (!pendingAdd.current || lookup.state === 'looking' || lookup.state === 'idle') return;
+    pendingAdd.current = false;
+    if (lookup.state === 'found') add();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lookup]);
+  const typePhone = (n: string) => {
+    if (n) setHold(0);
+    if (n !== phone) pendingAdd.current = false;
+    setPhone(n);
+  };
+  // 1.4.18 (QA V1417-2): the "N more players" line keeps its space once it goes (at the 6th player), so the phone
+  // field and the captain card below don't jump up
+  const [needH, setNeedH] = useState(0);
+  const remove = (id: string) => {
+    setHold(0);
+    onChange({ ...value, players: value.players.filter((p) => p.id !== id) });
+  };
   const missing = Math.max(0, MIN_PLAYERS - value.players.length);
 
   return (
-    <View testID={testID}>
+    <View testID={testID} style={hold ? { minHeight: hold } : undefined} onLayout={(e) => { if (!hold) height.current = e.nativeEvent.layout.height; }}>
       <Text style={[ui.hint, { marginBottom: 8 }]}>{t('newMatch.buildHint')}</Text>
-      <Field label={t('newMatch.teamName')} value={value.name} onChangeText={(name) => onChange({ ...value, name })} placeholder={t('newMatch.teamNamePlaceholder')} maxLength={LIMITS.sideName.max} testID={`${testID}-name`} />
+      <View ref={nameReveal.ref} collapsable={false}>
+        <Field label={t('newMatch.teamName')} value={value.name} onChangeText={(name) => onChange({ ...value, name })} placeholder={t('newMatch.teamNamePlaceholder')} maxLength={LIMITS.sideName.max} testID={`${testID}-name`} onFocus={nameReveal.onFocus} />
+      </View>
       <Text style={ui.label}>{t('newMatch.colour')}</Text>
       <Row style={{ flexWrap: 'wrap', marginBottom: 12 }}>
         {TEAM_COLORS.map((c) => {
@@ -149,11 +192,13 @@ export function TeamBuilder({
           </Pressable>
         </Row>
       ))}
-      {missing > 0 && (
-        <Text style={{ color: colors.danger, fontWeight: '700', marginVertical: 4 }} testID={`${testID}-need`}>
+      {missing > 0 ? (
+        <Text style={{ color: colors.danger, fontWeight: '700', marginVertical: 4 }} testID={`${testID}-need`} onLayout={(e) => setNeedH(e.nativeEvent.layout.height)}>
           {t('newMatch.needMore', { count: missing, min: MIN_PLAYERS })}
         </Text>
-      )}
+      ) : needH > 0 && !full ? (
+        <View style={{ height: needH, marginVertical: 4 }} testID={`${testID}-need-space`} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden />
+      ) : null}
 
       {full && (
         <Text style={{ color: colors.muted, fontWeight: '700', marginVertical: 4 }} testID={`${testID}-full`}>
@@ -162,8 +207,9 @@ export function TeamBuilder({
       )}
       {!full && (
         <>
-          <View style={{ marginTop: 8 }}>
-            <PhoneInput digitsOnly label={t('newMatch.addPlayer')} value={phone} onChangeText={setPhone} testID={`${testID}-phone`} />
+          <View style={{ marginTop: 8 }} ref={phoneReveal.ref} collapsable={false} testID={`${testID}-phone-wrap`}>
+            {/* 1.4.17 (QA V1416-4): Enter / the keyboard's Done adds the found player (and keeps the keyboard up) */}
+            <PhoneInput ref={phoneInput} digitsOnly label={t('newMatch.addPlayer')} value={phone} onChangeText={typePhone} testID={`${testID}-phone`} onFocus={phoneReveal.onFocus} onSubmitEditing={submit} blurOnSubmit={false} />
           </View>
         </>
       )}

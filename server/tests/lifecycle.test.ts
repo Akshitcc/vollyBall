@@ -6,6 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { walkRepairFix } from '../../src/core/verdictRepair';
 import { LC_NOT_ON, LC_STATES, LC_WALK, LC_WALKERS, walkExpect, walkFields, walkSkip, type LcAction, type LcStateSpec } from '../../src/core/lifecycle';
 import { ABANDON_POLICY } from '../../src/core/abandonPolicy';
 import { sideOfPlayer, verdictCaptains } from '../../src/core/antifraud';
@@ -22,7 +23,7 @@ before(async () => {
 });
 after(async () => h.close());
 
-const CAST = { scorer: 'cap', oppCaptain: 'aarav', bPlayer: 'dan', pastAdmin: 'adm2' };
+const CAST = { scorer: 'cap', oppCaptain: 'aarav', bPlayer: 'dan', pastAdmin: 'adm2', teammate: 'bob' };
 const WHO: Record<(typeof LC_WALKERS)[number], Identity> = {
   scorer: { uid: 'cap', phone: null },
   oppCaptain: { uid: 'aarav', phone: null },
@@ -48,12 +49,13 @@ async function build(spec: LcStateSpec): Promise<string> {
     abandon_info: f.abandon ? JSON.stringify(f.abandon) : null,
   };
   if (f.scorerId) row.scorer_id = f.scorerId; // 1.4.8 (V147-2): older data nobody can confirm
+  if (f.captains) Object.assign(row, { captain_a: f.captains.A, captain_b: f.captains.B }); // 1.4.13 (V1412-1): captain mix
   if (f.verification) Object.assign(row, { verification_status: 'confirmed', captain_verdict: 'confirmed', verified_by: CAST.oppCaptain, verified_at: new Date(t0 + 60_000) });
   await h.db('matches').where({ id }).update(row);
   return id;
 }
 
-function act(a: LcAction, v: Identity, id: string): Promise<unknown> {
+function act(a: LcAction, v: Identity, id: string, m?: never): Promise<unknown> {
   switch (a) {
     case 'delete': return matches.deleteMatch(h.s, v, id);
     case 'unschedule': return matches.patchMatch(h.s, v, id, { status: 'scheduled' });
@@ -66,7 +68,7 @@ function act(a: LcAction, v: Identity, id: string): Promise<unknown> {
     case 'adminAbandon': return matches.resolveMatch(h.s, v, id, 'abandon');
     case 'void': return matches.reviewMatch(h.s, v, id, 'void');
     case 'verdict': return matches.verifyResult(h.s, v, id, 'confirmed');
-    case 'repairVerdict': return matches.repairVerdict(h.s, v, id, { scorerId: CAST.scorer });
+    case 'repairVerdict': return matches.repairVerdict(h.s, v, id, m ? walkRepairFix(m, CAST.scorer) : { scorerId: CAST.scorer }); // 1.4.13: a captain fix on capMix
     default: throw new Error(a);
   }
 }
@@ -87,7 +89,7 @@ describe('1.4.6 API lifecycle walk', () => {
           const v = WHO[w];
           const why = walkExpect(a, m, v.uid, w === 'admin', ABANDON_POLICY);
           let err: unknown = null;
-          const got = await act(a, v, id).then(() => true, (e) => ((err = e), false));
+          const got = await act(a, v, id, m).then(() => true, (e) => ((err = e), false));
           n++;
           // QA AF-45: the same captain replaying the same verdict is an idempotent no-op (nothing is written)
           const replay = a === 'verdict' && why === 'already_reviewed' && (m as { verification?: { by?: string } }).verification?.by === v.uid;
@@ -115,7 +117,7 @@ describe('1.4.7 (QA V146-2/3): the verdict invariant on the API', () => {
     const bad: string[] = [];
     let changes = 0;
     const targets = ['cap', 'bob', 'a3', 'aarav', 'dan', 'b3', 'eve', ADMIN.uid];
-    for (const spec of LC_STATES.filter((x) => !x.noConfirmer)) { // (1.4.8: noConfirm* = older data, repaired by an admin)
+    for (const spec of LC_STATES.filter((x) => !x.noConfirmer && !x.captainMix)) { // (1.4.8: noConfirm* = older data, repaired by an admin)
       const m0 = (await matches.getMatch(h.s, await build(spec), INTERNAL)) as never as Match;
       const p0 = broken(m0);
       if (p0) bad.push(`${spec.name}: ${p0}`);

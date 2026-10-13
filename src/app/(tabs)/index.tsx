@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { toPassText } from '../../components/rankText';
 import { router } from 'expo-router';
 import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -12,7 +13,7 @@ import { DailyCard } from '../../components/DailyCard';
 import { reduceMotionNow } from '../../hooks/useReduceMotion';
 import { LANGUAGES, currentLanguage, setLanguage } from '../../i18n';
 import type { RankingsResult } from '../../services/backend/types';
-import { useRankings } from '../../state/useRankings';
+import { useMyRankings } from '../../state/useRankings';
 import { PressableScale } from '../../components/PressableScale';
 import { Avatar, Banner, Button, Card, Empty, H2, P, Row, TeamDot } from '../../components/ui';
 import type { Challenge, Match, Team } from '../../core/types';
@@ -62,7 +63,7 @@ export default function Home() {
     }
   };
 
-  const rankings = useRankings(me.id);
+  const rankings = useMyRankings(me.id); // V1416-2: refetches on my match changes + focus, like Profile
   const scroll = useRef<ScrollView>(null);
   const liveY = useRef(0);
   const insets = useSafeAreaInsets();
@@ -250,7 +251,7 @@ function HomeRankCard({ rankings, meId }: { rankings: RankingsResult | null | un
           </Text>
           <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]} numberOfLines={2}>
             {me?.rank
-              ? `${t('home.rankPts', { pts: me.rankingPoints })} · ${ahead ? t('home.toPass', { gap: ahead.rankingPoints - me.rankingPoints, name: ahead.name ?? '', n: ahead.rank }) : t('home.topRank')}`
+              ? `${t('home.rankPts', { pts: me.rankingPoints })} · ${ahead ? toPassText(t, me.rankingPoints, ahead) : t('home.topRank')}`
               : t('rankings.playMore', { count: Math.max(0, rankings.minMatches - (me?.matches ?? 0)) })}
           </Text>
           <View style={{ marginTop: 8 }}>

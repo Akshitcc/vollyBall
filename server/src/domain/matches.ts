@@ -17,7 +17,7 @@ import { dobString } from './users';
 import type { Identity } from '../auth/verifier';
 import { topics } from '../live/bus';
 import { checkNotPast, checkOrder, MAX_SCHEDULE_AHEAD_MS, scheduleMsOk, TIME_INVALID_CODE, ValidationError } from '../../../src/core/validate';
-import { ABANDON_PENDING, deleteProblem, finishedFreezeProblem, GUARD_MESSAGES, MATCH_DELETE_FORBIDDEN, MATCH_FINISHED, MATCH_RULES_END, MATCH_SETUP_LOCKED, matchOver, SETUP_FIELDS } from '../../../src/core/matchGuards';
+import { ABANDON_PENDING, deleteProblem, finishedFreezeProblem, GUARD_MESSAGES, MATCH_DELETE_FORBIDDEN, MATCH_FINISHED, MATCH_RULES_END, MATCH_SETUP_LOCKED, matchOver, SETUP_FIELDS, verdictSetupChanged } from '../../../src/core/matchGuards';
 import { maxEventsOf } from '../../../src/core/lifecycle';
 import { abandonPatch, ABANDON_MESSAGES, answerAbandon, needsAdminAction, planAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../../src/core/abandon';
 import { CodedError } from '../../../src/core/codedError';
@@ -447,7 +447,8 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Stored | nu
   // the scorer isn't on that side (core verdictSetupProblem; a scorer-only change is the handoff's, checked there)
   // 1.4.10 (QA V149-2): with the stored verdict reference (scorerReassign.from) – `after` is the client doc, which
   // never carries it – like core, the demo and the rules (GU11)
-  if (!opts.seed && (!before || rosterChanged || changed.has('captains') || changed.has('participantIds')) && verdictSetupProblem({ ...after, scorerReassign: before?.scorerReassign ?? null } as unknown as Match))
+  // 1.4.11 (QA V1410-2): an edit that keeps players / participants / captains / creator (a rename) isn't checked – like core
+  if (!opts.seed && (!before || verdictSetupChanged(before as never, after as never)) && verdictSetupProblem({ ...after, scorerReassign: before?.scorerReassign ?? null } as unknown as Match))
     throw new HttpError(400, MATCH_NO_VERDICT, MATCH_NO_VERDICT_MESSAGE);
   // participantIds = both rosters (+ creator/scorer), like participantsOk() in firestore.rules.
   // Checked whenever the rosters or the participants change (a handover alone doesn't re-check, as in the rules).
