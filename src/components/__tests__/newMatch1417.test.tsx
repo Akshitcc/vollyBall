@@ -90,7 +90,7 @@ describe('V1416-5: the Testing tools heading is apart from the switch rows', () 
     const src = require('fs').readFileSync(require('path').join(__dirname, '../DemoQaTools.tsx'), 'utf8');
     const i = src.indexOf('testID="demo-qa-tools-heading"');
     const line = src.slice(src.lastIndexOf('<Text', i), src.indexOf('</Text>', i));
-    expect(line).toMatch(/marginBottom: 10/);
+    expect(line).toMatch(/paddingBottom: 10/); // 1.4.19 (V1416-5): padding – the gap is part of the heading's tap area
     expect(line).toMatch(/accessibilityRole="header"/);
     expect(line).not.toMatch(/onPress/);
   });

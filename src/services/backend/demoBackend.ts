@@ -1,3 +1,4 @@
+import { assertSupportImage, checkSupportStatus, checkSupportTicket, SUPPORT_IMAGE_TYPES, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
 import { checkFeedback, REVIEW_LAST_ASKED_PREFIX } from '../../core/reviewPrompt';
 import { BUNDLED_DAILY_ITEMS, checkDailyItem, dailyTombstone, type DailyItem } from '../../core/dailyItems';
 /**
@@ -11,7 +12,8 @@ import { repairPatch, type RepairFix } from '../../core/verdictRepair';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEMO_ADMIN_UIDS, DEMO_MODE, DEMO_OTP } from '../config';
 import { addPoint, computeState, summarize, type Side } from '../../core/scoring';
-import { assertRoster, TEAM_SIZE_MODES, canonicalParticipants, challengeProblem, isAbandonOnly, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, teamCanPlay, TEAM_TOO_SMALL_MESSAGE, TOURNAMENT_ORGANIZER_MESSAGE, tournamentTeamsProblem } from '../../core/roster';
+import { assertTournamentAdmin, guardTournamentEdit, NOT_TOURNAMENT_ADMIN_MESSAGE, TOURNAMENT_LINK_KEYS, tournamentLinkProblem } from '../../core/tournamentAdmin';
+import { assertRoster, TEAM_SIZE_MODES, canonicalParticipants, challengeProblem, isAbandonOnly, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, teamCanPlay, TEAM_TOO_SMALL_MESSAGE, tournamentTeamsProblem } from '../../core/roster';
 import type { Challenge, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
 import { DEMO_QA_ADMIN, DemoDB, demoPhotoUrl, demoQaAdminProfile, makeSeed, refreshSeedColours, SEED_PHOTO_SCENES } from './demoSeed';
 import i18next from 'i18next';
@@ -442,6 +444,9 @@ export class DemoBackend implements Backend {
     const cap = (t: Match['teamA'] | null | undefined) => (t?.teamId ? this.db.teams[t.teamId]?.captainId ?? null : null);
     const { startedAt: _s, startedServerAt: _ss, ...rest } = m0;
     guardCreate(rest, { A: cap(m0.teamA), B: cap(m0.teamB) });
+    // 1.4.19: only the tournament's owner links a match to it (the link feeds the standings)
+    const lp = tournamentLinkProblem(null, m0, this.authUser?.uid, (tid) => this.db.tournaments[tid]);
+    if (lp) throw new CodedError(lp, NOT_TOURNAMENT_ADMIN_MESSAGE);
     // Same canonical participantIds order as the API server and firestore.rules.
     const m = checkMatchFields({ ...rest, participantIds: canonicalParticipants(m0) }, { scheduleChanged: true });
     this.checkRoster(m);
@@ -565,6 +570,12 @@ export class DemoBackend implements Backend {
     if (!m) throw new Error('Match not found');
     const interestedOnly = Object.keys(patch).every((k) => k === 'interestedIds' || k === 'updatedAt');
     if (!interestedOnly) this.requireTerms();
+    // 1.4.19: a match's tournament link never changes after create
+    // (a finished / abandoned match keeps its frozen-field codes: tournamentId / fixtureId are frozen there)
+    if ((m.status === 'scheduled' || m.status === 'live') && TOURNAMENT_LINK_KEYS.some((k) => k in patch)) {
+      const lp = tournamentLinkProblem(m, { tournamentId: 'tournamentId' in patch ? patch.tournamentId : m.tournamentId, fixtureId: 'fixtureId' in patch ? patch.fixtureId : m.fixtureId }, this.authUser?.uid, (tid) => this.db.tournaments[tid]);
+      if (lp) throw new CodedError(lp, NOT_TOURNAMENT_ADMIN_MESSAGE);
+    }
     // 1.4.5 (QA V144-1): {status: 'abandoned'} is the abandon action (records who, when, the score; policy switch)
     if (patch.status === 'abandoned' && (m.status === 'live' || m.status === 'scheduled')) {
       if (Object.keys(patch).some((k) => k !== 'status' && k !== 'updatedAt')) throw new CodedError(MATCH_STATUS_MOVE, GUARD_MESSAGES[MATCH_STATUS_MOVE]);
@@ -787,6 +798,43 @@ export class DemoBackend implements Backend {
     list.unshift({ id: 'fb_' + uid(), userId: me, userName: this.db.users[me]?.name ?? null, ...c, createdAt: Date.now() });
     this.changed();
   }
+  // ---------- 1.4.19 support tickets (local) ----------
+  async createSupportTicket(t: NewSupportTicket) {
+    await this.ready;
+    const me = this.authUser?.uid;
+    if (!me) throw new Error('Not signed in yet');
+    this.requireTerms();
+    const c = checkSupportTicket(t);
+    if (t.screenshot) assertSupportImage(t.screenshot.type, t.screenshot.size);
+    const list = (this.db.supportTickets ??= []);
+    if (list.filter((x) => x.userId === me && Date.now() - x.createdAt < 3_600_000).length >= 5) throw new CodedError('rate_limited', 'Too many requests. Wait a moment and try again.');
+    const now = Date.now();
+    const id = 'st_' + uid();
+    list.unshift({ id, userId: me, userName: this.db.users[me]?.name ?? null, ...c, status: 'open', screenshotUrl: t.screenshot?.uri ?? null, createdAt: now, updatedAt: now });
+    this.changed();
+    return id;
+  }
+  async listMySupportTickets() {
+    await this.ready;
+    const me = this.authUser?.uid;
+    if (!me) throw new Error('Not signed in yet');
+    return (this.db.supportTickets ?? []).filter((x) => x.userId === me).map((x) => ({ ...x }));
+  }
+  async listSupportTickets() {
+    await this.ready;
+    if (!(await this.isAdmin(this.authUser?.uid ?? ''))) throw new CodedError('admin_only', 'Admins only');
+    return (this.db.supportTickets ?? []).map((x) => ({ ...x }));
+  }
+  async setSupportTicketStatus(id: string, status: SupportStatus) {
+    await this.ready;
+    if (!(await this.isAdmin(this.authUser?.uid ?? ''))) throw new CodedError('admin_only', 'Admins only');
+    const st = checkSupportStatus(status);
+    const x = (this.db.supportTickets ?? []).find((y) => y.id === id);
+    if (!x) throw new Error('Ticket not found');
+    x.status = st;
+    x.updatedAt = Date.now();
+    this.changed();
+  }
   async listFeedback() {
     await this.ready;
     if (!(await this.isAdmin(this.authUser?.uid ?? ''))) throw new CodedError('admin_only', 'Admins only');
@@ -894,8 +942,8 @@ export class DemoBackend implements Backend {
   async updateTournament(id: string, patch: Partial<Tournament>) {
     const t = this.db.tournaments[id];
     if (!t) throw new Error('Tournament not found');
-    if (this.authUser && t.organizerId !== this.authUser.uid) throw new Error(TOURNAMENT_ORGANIZER_MESSAGE);
-    if (patch.organizerId && patch.organizerId !== t.organizerId) throw new Error(TOURNAMENT_ORGANIZER_MESSAGE);
+    // 1.4.19: the owner only (core/tournamentAdmin) – also when signed out, and never a change of owner
+    guardTournamentEdit(t, this.authUser?.uid, patch);
     const merged = { ...t, ...patch };
     checkTournamentFields({ ...patch, startDate: merged.startDate, endDate: merged.endDate }, { startChanged: patch.startDate !== undefined && patch.startDate !== t.startDate });
     if (patch.teams) {
@@ -903,6 +951,14 @@ export class DemoBackend implements Backend {
       if (problem) throw new Error(problem);
     }
     this.db.tournaments[id] = { ...this.db.tournaments[id], ...patch, id };
+    this.changed();
+  }
+  /** 1.4.19: the owner deletes the tournament (its matches stay, unlinked from nothing – they keep their result). */
+  async deleteTournament(id: string) {
+    const t = this.db.tournaments[id];
+    if (!t) throw new Error('Tournament not found');
+    assertTournamentAdmin(t, this.authUser?.uid);
+    delete this.db.tournaments[id];
     this.changed();
   }
   watchTournament(id: string, cb: (t: Tournament | null) => void) {

@@ -19,6 +19,7 @@ import * as courts from '../domain/courts';
 import * as rankings from '../domain/rankings';
 import * as terms from '../domain/terms';
 import * as feedback from '../domain/feedback';
+import * as support from '../domain/support';
 import { isAdmin } from '../context';
 import { RATE_LIMITED, RateLimiter } from '../rateLimit';
 import crypto from 'node:crypto';
@@ -292,6 +293,17 @@ export function apiRouter(s: Services): Router {
     res.status(201).json(await feedback.sendFeedback(s, me(req), req.body ?? {}));
   }));
   r.get('/admin/feedback', h(async (req, res) => res.json(await feedback.listFeedback(s, me(req)))));
+  // 1.4.19 Help Center > Contact us: own tickets (create / list / one screenshot) + admin inbox (list / status).
+  r.post('/support/tickets', h(async (req, res) => {
+    await limited(me(req).uid, 'support', FEEDBACK_RATE);
+    res.status(201).json(await support.createTicket(s, me(req), req.body ?? {}));
+  }));
+  r.get('/support/tickets', h(async (req, res) => res.json(await support.listMine(s, me(req)))));
+  r.post('/support/tickets/:id/screenshot', raw, h(async (req, res) => {
+    res.status(201).json(await support.uploadScreenshot(s, me(req), req.params.id, req.header('content-type'), req.body as Buffer));
+  }));
+  r.get('/admin/support/tickets', h(async (req, res) => res.json(await support.listAll(s, me(req)))));
+  r.patch('/admin/support/tickets/:id', h(async (req, res) => res.json(await support.setStatus(s, me(req), req.params.id, req.body ?? {}))));
   // 1.3.7: "Fact of the day" admin CRUD (server-side ADMIN_UIDS check in the domain); public read is in app.ts.
   r.get('/admin/daily-items', h(async (req, res) => {
     if (!isAdmin(s, me(req).uid)) throw forbidden('admin_only', 'Admins only');

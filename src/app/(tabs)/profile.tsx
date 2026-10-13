@@ -258,6 +258,7 @@ export default function Profile() {
       <DemoQaTools />
       {/* 1.3.7: feedback (never rewarded), Rate VolleyLive (not live until published), About page */}
       <View style={{ gap: 8 }}>
+        <Button title={t('help.open')} icon="help-circle-outline" variant="secondary" onPress={() => router.push('/help')} testID="profile-help" />
         <Button title={t('feedback.open')} icon="chatbox-ellipses-outline" variant="secondary" onPress={() => router.push('/feedback')} testID="profile-feedback" />
         <Button title={t('review.rate')} icon="star-outline" variant="secondary" onPress={() => void openStoreListing()} testID="profile-rate" />
         <Button title={t('aboutPage.open')} icon="information-circle-outline" variant="secondary" onPress={() => router.push('/about')} testID="profile-about" />

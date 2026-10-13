@@ -1,3 +1,4 @@
+import { assertSupportImage, checkSupportStatus, checkSupportTicket, SUPPORT_IMAGE_TYPES, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
 import { checkFeedback } from '../../core/reviewPrompt';
 import { checkDailyItem, dailyTombstone, type DailyItem } from '../../core/dailyItems';
 /**
@@ -40,6 +41,7 @@ import { deleteField,
   type DocumentData,
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
+import { assertTournamentAdmin, guardTournamentEdit } from '../../core/tournamentAdmin';
 import { deleteObject, getDownloadURL, ref, uploadBytes, uploadBytesResumable } from 'firebase/storage';
 import { blobSha256, readPhoto } from '../photoFile';
 import { planEventSteps } from '../../core/eventSteps';
@@ -815,6 +817,43 @@ export class FirebaseBackend implements Backend {
     const c = checkFeedback(f);
     await addDoc(collection(this.fb.db, 'feedback'), { userId: me, stars: c.stars, text: c.text, appVersion: c.appVersion, createdAt: serverTimestamp() });
   }
+  // 1.4.19 support tickets: supportTickets/{id} (firestore.rules) + support/{uid}/{id}.{ext} (storage.rules)
+  async createSupportTicket(t: NewSupportTicket) {
+    const me = this.fb.auth.currentUser?.uid;
+    if (!me) throw new Error('Not signed in yet');
+    const c = checkSupportTicket(t);
+    const ref0 = doc(collection(this.fb.db, 'supportTickets'));
+    let screenshotPath: string | null = null;
+    if (t.screenshot) {
+      const { blob, type } = await photoBlob(t.screenshot.uri);
+      assertSupportImage(type, blob.size);
+      screenshotPath = `support/${me}/${ref0.id}.${SUPPORT_IMAGE_TYPES[type]}`;
+      await uploadBytes(ref(this.fb.storage, screenshotPath), blob, { contentType: type });
+    }
+    await setDoc(ref0, { userId: me, topic: c.topic, message: c.message, appVersion: c.appVersion, status: 'open', screenshotPath, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    return ref0.id;
+  }
+  private async ticketsFrom(q: ReturnType<typeof query>) {
+    const snap = await getDocs(q);
+    const ms = (v: unknown) => (v && typeof (v as { toMillis?: unknown }).toMillis === 'function' ? (v as { toMillis: () => number }).toMillis() : 0);
+    return Promise.all(snap.docs.map(async (d) => {
+      const x = d.data() as Record<string, unknown>;
+      const path = x.screenshotPath as string | null;
+      return { id: d.id, userId: x.userId as string, topic: x.topic, message: x.message as string, appVersion: (x.appVersion as string) ?? null, status: x.status,
+        screenshotUrl: path ? await getDownloadURL(ref(this.fb.storage, path)).catch(() => null) : null, createdAt: ms(x.createdAt), updatedAt: ms(x.updatedAt) } as SupportTicket;
+    }));
+  }
+  async listMySupportTickets() {
+    const me = this.fb.auth.currentUser?.uid;
+    if (!me) throw new Error('Not signed in yet');
+    return this.ticketsFrom(query(collection(this.fb.db, 'supportTickets'), where('userId', '==', me), orderBy('createdAt', 'desc'), limit(100)));
+  }
+  async listSupportTickets() {
+    return this.ticketsFrom(query(collection(this.fb.db, 'supportTickets'), orderBy('createdAt', 'desc'), limit(200)));
+  }
+  async setSupportTicketStatus(id: string, status: SupportStatus) {
+    await updateDoc(doc(this.fb.db, 'supportTickets', id), { status: checkSupportStatus(status), updatedAt: serverTimestamp() });
+  }
   async listFeedback() {
     const snap = await getDocs(query(collection(this.fb.db, 'feedback'), orderBy('createdAt', 'desc'), limit(200)));
     const out: FeedbackItem[] = [];
@@ -958,7 +997,16 @@ export class FirebaseBackend implements Backend {
     const p = checkTournamentFields({ ...patch }, { startChanged: patch.startDate !== undefined }) as Partial<Tournament>;
     delete p.id;
     if (p.teams) await this.assertTournamentTeams(p.teams);
+    // 1.4.19: the owner only (core/tournamentAdmin; the rules enforce it too) – a coded answer instead of a bare denial
+    const cur = await getDoc(doc(this.fb.db, 'tournaments', id));
+    if (cur.exists()) guardTournamentEdit(cur.data() as Tournament, this.fb.auth.currentUser?.uid, patch);
     await updateDoc(doc(this.fb.db, 'tournaments', id), clean(p) as DocumentData);
+  }
+  async deleteTournament(id: string) {
+    const cur = await getDoc(doc(this.fb.db, 'tournaments', id));
+    if (!cur.exists()) throw new Error('Tournament not found');
+    assertTournamentAdmin(cur.data() as Tournament, this.fb.auth.currentUser?.uid);
+    await deleteDoc(doc(this.fb.db, 'tournaments', id));
   }
   watchTournament(id: string, cb: (t: Tournament | null) => void) {
     return onSnapshot(doc(this.fb.db, 'tournaments', id), (s) => cb(s.exists() ? ({ ...(s.data() as Tournament), id: s.id }) : null));

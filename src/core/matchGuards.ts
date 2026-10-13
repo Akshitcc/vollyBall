@@ -64,16 +64,22 @@ type CreateInput = Pick<Match, 'status' | 'teamA' | 'teamB'> & { captains?: Matc
  * A new match: scheduled or live only (AF-18 / N121-2), no POTM, no finish time, no server fields,
  * and valid captains (`teamCaptains` = the registered teams' captains).
  */
+/**
+ * 1.4.18/1.4.19 (QA V1418-1): a side is an object with a players array whose entries are objects with a string id –
+ * checked before anything reads it, on create AND on update (null / string players, null entries → team_invalid).
+ */
+export function teamShapeProblem(t: unknown): boolean {
+  const x = t as { players?: unknown } | null | undefined;
+  if (!x || typeof x !== 'object' || !Array.isArray(x.players)) return true;
+  return x.players.some((p) => !p || typeof p !== 'object' || typeof (p as { id?: unknown }).id !== 'string');
+}
 export function guardCreate(m: CreateInput, teamCaptains: { A?: string | null; B?: string | null }): void {
   if (m.status !== 'scheduled' && m.status !== 'live') fail(MATCH_BAD_STATUS);
   if (m.playerOfMatchId != null || m.finishedAt != null) fail(MATCH_BAD_STATUS);
   if (MATCH_SERVER_FIELDS.some((k) => m[k] != null)) fail(SERVER_FIELD);
   if (MATCH_ACTION_FIELDS.some((k) => m[k] != null)) fail(SERVER_FIELD);
   // 1.4.18: each side must have a players list before anything reads it (captains / verdict checks)
-  for (const k of ['teamA', 'teamB'] as const) {
-    const t = (m as { [x: string]: { players?: unknown } | null | undefined })[k];
-    if (!t || typeof t !== 'object' || !Array.isArray(t.players)) fail(TEAM_INVALID);
-  }
+  for (const k of ['teamA', 'teamB'] as const) if (teamShapeProblem((m as Record<string, unknown>)[k])) fail(TEAM_INVALID);
   // 1.4.17 (QA V1416-1): more than 12 on a side gets its own error, before the captain / verdict checks (like the API)
   for (const k of ['teamA', 'teamB'] as const) if (((m as { [x: string]: { players?: unknown[] } | null | undefined })[k]?.players?.length ?? 0) > MAX_PLAYERS) fail(TEAM_TOO_LARGE);
   const c = captainsProblem(m, teamCaptains);
@@ -109,6 +115,8 @@ export function verdictSetupChanged(before: VerdictSetup, after: VerdictSetup): 
  * match except "I want to play", no handover after the end, and one-way statuses (N121-1).
  */
 export function guardUpdate(before: Match, patch: Partial<Match>, now = Date.now()): void {
+  // 1.4.19 (QA V1418-1): a changed side must have a valid shape before any check reads it
+  for (const k of ['teamA', 'teamB'] as const) if (k in patch && teamShapeProblem((patch as Record<string, unknown>)[k])) fail(TEAM_INVALID);
   const keys = Object.keys(patch).filter((k) => k !== 'updatedAt');
   if (keys.includes('startedAt') || keys.includes('finishedAt')) fail(SERVER_TIME);
   if (keys.some((k) => (MATCH_SERVER_FIELDS as readonly string[]).includes(k))) fail(SERVER_FIELD);

@@ -24,6 +24,17 @@ service firebase.storage {
         && request.resource.size < 10 * 1024 * 1024;
     }
 
+    // 1.4.19 Contact us screenshot (src/core/support.ts): JPEG / PNG / WebP, above 0 and below 5 MB, written once by
+    // its owner under their own folder; read by the owner and app admins only; never changed or deleted.
+    match /support/{userId}/{file} {
+      allow read: if signedIn() && (request.auth.uid == userId || request.auth.token.get('admin', false) == true);
+      allow create: if signedIn() && request.auth.uid == userId && resource == null && termsOk()
+        && request.resource.contentType.matches('^image/(jpeg|png|webp)$')
+        && request.resource.size >= minBytes(request.resource.contentType)
+        && request.resource.size < 5 * 1024 * 1024;
+      allow update, delete: if false;
+    }
+
     match /avatars/{userId}/{file} {
       allow read: if signedIn();
       allow create, update: if signedIn() && request.auth.uid == userId && isImage() && termsOk();

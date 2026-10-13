@@ -198,6 +198,15 @@ export interface Backend {
   sendFeedback(f: { stars: number; text: string; appVersion?: string }): Promise<void>;
   /** Admin only: newest feedback first. */
   listFeedback(): Promise<FeedbackItem[]>;
+  // ---- 1.4.19 Help Center > Contact us (core/support) ----
+  /** Signed-in user: a new ticket (topic, message, app version, optional gallery screenshot); returns its id. */
+  createSupportTicket(t: import('../../core/support').NewSupportTicket): Promise<string>;
+  /** My own tickets, newest first. */
+  listMySupportTickets(): Promise<import('../../core/support').SupportTicket[]>;
+  /** App admins only: every ticket, newest first. */
+  listSupportTickets(): Promise<import('../../core/support').SupportTicket[]>;
+  /** App admins only: open / replied / closed. */
+  setSupportTicketStatus(id: string, status: import('../../core/support').SupportStatus): Promise<void>;
   /** Fact / quote of the day items (public read, active only; `all` = admins' manage screen). The app falls back to the bundled list. */
   listDailyItems(opts?: { all?: boolean }): Promise<DailyItem[]>;
   /** Admin only: add (no id) or edit an item; returns its id. */
@@ -213,6 +222,8 @@ export interface Backend {
   // ---- tournaments ----
   createTournament(t: NewTournament): Promise<string>;
   updateTournament(id: string, patch: Partial<Tournament>): Promise<void>;
+  /** 1.4.19: owner only (core/tournamentAdmin). */
+  deleteTournament(id: string): Promise<void>;
   watchTournament(id: string, cb: (t: Tournament | null) => void): Unsubscribe;
   watchTournaments(cb: (t: Tournament[]) => void): Unsubscribe;
 

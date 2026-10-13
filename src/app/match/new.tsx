@@ -228,6 +228,16 @@ export default function NewMatch() {
   const nameIn = (id: string) => [...(a?.kind === 'build' ? a.players : a?.kind === 'team' ? rosters[a.team.id]?.players ?? [] : []), ...(b?.kind === 'build' ? b.players : b?.kind === 'team' ? rosters[b.team.id]?.players ?? [] : [])].find((p) => p.id === id)?.name ?? id;
   // 1.4.11 (QA V1410-4): in Custom a clashing player can't play for either side – left out of the "will play" count
   const playCount = (ids: string[] | null) => (ids ? (sizeMode === 'custom' ? ids.filter((id) => !inBoth.includes(id)).length : ids.length) : null);
+  // 1.4.19 (QA V1418-3): the both-teams card scrolls into view only when a NEW clash appears – not on every change of
+  // its text (removing a player while a clash is shown used to jump the page to the card each time)
+  const seenBoth = useRef<string[]>([]);
+  const [bothPing, setBothPing] = useState(0);
+  const bothKey = inBoth.join('|');
+  useEffect(() => {
+    const ids = bothKey ? bothKey.split('|') : [];
+    if (ids.some((id) => !seenBoth.current.includes(id))) setBothPing((n) => n + 1);
+    seenBoth.current = ids;
+  }, [bothKey]);
   const bothText = inBoth.length ? t('newMatch.inBothTeams', { count: inBoth.length, names: inBoth.map(nameIn).join(', ') }) : null;
   const [rules, setRules] = useState<RuleSet>({ ...INDOOR_RULES });
   const [firstServe, setFirstServe] = useState<Side>('A');
@@ -533,7 +543,7 @@ export default function NewMatch() {
         {open.B && <CaptainPicker side="B" value={b} captain={capB} onChange={setCapB} />}
         {needsPick(b) && renderPick('B', b)}
         {/* 1.4.9 (QA V148-6): a player in both squads – inline, kept in view, Next stays disabled */}
-        <RevealOnShow show={!!bothText} dep={bothText} testID="both-teams-error">
+        <RevealOnShow show={!!bothText} dep={bothPing} testID="both-teams-error">
           <Card>
             <Text style={{ color: colors.danger, fontWeight: '700' }} accessibilityRole="alert" testID="both-teams-error-text">{bothText}</Text>
           </Card>

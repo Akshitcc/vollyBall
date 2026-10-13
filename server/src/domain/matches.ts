@@ -21,6 +21,8 @@ import { ABANDON_PENDING, deleteProblem, finishedFreezeProblem, GUARD_MESSAGES, 
 import { maxEventsOf } from '../../../src/core/lifecycle';
 import { abandonPatch, ABANDON_MESSAGES, answerAbandon, needsAdminAction, planAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../../src/core/abandon';
 import { CodedError } from '../../../src/core/codedError';
+import { NOT_TOURNAMENT_ADMIN_MESSAGE, tournamentLinkProblem } from '../../../src/core/tournamentAdmin';
+import { tournamentOwner } from './tournaments';
 import { REPAIR_INVALID, REPAIR_MESSAGES, repairPatch, type RepairFix } from '../../../src/core/verdictRepair';
 import { eligibleHandoffAdmins, HANDOVER_MESSAGES, handoverProblem, reassignProblem, reassignRecord } from '../../../src/core/scorerHandoff';
 import { reportAbandon } from '../../../src/core/abandon';
@@ -654,6 +656,12 @@ export async function createMatch(s: Services, viewer: Identity, input: Doc, fix
     if (!u || !hasStoredRegistration({ firstName: u.first_name, lastName: u.last_name, dob: u.dob ? dobString(u.dob) : null, pincode: u.pincode }))
       throw new HttpError(403, 'profile_incomplete', 'Complete your profile (name, date of birth and pincode) to create a match', { field: 'profile' });
   }
+  // 1.4.19: only the tournament's owner links a match to it (seeds keep their history)
+  if (!fixedId && (input.tournamentId != null || input.fixtureId != null)) {
+    const owner = input.tournamentId ? await tournamentOwner(s.db, input.tournamentId) : null;
+    const lp = tournamentLinkProblem(null, input, viewer.uid, () => owner);
+    if (lp) throw new HttpError(403, lp, NOT_TOURNAMENT_ADMIN_MESSAGE);
+  }
   const id = fixedId ?? newId(); // fixedId: seeds only
   const doc: Doc = { ...input, interestedIds: input.interestedIds ?? [], lineups: input.lineups ?? null, captains: input.captains ?? null };
   delete (doc as Partial<Match>).playerOfMatchId; // set only through PUT /player-of-match
@@ -682,6 +690,9 @@ export async function patchMatch(s: Services, viewer: Identity, id: string, patc
       return 'scorer' as MatchBranch;
     }
     const after: Doc = { ...docOf(full), ...patch } as Doc;
+    // 1.4.19: the tournament link is fixed at create
+    const lp = before.status === 'scheduled' || before.status === 'live' ? tournamentLinkProblem(before, after, viewer.uid, () => null) : null;
+    if (lp) throw new HttpError(403, lp, NOT_TOURNAMENT_ADMIN_MESSAGE);
     after.finishedAt = serverFinishedAt(before, after.status);
     const b = decideMatchUpdate(before, after, viewer);
     // 1.4.5 (QA V144-8, interim): after the first rally scoring goes only to the scorer's own side (or an admin)

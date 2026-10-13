@@ -42,12 +42,14 @@ export function DemoQaTools() {
           tap target itself on web (tabindex -1: mouse-focusable, not a Tab stop, no outline), so a tap on it stays on it. */}
       <Text
         ref={tapTargetOnWeb as never}
-        style={[{ color: colors.text, fontWeight: '800', fontSize: 15, marginBottom: 10 }, Platform.OS === 'web' ? ({ outlineStyle: 'none' } as object) : null]}
+        style={[{ color: colors.text, fontWeight: '800', fontSize: 15, paddingBottom: 10 }, Platform.OS === 'web' ? ({ outlineStyle: 'none' } as object) : null]}
         accessibilityRole="header"
         testID="demo-qa-tools-heading"
       >
         {t('about.qaTools')}
       </Text>
+      {/* 1.4.19 (QA V1418, V1416-5): the gap under the heading is the heading's own padding (a tap target that does
+          nothing), not a margin, so Chrome's touch adjustment has no empty gap to move a tap from onto the switch row */}
       {/* 1.3.5 (QA E134-2): only the fixed demo admin account (+919000000001) sees this switch */}
       {demo.canBeDemoAdmin(uid) ? (
         <ToolRow

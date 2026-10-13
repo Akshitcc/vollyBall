@@ -9,6 +9,8 @@ import type { Court, Match, MatchPlayer, Team, Tournament, UserProfile } from '.
 export interface DemoDB {
   /** 1.3.7: feedback sent from this device (admin view) and the fact-of-the-day items. */
   feedback?: import('./types').FeedbackItem[];
+  /** 1.4.19 Help Center > Contact us. */
+  supportTickets?: import('../../core/support').SupportTicket[];
   dailyItems?: import('../../core/dailyItems').DailyItem[];
   users: Record<string, UserProfile>;
   teams: Record<string, Team>;

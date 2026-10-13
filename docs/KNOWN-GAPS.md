@@ -411,6 +411,24 @@ the worst cases with 10 pads on create and 30 on update.
   rules field; not done.
 - **Abandon policy:** still interim ('review'), pending Akshit's decision.
 
+## 1.4.19 – tournament admin permissions + Help Center
+
+- Firebase: the match create rule has no expression budget left (the 12-a-side create sits at 1000), so it can't check
+  that the creator owns the tournamentId it tags. A stranger can create a match tagged with a tournament, but it never
+  counts: standings / bracket use only matches the owner put in a fixture (fixture.matchId, owner-only writes) –
+  core/tournamentAdmin claimedTournamentMatches. API and demo refuse the tag (403 not_tournament_admin).
+- A fixture match whose fixture.matchId write failed after the match was created (older builds, network error) is not
+  counted until the owner starts / links it again.
+- A tournament without an owner (organizerId missing – older/broken docs) is view-only for everyone, and nobody can
+  delete it (no admin override by design). The API can't store one (organizer_id NOT NULL).
+- App admins have no tournament edit power anywhere; their match powers (delete a scheduled 0-rally match, resolve,
+  abandon, void, reassign scorer) still apply to matches inside a tournament and so can change its results.
+- No ownership hand-over yet (organizerId can't change).
+- Support tickets: no reply thread or notification – the admin sets replied / closed and answers outside the app.
+  Demo keeps the screenshot as the local file uri. Firebase: the screenshot is uploaded before the ticket doc, so a
+  failed doc write can leave an orphan image in the user's own folder.
+- Help Center FAQ Hindi text: NEEDS REVIEW by a native speaker.
+
 ## 1.4.18 – QA V1417
 
 - Web touch: a tap within a few px of a switch row still goes to the row (browser touch adjustment); the Testing tools heading itself is now a tap target.

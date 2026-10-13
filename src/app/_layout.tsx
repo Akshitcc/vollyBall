@@ -107,6 +107,8 @@ function RootStack() {
         <Stack.Screen name="admin-feedback" options={{ title: t('feedback.adminTitle') }} />
         <Stack.Screen name="admin-daily" options={{ title: t('daily.adminTitle') }} />
         <Stack.Screen name="feedback" options={{ title: t('feedback.title') }} />
+        <Stack.Screen name="help" options={{ title: t('help.title') }} />
+        <Stack.Screen name="contact" options={{ title: t('support.title') }} />
         <Stack.Screen name="about" options={{ title: t('aboutPage.title') }} />
         <Stack.Screen name="licenses" options={{ title: t('aboutPage.licensesTitle') }} />
         <Stack.Screen name="terms-view" options={{ title: t('terms.title') }} />

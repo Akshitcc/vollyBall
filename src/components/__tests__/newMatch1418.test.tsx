@@ -48,16 +48,18 @@ describe('V1417-1: Enter while the lookup is running', () => {
     expect(mockLookups).toHaveLength(1); // not looked up again
     expect(s.getByTestId('side-a-phone').props.value).toBe('');
   });
-  it('a new number typed after Enter drops the queued add', async () => {
+  it('1.4.19 (V1417-3): Enter snapshots the number and clears the field; typing on is never overwritten; the queued add still runs', async () => {
     const s = await render(<Harness />);
     await fireEvent.changeText(s.getByTestId('side-a-phone'), '9000000011');
     await tick(400);
     await fireEvent(s.getByTestId('side-a-phone'), 'submitEditing');
+    expect(s.getByTestId('side-a-phone').props.value).toBe(''); // cleared in the same step
     const first = mockRelease!;
     await fireEvent.changeText(s.getByTestId('side-a-phone'), '900000001');
     await act(async () => { first(); });
     await tick(10);
-    expect(s.queryByText('Player 11')).toBeNull();
+    expect(s.getByText('Player 11')).toBeTruthy();
+    expect(s.getByTestId('side-a-phone').props.value).toBe('900000001'); // never written to after the clear
   });
 });
 

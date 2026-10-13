@@ -38,7 +38,7 @@ test('updateTournament: organiser only, and new teams must be registered and big
   const t = seed.tournaments[tid];
   expect(t.organizerId).toBe('seed1');
   const other = await signedIn('+919000000011'); // seed2, not the organiser
-  await expect(other.updateTournament(tid, { status: 'running' })).rejects.toThrow('Only the organiser');
+  await expect(other.updateTournament(tid, { status: 'running' })).rejects.toThrow('Only the tournament owner');
   await expect(b.updateTournament(tid, { status: 'running' })).resolves.toBeUndefined();
   await expect(b.updateTournament(tid, { teams: [...t.teams, { id: 'ext_1', name: 'Ext', color: '#2B2B2B' }] })).rejects.toThrow('registered teams');
   const solo = await b.createTeam({ name: 'Solo', color: '#2B2B2B', captainId: 'seed1', memberIds: ['seed1'], subIds: [], pendingPhones: [], city: '' });

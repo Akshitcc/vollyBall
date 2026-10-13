@@ -1249,8 +1249,10 @@ service cloud.firestore {
         && x.get('A', []).size() <= 12 && x.get('B', []).size() <= 12
         && ids.hasAll(x.get('A', [])) && ids.hasAll(x.get('B', []));
     }
+    // 1.4.19 (core/tournamentAdmin tournamentLinkProblem): a match's tournament link is fixed at create
     function matchUpdateOk(d, ks) {
-      return ks.hasAny(['status']) && d.status == 'finished' ? finishingWriteOk(d, ks) : matchUpdateOk2(d, ks);
+      return !ks.hasAny(['tournamentId', 'fixtureId'])
+        && (ks.hasAny(['status']) && d.status == 'finished' ? finishingWriteOk(d, ks) : matchUpdateOk2(d, ks));
     }
     function matchUpdateOk2(d, ks) {
       return matchKeysOk(ks, 'title')
@@ -1296,6 +1298,9 @@ service cloud.firestore {
           // 1.4.8 (QA V147-1): someone can confirm the result, and the scorer isn't on that side
           && setupVerdictOk(d)
           && termsOk();
+          // 1.4.19: no owner check on tournamentId here – the 12-a-side create sits at the 1000-expression budget.
+          // A stranger's match tagged with a tournament never counts: standings use only the matches the owner put
+          // in the fixtures (fixture.matchId, owner-only), core/tournamentAdmin claimedTournamentMatches.
       }
       allow create: if signedIn() && createAllowed();
       // A legacy match left short of players (before minPlayers(), or players removed later) can't be
@@ -1559,6 +1564,33 @@ service cloud.firestore {
 
     // 1.3.7 Profile > Send feedback: a signed-in user creates their own (1–5 stars, text <= 1000, no
     // control characters); only admins read it; nobody edits or deletes it. Never rewarded.
+    // 1.4.19 Help Center > Contact us (src/core/support.ts): a user creates their own ticket (status 'open', topic
+    // from the list, message 10..2000 characters, no hidden characters, optional screenshot path under their own
+    // support/ folder) and reads only their own; only app admins read all and change the status – nothing else.
+    // Nobody deletes a ticket.
+    match /supportTickets/{ticketId} {
+      allow read: if signedIn() && (resource.data.userId == uid() || isAdmin());
+      allow create: if signedIn() && termsOk()
+        && request.resource.data.keys().hasOnly(['userId', 'topic', 'message', 'appVersion', 'status', 'screenshotPath', 'createdAt', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['userId', 'topic', 'message', 'status', 'createdAt', 'updatedAt'])
+        && request.resource.data.userId == uid()
+        && request.resource.data.status == 'open'
+        && request.resource.data.topic in ['account', 'teams', 'match', 'scoring', 'wallet', 'tournament', 'bug', 'other']
+        && request.resource.data.message is string && request.resource.data.message.size() >= 10 && request.resource.data.message.size() <= 2000
+        && !request.resource.data.message.matches('(?s).*[\\x{0}-\\x{8}\\x{B}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}].*')
+        && (request.resource.data.get('appVersion', null) == null || (request.resource.data.appVersion is string && request.resource.data.appVersion.size() <= 40))
+        && (request.resource.data.get('screenshotPath', null) == null
+            || request.resource.data.screenshotPath == 'support/' + uid() + '/' + ticketId + '.jpg'
+            || request.resource.data.screenshotPath == 'support/' + uid() + '/' + ticketId + '.png'
+            || request.resource.data.screenshotPath == 'support/' + uid() + '/' + ticketId + '.webp')
+        && request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
+      allow update: if signedIn() && isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && request.resource.data.status in ['open', 'replied', 'closed']
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
     match /feedback/{feedbackId} {
       allow read: if signedIn() && isAdmin();
       // 1.3.8 (V137-5): needs the current T&C (like the API); hidden characters (control, zero-width,

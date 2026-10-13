@@ -1,4 +1,5 @@
 import type { RepairFix } from '../../core/verdictRepair';
+import { assertSupportImage, checkSupportStatus, checkSupportTicket, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
 import { checkFeedback } from '../../core/reviewPrompt';
 import { checkDailyItem, type DailyItem } from '../../core/dailyItems';
 /**
@@ -647,6 +648,23 @@ export class ApiBackend implements Backend {
     const c = checkFeedback(f);
     await this.request('POST', '/feedback', c);
   }
+  // 1.4.19 support tickets: JSON create, then the screenshot as a raw image body
+  async createSupportTicket(t: NewSupportTicket) {
+    const c = checkSupportTicket(t);
+    if (t.screenshot) assertSupportImage(t.screenshot.type, t.screenshot.size);
+    const { id } = await this.request<{ id: string }>('POST', '/support/tickets', c);
+    if (t.screenshot) await this.upload(`/support/tickets/${encodeURIComponent(id)}/screenshot`, t.screenshot.uri);
+    return id;
+  }
+  listMySupportTickets() {
+    return this.get<SupportTicket[]>('/support/tickets');
+  }
+  listSupportTickets() {
+    return this.get<SupportTicket[]>('/admin/support/tickets');
+  }
+  async setSupportTicketStatus(id: string, status: SupportStatus) {
+    await this.request('PATCH', `/admin/support/tickets/${encodeURIComponent(id)}`, { status: checkSupportStatus(status) });
+  }
   listFeedback() {
     return this.get<FeedbackItem[]>('/admin/feedback');
   }
@@ -694,6 +712,9 @@ export class ApiBackend implements Backend {
   async updateTournament(id: string, patch: Partial<Tournament>) {
     const { id: _id, createdAt: _c, ...p } = patch;
     await this.request('PATCH', `/tournaments/${encodeURIComponent(id)}`, p);
+  }
+  async deleteTournament(id: string) {
+    await this.request('DELETE', `/tournaments/${encodeURIComponent(id)}`);
   }
   watchTournament(id: string, cb: (t: Tournament | null) => void) {
     return this.watch(`tournament:${id}`, () => this.getOrNull<Tournament>(`/tournaments/${encodeURIComponent(id)}`), cb, (m) => (m.type === 'deleted' ? null : undefined));

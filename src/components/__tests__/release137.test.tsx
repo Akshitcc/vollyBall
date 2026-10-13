@@ -22,6 +22,7 @@ const mockBackend = {
   saveDailyItem: jest.fn(async (_x: Partial<DailyItem>) => 'n1'),
   deleteDailyItem: jest.fn(async (_id: string) => {}),
   sendFeedback: jest.fn(async (_f: { stars: number; text: string }) => {}),
+  listSupportTickets: jest.fn(async () => []),
   listFeedback: jest.fn(async () => [{ id: 'f1', userId: 'u1', userName: 'Asha', stars: 4, text: 'Love it', appVersion: '1.3.7 (13)', createdAt: 1 }]),
   listFlagged: jest.fn(async () => [] as unknown[]),
   reviewMatch: jest.fn(async () => {}),

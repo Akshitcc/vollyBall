@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { initializeTestEnvironment, assertSucceeds, assertFails } = require('@firebase/rules-unit-testing');
 const { doc, getDoc, setDoc, updateDoc: rawUpdateDoc, deleteDoc, collection, getDocs, addDoc, arrayUnion, arrayRemove, serverTimestamp, deleteField, writeBatch } = require('firebase/firestore');
-const { ref, uploadBytes } = require('firebase/storage');
+const { ref, uploadBytes, getMetadata } = require('firebase/storage');
 
 let env;
 /**
@@ -3292,5 +3292,117 @@ describe('1.4.6: lifecycle walk + V145 items', () => {
     const body = payload('reopen', stale.raw, stale.m, 'adm');
     await seed('rm2', cur.raw);
     await assertFails(rawUpdateDoc(doc(asDb('adm'), 'matches/rm2'), body));
+  });
+});
+
+// 1.4.19: tournament admin permissions (src/core/tournamentAdmin.ts): the owner (organizerId) alone edits / deletes
+// a tournament and links matches to it; everyone else – app admins too – reads it only.
+describe('1.4.19 tournament admin permissions', () => {
+  const tour = (over = {}) => ({ name: 'Cup', organizerId: 'cap', format: 'knockout', rules: RULES, startDate: Date.now() + DAY, endDate: Date.now() + 2 * DAY, location: PLACE,
+    teams: ['t1', 't2'].map((id) => ({ id, name: id, color: '#123456' })), fixtures: [], status: 'registration', ...over });
+  const adm = () => env.authenticatedContext('adm', { phone_number: '+919000000009', admin: true }).firestore();
+  const seedT = (data = tour(), id = 'T') => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), `tournaments/${id}`), data));
+  beforeEach(() => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'terms/adm'), { version: TERMS_VERSION, acceptedAt: new Date() })));
+  const fx = [{ id: 'f1', round: 1, teamA: 't1', teamB: 't2', matchId: null }];
+  const EDITS = [
+    ['name', { name: 'Cup 2' }],
+    ['rules', { rules: { ...RULES, bestOf: 3 } }],
+    ['dates', { startDate: Date.now() + 2 * DAY, endDate: Date.now() + 3 * DAY }],
+    ['venue', { location: { name: 'Talkatora', lat: 28.6, lng: 77.2 } }],
+    ['teams (remove one / roster change)', { teams: [{ id: 't1', name: 't1', color: '#123456' }, { id: 't2', name: 'Team Two', color: '#654321' }] }],
+    ['fixtures / bracket', { fixtures: fx }],
+    ['status', { status: 'running' }],
+    ['format (groups)', { format: 'league' }],
+  ];
+  test.each(EDITS)('edit %s: owner yes; player, stranger and app admin no', async (_n, patch) => {
+    await seedT();
+    for (const db of [ctx('eve').firestore(), ctx('bob').firestore(), adm()]) await assertFails(updateDoc(doc(db, 'tournaments/T'), patch));
+    await assertSucceeds(updateDoc(doc(ctx('cap').firestore(), 'tournaments/T'), patch));
+  });
+  test('the owner cannot hand the tournament over (organizerId fixed)', async () => {
+    await seedT();
+    await assertFails(updateDoc(doc(ctx('cap').firestore(), 'tournaments/T'), { organizerId: 'eve' }));
+    await assertFails(updateDoc(doc(ctx('eve').firestore(), 'tournaments/T'), { organizerId: 'eve' }));
+  });
+  test('delete: owner only (not a player, a stranger or an app admin)', async () => {
+    await seedT();
+    for (const db of [ctx('eve').firestore(), ctx('bob').firestore(), adm()]) await assertFails(deleteDoc(doc(db, 'tournaments/T')));
+    await assertSucceeds(deleteDoc(doc(ctx('cap').firestore(), 'tournaments/T')));
+  });
+  test('everyone signed in still reads it', async () => {
+    await seedT();
+    for (const db of [ctx('eve').firestore(), ctx('bob').firestore(), adm()]) await assertSucceeds(getDoc(doc(db, 'tournaments/T')));
+  });
+  test('an older doc without an owner: nobody edits or deletes it', async () => {
+    const { organizerId: _o, ...legacy } = tour();
+    await seedT(legacy);
+    for (const db of [ctx('cap').firestore(), ctx('eve').firestore(), adm()]) {
+      await assertFails(updateDoc(doc(db, 'tournaments/T'), { name: 'Mine now' }));
+      await assertFails(deleteDoc(doc(db, 'tournaments/T')));
+    }
+  });
+  test('match link: fixed after create; only the owner claims a match in a fixture (create has no budget left)', async () => {
+    await seedT();
+    const m = (by, over) => matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, { createdBy: by, scorerId: by, participantIds: ordered(T1, T2, [by]), ...over });
+    // documented gap: the create rule can't afford the owner check; the app ignores an unclaimed match
+    await assertSucceeds(setDoc(doc(ctx('eve').firestore(), 'matches/x1'), m('eve', { tournamentId: 'T', fixtureId: 'f1' })));
+    // ...and only the owner can claim it in a fixture
+    await assertFails(updateDoc(doc(ctx('eve').firestore(), 'tournaments/T'), { fixtures: [{ ...fx[0], matchId: 'x1' }] }));
+    await assertSucceeds(setDoc(doc(ctx('cap').firestore(), 'matches/ok'), m('cap', { tournamentId: 'T', fixtureId: 'f1' })));
+    await assertSucceeds(setDoc(doc(ctx('eve').firestore(), 'matches/free'), m('eve', {}))); // a plain match: unchanged
+    await assertFails(updateDoc(doc(ctx('cap').firestore(), 'matches/ok'), { fixtureId: 'f2' }));
+    await assertFails(updateDoc(doc(ctx('eve').firestore(), 'matches/free'), { tournamentId: 'T' }));
+    // scoring inside the tournament is unchanged: the scorer still adds a rally
+    await assertSucceeds(updateDoc(doc(ctx('cap').firestore(), 'matches/ok'), { status: 'live', startedAt: Date.now(), startedServerAt: serverTimestamp() }));
+  });
+});
+
+// 1.4.19 Help Center > Contact us (src/core/support.ts): own tickets only; app admins read all + set status.
+describe('1.4.19 support tickets', () => {
+  const adm = () => env.authenticatedContext('adm', { phone_number: '+919000000009', admin: true });
+  beforeEach(() => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'terms/adm'), { version: TERMS_VERSION, acceptedAt: new Date() })));
+  const tk = (over = {}) => ({ userId: 'cap', topic: 'scoring', message: 'The score did not update.', appVersion: '1.4.19 (35)', status: 'open', screenshotPath: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), ...over });
+  test('create: own, open, valid topic / message / screenshot path', async () => {
+    const db = ctx('cap').firestore();
+    await assertSucceeds(setDoc(doc(db, 'supportTickets/a'), tk()));
+    await assertSucceeds(setDoc(doc(db, 'supportTickets/b'), tk({ screenshotPath: 'support/cap/b.png' })));
+    for (const [id, over] of [
+      ['c1', { userId: 'eve' }], ['c2', { status: 'closed' }], ['c3', { topic: 'nope' }], ['c4', { message: 'short' }],
+      ['c5', { message: 'x'.repeat(2001) }], ['c6', { message: 'hidden \u200b characters here' }], ['c7', { screenshotPath: 'support/eve/c7.png' }],
+      ['c8', { screenshotPath: 'support/cap/other.png' }], ['c9', { extra: 1 }], ['c10', { createdAt: 1 }],
+    ]) await assertFails(setDoc(doc(db, `supportTickets/${id}`), tk(over)));
+  });
+  test('read: owner and admin only; list only your own', async () => {
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'supportTickets/a'), { ...tk(), createdAt: new Date(), updatedAt: new Date() }));
+    await assertSucceeds(getDoc(doc(ctx('cap').firestore(), 'supportTickets/a')));
+    await assertSucceeds(getDoc(doc(adm().firestore(), 'supportTickets/a')));
+    await assertFails(getDoc(doc(ctx('eve').firestore(), 'supportTickets/a')));
+    const { query, where } = require('firebase/firestore');
+    await assertSucceeds(getDocs(query(collection(ctx('cap').firestore(), 'supportTickets'), where('userId', '==', 'cap'))));
+    await assertFails(getDocs(collection(ctx('cap').firestore(), 'supportTickets')));
+    await assertSucceeds(getDocs(collection(adm().firestore(), 'supportTickets')));
+  });
+  test('status: admins only, only status, only the three values; nobody deletes', async () => {
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'supportTickets/a'), { ...tk(), createdAt: new Date(), updatedAt: new Date() }));
+    await assertFails(rawUpdateDoc(doc(ctx('cap').firestore(), 'supportTickets/a'), { status: 'closed', updatedAt: serverTimestamp() }));
+    await assertFails(rawUpdateDoc(doc(ctx('eve').firestore(), 'supportTickets/a'), { status: 'closed', updatedAt: serverTimestamp() }));
+    for (const st of ['replied', 'closed', 'open']) await assertSucceeds(rawUpdateDoc(doc(adm().firestore(), 'supportTickets/a'), { status: st, updatedAt: serverTimestamp() }));
+    await assertFails(rawUpdateDoc(doc(adm().firestore(), 'supportTickets/a'), { status: 'deleted', updatedAt: serverTimestamp() }));
+    await assertFails(rawUpdateDoc(doc(adm().firestore(), 'supportTickets/a'), { message: 'Edited by the admin', updatedAt: serverTimestamp() }));
+    await assertFails(deleteDoc(doc(adm().firestore(), 'supportTickets/a')));
+    await assertFails(deleteDoc(doc(ctx('cap').firestore(), 'supportTickets/a')));
+  });
+  test('screenshot storage: own folder, jpeg/png/webp < 5 MB; owner + admin read', async () => {
+    const img = new Uint8Array(120);
+    const p = `support/cap/t-${RUN}.png`;
+    await assertSucceeds(uploadBytes(ref(ctx('cap').storage(), p), img, { contentType: 'image/png' }));
+    await assertFails(uploadBytes(ref(ctx('eve').storage(), `support/cap/e-${RUN}.png`), img, { contentType: 'image/png' }));
+    await assertFails(uploadBytes(ref(ctx('cap').storage(), `support/cap/g-${RUN}.gif`), img, { contentType: 'image/gif' }));
+    await assertFails(uploadBytes(ref(ctx('cap').storage(), `support/cap/h-${RUN}.html`), img, { contentType: 'text/html' }));
+    await assertFails(uploadBytes(ref(ctx('cap').storage(), `support/cap/b-${RUN}.jpg`), new Uint8Array(5 * 1024 * 1024), { contentType: 'image/jpeg' }));
+    await assertFails(uploadBytes(ref(ctx('cap').storage(), p), img, { contentType: 'image/png' })); // never replaced
+    await assertSucceeds(getMetadata(ref(ctx('cap').storage(), p)));
+    await assertSucceeds(getMetadata(ref(adm().storage(), p)));
+    await assertFails(getMetadata(ref(ctx('eve').storage(), p)));
   });
 });

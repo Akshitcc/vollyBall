@@ -3,7 +3,10 @@ import type { Fixture } from '../../../src/core/tournament';
 import type { Tournament, TournamentTeam } from '../../../src/core/types';
 import { MIN_PLAYERS, TEAM_TOO_SMALL_MESSAGE, TOURNAMENT_TEAMS_MESSAGE } from '../../../src/core/roster';
 import type { Services } from '../context';
-import { badRequest, forbidden, notFound } from '../errors';
+import { badRequest, forbidden, HttpError, notFound } from '../errors';
+import { guardTournamentEdit, isTournamentAdmin, NOT_TOURNAMENT_ADMIN, NOT_TOURNAMENT_ADMIN_MESSAGE } from '../../../src/core/tournamentAdmin';
+
+const notAdmin = () => new HttpError(403, NOT_TOURNAMENT_ADMIN, NOT_TOURNAMENT_ADMIN_MESSAGE);
 import type { Identity } from '../auth/verifier';
 import { topics } from '../live/bus';
 import { checkTournamentFields } from '../../../src/core/validate';
@@ -152,7 +155,8 @@ export async function patchTournament(s: Services, viewer: Identity, id: string,
     const [cur] = await loadTournaments(trx, [id]);
     const { id: _i, createdAt: _c, ...before } = cur;
     const after: Doc = { ...before, ...patch };
-    if (before.organizerId !== viewer.uid || after.organizerId !== viewer.uid) throw forbidden('tournaments.update', 'Only the organiser can edit this tournament');
+    // 1.4.19: the owner only (core/tournamentAdmin; app admins too get 403), never a change of owner
+    try { guardTournamentEdit(before as Tournament, viewer.uid, patch); } catch { throw notAdmin(); }
     await writeTournament(trx, id, before, after);
   });
   publish(s, id);
@@ -164,12 +168,18 @@ export async function patchTournament(s: Services, viewer: Identity, id: string,
 export async function deleteTournament(s: Services, viewer: Identity, id: string) {
   const r = await s.db('tournaments').where({ id }).first('organizer_id', 'rule_set_id');
   if (!r) throw notFound('Tournament not found');
-  if (r.organizer_id !== viewer.uid) throw forbidden('tournaments.delete', 'Only the organiser can delete this tournament');
+  if (!isTournamentAdmin({ organizerId: r.organizer_id }, viewer.uid)) throw notAdmin(); // 1.4.19
   await s.db.transaction(async (trx) => {
     await trx('tournaments').where({ id }).del();
     await trx('rule_sets').where({ id: r.rule_set_id }).del();
   });
   publish(s, id, true);
+}
+
+/** 1.4.19: the owner of a tournament (null = no such tournament) – for the match link check. */
+export async function tournamentOwner(db: Trx, id: string): Promise<{ organizerId: string } | null> {
+  const r = await db('tournaments').where({ id }).first('organizer_id');
+  return r ? { organizerId: r.organizer_id } : null;
 }
 
 export async function listTournamentIds(db: Trx) {

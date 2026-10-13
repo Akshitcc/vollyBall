@@ -1,4 +1,4 @@
-# Deploying VolleyLive (1.4.18)
+# Deploying VolleyLive (1.4.19)
 
 Nothing in this repo creates accounts, keys or cloud resources, and nothing is deployed for you. The
 builds handed over so far (`volleylive-latest.apk`) are **demo builds, debug-signed** – they must not go
@@ -216,6 +216,21 @@ EXPO_PUBLIC_BACKEND=api EXPO_PUBLIC_API_AUTH=otp EXPO_PUBLIC_STRIP_DEMO=1 APP_VA
   (core `scorerTargetProblem`, rules `scorerTargetOk`). The walks assert it in every state on core/demo, API and rules.
 - `scripts/run-policy-suites.sh` now exits with the suites' real status (strict mode; full log in `$LOG`, default
   `/tmp/policy-suites.log`) and always restores 'review'.
+
+## 1.4.19 – tournament admin permissions + Help Center
+
+**Akshit deploys these – nothing was deployed by the build.**
+
+- **Migration 0020_support_tickets.sql** (additive: one new table `support_tickets`; nothing existing touched). Runs with
+  the normal server migrate step. No migration for tournaments (`tournaments.organizer_id` is already NOT NULL).
+- **API server**: new routes `POST/GET /api/support/tickets`, `POST /api/support/tickets/:id/screenshot`,
+  `GET /api/admin/support/tickets`, `PATCH /api/admin/support/tickets/:id`; tournament PATCH / DELETE and match
+  create / patch now answer `403 not_tournament_admin`. Object storage keys gain the `support/` prefix (same bucket).
+- **Firebase (if used)**: deploy **firestore.rules**, **storage.rules** and **firestore.indexes.json** together with the
+  app: `firebase deploy --only firestore:rules,firestore:indexes,storage` (new `supportTickets` collection + index
+  userId/createdAt; `support/{uid}/{file}` storage path; a match's tournamentId / fixtureId are fixed after create).
+- **Optional build config**: `EXPO_PUBLIC_SUPPORT_EMAIL` and `EXPO_PUBLIC_SUPPORT_WHATSAPP` (digits with country code).
+  Not set = the Help Center hides those links. No contact details are built in.
 
 ## 1.4.18 – QA V1417
 

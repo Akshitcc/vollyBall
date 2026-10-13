@@ -190,6 +190,14 @@ const CODED = new Set([
   // 1.4.16 (QA V1415-1)
   'team_too_large',
   'team_invalid',
+  'not_tournament_admin',
+  'support_topic',
+  'support_message_short',
+  'support_message_long',
+  'support_image_type',
+  'support_image_size',
+  'support_image_exists',
+  'support_status',
 ]);
 /** "teamA.name" -> errors.fields.teamA; unknown fields read "This field". */
 function fieldLabel(field: string | undefined, t: TFunction): string {

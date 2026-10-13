@@ -6,7 +6,7 @@
  */
 import { Ionicons } from '@expo/vector-icons';
 import { LIMITS } from '../core/limits';
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { toE164 } from '../core/phone';
@@ -17,7 +17,7 @@ import { swatchLabel, translateError } from '../i18n/format';
 import { backend } from '../services/backend';
 import { colors, contrast, radius, swatchRing } from '../theme';
 import { Avatar, Button, Field, Row, styles as ui } from './ui';
-import { RevealOnShow, ScrollRevealContext, useFocusReveal } from './KeyboardAwareScreen';
+import { REVEAL_BELOW, RevealOnShow, ScrollRevealContext, useFocusReveal } from './KeyboardAwareScreen';
 
 export interface BuiltTeam {
   kind: 'build';
@@ -55,6 +55,17 @@ export function TeamBuilder({
   const [phone, setPhone] = useState('');
   const [lookup, setLookup] = useState<Lookup>({ state: 'idle' });
   const seq = useRef(0);
+  // 1.4.19: one lookup per number (the typing lookup and a queued Enter share it)
+  const cache = useRef(new Map<string, Promise<UserProfile | null>>());
+  const lookupOnce = (n: string) => {
+    let p = cache.current.get(n);
+    if (!p) {
+      p = backend.findUserByPhone(n);
+      cache.current.set(n, p);
+      p.catch(() => cache.current.delete(n));
+    }
+    return p;
+  };
   const full = value.players.length >= max;
 
   useEffect(() => {
@@ -63,8 +74,7 @@ export function TeamBuilder({
     if (!n) return setLookup({ state: 'idle' });
     setLookup({ state: 'looking' });
     const timer = setTimeout(() => {
-      backend
-        .findUserByPhone(n)
+      lookupOnce(n)
         .then((u) => {
           if (mine !== seq.current) return; // a newer number was typed meanwhile
           // Only what the card needs: no phone number of other users is kept or shown.
@@ -105,36 +115,90 @@ export function TeamBuilder({
   // phone field for the next number.
   const height = useRef(0);
   const [hold, setHold] = useState(0);
-  const add = () => {
-    if (!found || problem) return;
+  // 1.4.19 (QA V1416-3 / V1418-2): the +91 field is revealed (scrolled clear of the sticky footer) when "by number"
+  // opens – without needing focus – and again after every add and whenever the "N more" line / its spacer changes.
+  const revealTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const revealPhone = useCallback(() => {
+    revealTimers.current.forEach(clearTimeout);
+    revealTimers.current = [60, 400, 900].map((ms) => setTimeout(() => reveal(phoneReveal.ref.current, REVEAL_BELOW), ms));
+  }, [reveal, phoneReveal.ref]);
+  useEffect(() => () => revealTimers.current.forEach(clearTimeout), []);
+  // latest roster for queued adds (several can run before the parent re-renders)
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const commit = (u: MatchPlayer) => {
+    const v = valueRef.current;
     setHold(height.current);
-    // a full side drops the phone field: the gap goes after a moment (long enough for a second tap not to land below)
-    if (value.players.length + 1 >= max) setTimeout(() => setHold(0), 1200);
-    // 1.4.18 (QA V1417-3): the box is emptied right now (not on the next render), so digits typed straight after
-    // the add go into an empty field instead of being appended to – and refused after – the old number
+    if (v.players.length + 1 >= max) setTimeout(() => setHold(0), 1200);
+    const next = { ...v, players: [...v.players, u] };
+    valueRef.current = next;
+    onChange(next);
+  };
+  const refusal = (u: { id: string; name: string }): string | null => {
+    const v = valueRef.current;
+    return v.players.some((p) => p.id === u.id) ? t('newMatch.alreadyAdded', { name: u.name })
+      : otherPlayerIds.includes(u.id) ? t('newMatch.onOtherTeam', { name: u.name })
+        : v.players.length >= max ? t('newMatch.teamFull', { max }) : null;
+  };
+  /**
+   * 1.4.19 (QA V1417-3): the field is cleared ONCE, in the same step that takes the number (a snapshot), and nothing
+   * writes to it afterwards – the add / lookup runs on the snapshot. Rapid Enters queue their numbers and are added in
+   * order; a later lookup can never overwrite what is being typed.
+   */
+  const takeNumber = (): string | null => {
+    const n = phone;
     phoneInput.current?.clear?.();
-    onChange({ ...value, players: [...value.players, { id: found.id, name: found.name, photoURL: found.photoURL ?? null }] });
     setPhone('');
     setLookup({ state: 'idle' });
-    pendingAdd.current = false;
     phoneInput.current?.focus?.();
+    return n || null;
   };
-  // 1.4.18 (QA V1417-1): Enter while the number is still being looked up queues the add; it runs once when the
-  // lookup finds the player (nothing is re-looked-up). A refusal / not registered / a new number drops the queue.
-  const pendingAdd = useRef(false);
+  const [queueMsg, setQueueMsg] = useState<string | null>(null);
+  const queue = useRef<string[]>([]);
+  const running = useRef(false);
+  const runQueue = async () => {
+    if (running.current) return;
+    running.current = true;
+    try {
+      while (queue.current.length) {
+        const digits = queue.current.shift()!;
+        const e164 = toE164(digits);
+        if (!e164) { setQueueMsg(t('errors.invalidPhone')); continue; }
+        try {
+          const u = await lookupOnce(e164);
+          if (!u) { setQueueMsg(t('errors.notRegistered')); continue; }
+          const why = refusal(u);
+          if (why) { setQueueMsg(why); continue; }
+          commit({ id: u.id, name: u.name, photoURL: u.photoURL ?? null });
+          setQueueMsg(null);
+          revealPhone();
+        } catch (err) {
+          setQueueMsg(translateError(err));
+        }
+      }
+    } finally {
+      running.current = false;
+    }
+  };
   const submit = () => {
-    if (lookup.state === 'looking') { pendingAdd.current = true; return; }
-    add();
+    if (!toE164(phone)) return; // incomplete number: Enter does nothing (the field keeps it)
+    if (found && !queue.current.length && !running.current) return add(); // already looked up: add now
+    const n = takeNumber();
+    if (!n) return;
+    queue.current.push(n);
+    void runQueue();
   };
-  useEffect(() => {
-    if (!pendingAdd.current || lookup.state === 'looking' || lookup.state === 'idle') return;
-    pendingAdd.current = false;
-    if (lookup.state === 'found') add();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lookup]);
+  // the found card's Add button: the shown player, same single clear
+  const add = () => {
+    if (!found || problem) return;
+    takeNumber();
+    commit(found);
+    setQueueMsg(null);
+    revealPhone();
+  };
   const typePhone = (n: string) => {
     if (n) setHold(0);
-    if (n !== phone) pendingAdd.current = false;
+    if (n) setQueueMsg(null);
     setPhone(n);
   };
   // 1.4.18 (QA V1417-2): the "N more players" line keeps its space once it goes (at the 6th player), so the phone
@@ -145,6 +209,7 @@ export function TeamBuilder({
     onChange({ ...value, players: value.players.filter((p) => p.id !== id) });
   };
   const missing = Math.max(0, MIN_PLAYERS - value.players.length);
+  useEffect(() => { if (!full) revealPhone(); }, [missing > 0, needH, full, value.players.length, revealPhone]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <View testID={testID} style={hold ? { minHeight: hold } : undefined} onLayout={(e) => { if (!hold) height.current = e.nativeEvent.layout.height; }}>
@@ -215,6 +280,11 @@ export function TeamBuilder({
       )}
       {lookup.state === 'looking' && <Text style={ui.hint}>{t('newMatch.lookingUp')}</Text>}
       {/* 1.4.9 (QA V148-7): messages scroll into view when they appear, also with the keyboard up */}
+      <RevealOnShow show={!!queueMsg} dep={queueMsg}>
+        <Text style={{ color: colors.danger, fontWeight: '700', marginBottom: 8 }} accessibilityRole="alert" testID={`${testID}-queue-error`}>
+          {queueMsg}
+        </Text>
+      </RevealOnShow>
       <RevealOnShow show={lookup.state === 'notRegistered'}>
         <Text style={{ color: colors.danger, fontWeight: '700', marginBottom: 8 }} testID={`${testID}-not-registered`}>
           {t('errors.notRegistered')}

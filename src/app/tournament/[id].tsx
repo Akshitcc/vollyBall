@@ -2,7 +2,7 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ScrollView, Text, View } from 'react-native';
-import { Banner, Card, Empty, H2, Loading, P, Row, Screen, breakWords } from '../../components/ui';
+import { Banner, Button, Card, Empty, H2, Loading, P, Row, Screen, breakWords } from '../../components/ui';
 import { fixtureResultFromMatch } from '../../core/results';
 import { fixtureTitle, isBye, leagueChampion, resolveKnockout, standings, type Fixture, type FixtureResult } from '../../core/tournament';
 import type { Match, MatchTeam, Team, Tournament } from '../../core/types';
@@ -13,13 +13,17 @@ import { useMe } from '../../state/AuthContext';
 import { useWatch } from '../../state/hooks';
 import { describeRulesT, formatDateRangeT, roundNameT, translateError } from '../../i18n/format';
 import { colors, font } from '../../theme';
+import { claimedTournamentMatches, isTournamentAdmin } from '../../core/tournamentAdmin';
+import { confirmAsk } from '../../services/dialogs';
 
 export default function TournamentPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { t: tr } = useTranslation();
   const me = useMe();
   const t = useWatch<Tournament | null>((cb) => backend.watchTournament(id, cb), [id]);
-  const matches = useWatch<Match[]>((cb) => backend.watchTournamentMatches(id, cb), [id]) ?? [];
+  const tagged = useWatch<Match[]>((cb) => backend.watchTournamentMatches(id, cb), [id]);
+  // 1.4.19: only the matches the owner put in a fixture count (core/tournamentAdmin)
+  const matches = useMemo(() => claimedTournamentMatches(t, tagged ?? []), [t, tagged]);
   const [starting, setStarting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,7 +39,9 @@ export default function TournamentPage() {
     return { fixtures: t.fixtures, champion: leagueChampion(teamIds, t.fixtures, results), table: standings(teamIds, t.fixtures, results), byFixture };
   }, [t, matches]);
 
-  const isOrganizer = t?.organizerId === me.id;
+  // 1.4.19: the owner (organizerId) is the tournament's only admin (core/tournamentAdmin); everyone else views only
+  const isOrganizer = isTournamentAdmin(t, me.id);
+  const [deleting, setDeleting] = useState(false);
   useEffect(() => {
     if (t && data?.champion && isOrganizer && t.status !== 'finished') backend.updateTournament(t.id, { status: 'finished' });
   }, [t, data?.champion, isOrganizer]);
@@ -85,6 +91,19 @@ export default function TournamentPage() {
     }
   };
 
+  const remove = async () => {
+    if (!(await confirmAsk(tr('tournament.deleteConfirmBody'), { title: tr('tournament.deleteConfirmTitle'), confirmLabel: tr('tournament.delete'), cancelLabel: tr('tournament.deleteCancel') }))) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await backend.deleteTournament(t.id);
+      router.back();
+    } catch (e) {
+      setError(translateError(e));
+      setDeleting(false);
+    }
+  };
+
   const FixtureCard = ({ f, compact }: { f: Fixture; compact?: boolean }) => {
     const m = data.byFixture.get(f.id);
     const home = teamOf(f.homeId);
@@ -128,7 +147,13 @@ export default function TournamentPage() {
         </Text>
         <Text style={{ color: colors.onInkMuted, fontWeight: '600', marginTop: 2 }}>📍 {t.location.name}</Text>
         <Text style={{ color: colors.onInkMuted, fontSize: 12, marginTop: 6 }}>{describeRulesT(t.rules, tr)}</Text>
+        {!isOrganizer && (
+          <View testID="tournament-view-only" accessibilityLabel={`${tr('tournament.viewOnly')}. ${tr('tournament.viewOnlyHint')}`} style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', marginTop: 10, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: colors.onInkMuted }}>
+            <Text style={{ color: colors.ink, fontWeight: '900', fontSize: 12 }}>👁 {tr('tournament.viewOnly')}</Text>
+          </View>
+        )}
       </View>
+      {!isOrganizer && <P muted style={{ marginBottom: 8 }}>{tr('tournament.viewOnlyHint')}</P>}
       {data.champion && (
         <Card style={{ backgroundColor: colors.primary, borderColor: colors.primary }}>
           <Text style={[font.h2, { textAlign: 'center', color: colors.ink }]}>{tr('tournament.champion', { team: teamOf(data.champion)?.name ?? '' })}</Text>
@@ -194,6 +219,9 @@ export default function TournamentPage() {
               ))}
           </View>
         ))
+      )}
+      {isOrganizer && (
+        <Button testID="tournament-delete" title={tr('tournament.delete')} variant="danger" icon="trash-outline" loading={deleting} onPress={() => void remove()} style={{ marginTop: 18 }} />
       )}
     </Screen>
   );
