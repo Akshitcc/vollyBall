@@ -7,7 +7,7 @@ import { inAppLinkPress, leakedTabParams } from '../../services/nav';
 import { Platform, Text, useWindowDimensions, View, type ColorValue, type TextStyle } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 import { PressableScale } from '../../components/PressableScale';
-import { colors } from '../../theme';
+import { useTheme } from '../../theme/ThemeProvider';
 import { tabBarMetrics } from '../../theme/tabBar';
 
 /** Web: wrap only between words (two-word Hindi labels), never inside one. */
@@ -26,9 +26,39 @@ function TabLabel({ text, color, metrics }: { text: string; color: ColorValue; m
   );
 }
 
+/**
+ * 1.4.22 tab bar (spec §3 "Tab bar": h88, 4 tabs + centre FAB). Day: white bar, 2px ink top border, the active icon
+ * sits in a Ball pill with an ink border; FAB = orange circle, ink border + hard shadow. Night: near-black bar,
+ * active label/icon Volt, FAB = Volt rounded diamond with glow.
+ */
+function TabIcon({ name, color, size, focused }: { name: keyof typeof Ionicons.glyphMap; color: ColorValue; size: number; focused: boolean }) {
+  const { t, name: theme } = useTheme();
+  if (theme === 'day' && focused)
+    return (
+      <View testID="tab-active-pill" style={{ backgroundColor: t.accent, borderWidth: 2, borderColor: t.outline, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 1 }}>
+        <Ionicons name={name} color={t.text} size={size - 4} />
+      </View>
+    );
+  return <Ionicons name={name} color={color as string} size={size} />;
+}
 const icon =
   (name: keyof typeof Ionicons.glyphMap) =>
-  ({ color, size }: { color: import('react-native').ColorValue; size: number }) => <Ionicons name={name} color={color as string} size={size} />;
+  ({ color, size, focused }: { color: ColorValue; size: number; focused: boolean }) => <TabIcon name={name} color={color} size={size} focused={focused} />;
+
+export function Fab({ size = 54 }: { size?: number }) {
+  const { t, name } = useTheme();
+  const day = name === 'day';
+  return (
+    <View testID="tab-fab" style={{ width: size, height: size, marginTop: -6, alignItems: 'center', justifyContent: 'center' }}>
+      {day ? <View style={{ position: 'absolute', left: 3, top: 3, width: size, height: size, borderRadius: size / 2, backgroundColor: t.outline }} /> : null}
+      <View style={[{ width: size, height: size, backgroundColor: t.primary, alignItems: 'center', justifyContent: 'center' },
+        day ? { borderRadius: size / 2, borderWidth: 2, borderColor: t.outline }
+            : { borderRadius: 18, transform: [{ rotate: '45deg' }], shadowColor: t.primary, shadowOpacity: 0.45, shadowRadius: 16, shadowOffset: { width: 0, height: 0 } }]}>
+        <Ionicons name="add" size={30} color={t.onPrimary} style={day ? undefined : { transform: [{ rotate: '-45deg' }] }} />
+      </View>
+    </View>
+  );
+}
 
 /**
  * Fix re-test 209: a deep link (/team/team_smashers) puts the tabs underneath with the link's own
@@ -94,6 +124,8 @@ export default function TabsLayout() {
   const insets = useContext(SafeAreaInsetsContext) ?? { bottom: 0 }; // no provider in unit tests
   const { width } = useWindowDimensions();
   const m = tabBarMetrics(i18n.language ?? 'en', insets.bottom, width);
+  const { t: tk, name: theme } = useTheme();
+  const day = theme === 'day';
   const label = (key: string) => ({ color }: { color: ColorValue }) => <TabLabel text={t(key)} color={color} metrics={m} />;
   useStripLeakedParams();
   return (
@@ -101,10 +133,10 @@ export default function TabsLayout() {
       screenLayout={({ navigation, children }) => <TabScene navigation={navigation}>{children}</TabScene>}
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.tabInactive,
+        tabBarActiveTintColor: tk.tabActive,
+        tabBarInactiveTintColor: tk.textMuted,
         tabBarLabelPosition: 'below-icon',
-        tabBarStyle: { backgroundColor: colors.ink, borderTopWidth: 2, borderTopColor: colors.primary, height: m.height, paddingTop: m.paddingTop, paddingBottom: m.paddingBottom },
+        tabBarStyle: { backgroundColor: day ? tk.surface : tk.bg, borderTopWidth: day ? 2 : 1, borderTopColor: day ? tk.outline : tk.surface2, height: m.height, paddingTop: m.paddingTop, paddingBottom: m.paddingBottom },
         tabBarItemStyle: { paddingHorizontal: 0 },
         // press feedback on every tab (scale, or an opacity dip with Reduce Motion)
         // On the web the button is a link: keep plain clicks in the app (no full page reload, which
@@ -117,8 +149,8 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="score"
         options={{
-          title: t('tabs.score'), tabBarLabel: label('tabs.score'),
-          tabBarIcon: ({ size }) => <Ionicons name="add-circle" color={colors.primary} size={size + 10} />,
+          title: t('tabs.score'), tabBarLabel: () => null, tabBarAccessibilityLabel: t('tabs.score'), // 1.4.22: the FAB has no caption (spec tab bar)
+          tabBarIcon: () => <Fab />,
         }}
       />
       <Tabs.Screen name="tournaments" options={{ title: t('tabs.tournaments'), tabBarLabel: label('tabs.tournaments'), tabBarIcon: icon('trophy') }} />

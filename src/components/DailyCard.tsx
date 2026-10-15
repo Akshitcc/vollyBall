@@ -7,12 +7,11 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Text, View } from 'react-native';
-import { card } from './Hero';
+import { Body, Over, Sticker, useKit } from './DNKit';
 import { PressableScale } from './PressableScale';
 import { BUNDLED_DAILY_ITEMS, dailyAttribution, mergeDailyItems, msUntilNextIstDay, pickDaily, type DailyItem } from '../core/dailyItems';
 import { backend } from '../services/backend';
 import { shareOrCopy } from '../services/share';
-import { colors, overlineFor, type } from '../theme';
 
 export function dailyText(item: DailyItem, lang: string): string {
   return lang === 'hi' ? item.textHi : item.textEn;
@@ -57,39 +56,57 @@ export function DailyCard({ now, items: given }: { now?: number; items?: readonl
   if (!item) return null;
   const lang = i18n.language?.startsWith('hi') ? 'hi' : 'en';
   const title = item.type === 'quote' ? t('daily.quoteTitle') : t('daily.factTitle');
+  return <DailyBody item={item} lang={lang} title={title} onNext={() => setOffset((o) => o + 1)} />;
+}
+
+/** 1.4.22 (spec v2 mockup *-01 "Fact of the day"): Day = Ball-yellow sticker card with a tilted ink label;
+ *  Night = surface card, Volt bulb + Teko overline. */
+function DailyBody({ item, lang, title, onNext }: { item: DailyItem; lang: string; title: string; onNext: () => void }) {
+  const { t } = useTranslation();
+  const k = useKit();
+  const tk = k.t;
   return (
-    <View style={[card, { marginTop: 14 }]} testID="daily-card">
+    <Sticker style={{ marginTop: k.day ? 26 : 14 }} fill={k.day ? tk.accent : tk.surface} testID="daily-card" inner={{ padding: 16, paddingTop: k.day ? 20 : 14, overflow: 'visible' }}>
+      {k.day ? (
+        <View style={{ position: 'absolute', top: -2, left: 14, transform: [{ rotate: '-4deg' }], backgroundColor: tk.text, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 2, flexDirection: 'row', alignItems: 'center', gap: 4 }} testID="daily-sticker">
+          <Ionicons name={item.type === 'quote' ? 'chatbubble-ellipses' : 'bulb'} size={13} color={tk.accent} />
+          <Text style={[{ color: tk.accent, fontSize: 13 }, k.f.display]}>{title}</Text>
+        </View>
+      ) : null}
       <PressableScale
-        onPress={() => setOffset((o) => o + 1)}
+        onPress={onNext}
         accessibilityRole="button"
         accessibilityLabel={`${title}. ${dailyText(item, lang)}`}
         accessibilityHint={t('daily.nextHint')}
         testID="daily-next"
       >
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Ionicons name={item.type === 'quote' ? 'chatbubble-ellipses-outline' : 'bulb-outline'} size={18} color={colors.primaryText} />
-          <Text style={[overlineFor(lang), { color: colors.primaryText, flex: 1 }]}>{title}</Text>
-          <Text style={[type.caption, { color: colors.muted }]}>{t('daily.tapNext')}</Text>
-        </View>
-        <Text style={[type.body, { color: colors.text, marginTop: 8, fontWeight: '600' }]} testID="daily-text">
-          {dailyText(item, lang)}
-        </Text>
+        {!k.day ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Ionicons name={item.type === 'quote' ? 'chatbubble-ellipses' : 'bulb'} size={16} color={tk.primary} />
+            <Over color={tk.text} style={{ flex: 1 }}>{title}</Over>
+            <Body muted size={12}>{t('daily.tapNext')} →</Body>
+          </View>
+        ) : null}
+        <Body bold size={15} style={{ marginTop: k.day ? 8 : 10 }} testID="daily-text">{dailyText(item, lang)}</Body>
         {item.attribution ? (
-          <Text style={[type.caption, { color: colors.muted, marginTop: 6 }]} testID="daily-attribution">
+          <Body size={12} muted style={{ marginTop: 6 }} testID="daily-attribution">
             {item.type === 'quote' ? `— ${dailyAttribution(item, lang)}` : t('daily.source', { source: dailyAttribution(item, lang) })}
-          </Text>
+          </Body>
         ) : null}
       </PressableScale>
-      <PressableScale
-        onPress={() => void shareOrCopy(shareMessage(item, lang))}
-        accessibilityRole="button"
-        accessibilityLabel={t('daily.share')}
-        testID="daily-share"
-        style={{ flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-end', marginTop: 8, minHeight: 40, paddingHorizontal: 8 }}
-      >
-        <Ionicons name="share-social-outline" size={18} color={colors.primaryText} />
-        <Text style={{ color: colors.primaryText, fontWeight: '700' }}>{t('daily.share')}</Text>
-      </PressableScale>
-    </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
+        {k.day ? <Text style={[{ color: tk.text, fontSize: 13 }, k.f.bold]}>{t('daily.tapNext')} →</Text> : <View />}
+        <PressableScale
+          onPress={() => void shareOrCopy(shareMessage(item, lang))}
+          accessibilityRole="button"
+          accessibilityLabel={t('daily.share')}
+          testID="daily-share"
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, paddingHorizontal: 8 }}
+        >
+          <Ionicons name="share-social-outline" size={18} color={k.day ? tk.text : tk.primary} />
+          <Text style={[{ color: k.day ? tk.text : tk.primary, fontWeight: '700' }, k.f.bold]}>{t('daily.share')}</Text>
+        </PressableScale>
+      </View>
+    </Sticker>
   );
 }

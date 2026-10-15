@@ -30,6 +30,11 @@ service firebase.storage {
       allow read: if signedIn() && (request.auth.uid == userId || request.auth.token.get('admin', false) == true);
       allow create: if signedIn() && request.auth.uid == userId && resource == null && termsOk()
         && request.resource.contentType.matches('^image/(jpeg|png|webp)$')
+        // 1.4.20 (QA Help Center Lows): the name is a ticket id with the extension of the declared type (no .html
+        // under image/png); the bytes themselves can't be sniffed in rules – the app only uploads gallery images
+        && (file.matches('^[A-Za-z0-9_-]{1,64}[.]jpg$') && request.resource.contentType == 'image/jpeg'
+            || file.matches('^[A-Za-z0-9_-]{1,64}[.]png$') && request.resource.contentType == 'image/png'
+            || file.matches('^[A-Za-z0-9_-]{1,64}[.]webp$') && request.resource.contentType == 'image/webp')
         && request.resource.size >= minBytes(request.resource.contentType)
         && request.resource.size < 5 * 1024 * 1024;
       allow update, delete: if false;

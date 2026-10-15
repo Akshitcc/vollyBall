@@ -110,6 +110,10 @@ export function LocationPicker({ value, onChange }: { value: Place | null; onCha
                 {t('location.nameHint', { coords: formatCoords(value) })}
               </Text>
             ) : null}
+            {/* 1.4.20 (QA V1419-8): a reverse lookup with no place name – one tap uses the coordinates as the name */}
+            {noName && !value.name ? (
+              <Button title={t('location.useCoords')} variant="ghost" icon="pin-outline" onPress={() => { typed.current = true; onChange({ ...value, name: formatCoords(value) }); }} testID="place-use-coords" />
+            ) : null}
           </RevealOnShow>
         </>
       )}

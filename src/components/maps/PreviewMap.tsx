@@ -607,14 +607,14 @@ export default function PreviewMap({ center, radiusKm = 15, markers = [], select
       {laid.map((g) =>
         g.label && g !== open ? (
           <View key={'l' + g.key} pointerEvents="none" style={{ position: 'absolute', left: g.label.l, top: g.label.t, width: g.label.w, height: LABEL_H, alignItems: g.label.pos === 'left' ? 'flex-end' : g.label.pos === 'right' ? 'flex-start' : 'center' }}>
-            <Text numberOfLines={1} testID={`marker-label-${g.members[0].id}`} style={{ fontSize: 10, lineHeight: LABEL_H - 2, fontWeight: '800', backgroundColor: 'white', paddingHorizontal: 4, borderRadius: 4, maxWidth: g.label.w, color: colors.text }}>
+            <Text numberOfLines={1} testID={`marker-label-${g.members[0].id}`} style={{ fontSize: 10, lineHeight: LABEL_H - 2, fontWeight: '800', backgroundColor: 'white', paddingHorizontal: 4, borderRadius: 4, maxWidth: g.label.w, color: '#1B1340' /* fixed: the label is always on white (V1422-4) */ }}>
               {g.text}
             </Text>
           </View>
         ) : null,
       )}
       {someClustered && !open && (
-        <Text pointerEvents="none" testID="map-reveal-hint" style={{ position: 'absolute', top: 6, left: 8, fontSize: 10, fontWeight: '700', color: colors.muted, backgroundColor: 'rgba(255,255,255,0.8)', paddingHorizontal: 4, borderRadius: 4 }}>
+        <Text pointerEvents="none" testID="map-reveal-hint" style={{ position: 'absolute', top: 6, left: 8, fontSize: 10, fontWeight: '700', color: colors.text, backgroundColor: colors.card, paddingHorizontal: 4, borderRadius: 4 }}>
           {t('map.tapToReveal')}
         </Text>
       )}
@@ -628,7 +628,7 @@ export default function PreviewMap({ center, radiusKm = 15, markers = [], select
             if (h > 0 && (known === undefined || Math.abs(known - h) > 1))
               setMeasured((m) => ({ key: open.key, byW: { ...(m?.key === open.key ? m.byW : {}), [place.w]: h } }));
           }}
-          style={{ position: 'absolute', width: place.w, maxHeight: CALLOUT_MAX_H, left: place.l, top: place.t, backgroundColor: 'white', borderRadius: 10, borderWidth: 1, borderColor: colors.border, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, elevation: 4, overflow: 'hidden' }}
+          style={{ position: 'absolute', width: place.w, maxHeight: CALLOUT_MAX_H, left: place.l, top: place.t, backgroundColor: colors.card, borderRadius: 10, borderWidth: 1, borderColor: colors.border, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, elevation: 4, overflow: 'hidden' }}
         >
           <ScrollView testID="map-callout-scroll" style={{ maxHeight: CALLOUT_MAX_H - 2 }} contentContainerStyle={{ padding: 6 }}>
             {rows}
@@ -643,12 +643,12 @@ export default function PreviewMap({ center, radiusKm = 15, markers = [], select
               ref={sheetRef}
               testID="map-sheet"
               onPress={() => {}}
-              style={{ backgroundColor: 'white', borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 18, maxHeight: '60%', width: '100%', maxWidth: 640, alignSelf: 'center' }}
+              style={{ backgroundColor: colors.card, borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 18, maxHeight: '60%', width: '100%', maxWidth: 640, alignSelf: 'center' }}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
                 <Text style={{ flex: 1, fontSize: 15, fontWeight: '900', color: colors.text }}>{open.text}</Text>
                 <Pressable testID="map-sheet-close" accessibilityRole="button" accessibilityLabel={t('common.close')} onPress={() => closeList(true)} hitSlop={8} style={{ padding: 6 }}>
-                  <Text style={{ fontSize: 16, fontWeight: '900', color: colors.ink }}>✕</Text>
+                  <Text style={{ fontSize: 16, fontWeight: '900', color: colors.text }}>✕</Text>
                 </Pressable>
               </View>
               <ScrollView>{rows}</ScrollView>
@@ -656,7 +656,7 @@ export default function PreviewMap({ center, radiusKm = 15, markers = [], select
           </Pressable>
         </Modal>
       )}
-      <Text pointerEvents="none" style={{ position: 'absolute', bottom: 6, right: 8, fontSize: 10, color: colors.muted }}>{t('map.preview')}</Text>
+      <Text pointerEvents="none" testID="map-preview-label" style={{ position: 'absolute', bottom: 6, right: 8, fontSize: 10, fontWeight: '700', color: colors.text, backgroundColor: colors.card, paddingHorizontal: 4, borderRadius: 4 }}>{t('map.preview')}</Text>
     </Pressable>
   );
 }

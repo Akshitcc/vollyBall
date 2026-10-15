@@ -68,8 +68,8 @@ export const PhoneVerifierHost = forwardRef<PhoneVerifierHandle>(function PhoneV
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={cancel}>
-      <View style={{ flex: 1, paddingTop: 50, backgroundColor: colors.white }}>
-        <Text style={{ textAlign: 'center', fontWeight: '800', fontSize: 16, marginBottom: 8 }}>{t('login.securityCheck')}</Text>
+      <View style={{ flex: 1, paddingTop: 50, backgroundColor: colors.card }}>
+        <Text style={{ textAlign: 'center', fontWeight: '800', fontSize: 16, marginBottom: 8, color: colors.text }} testID="security-check-title">{t('login.securityCheck')}</Text>
         {visible && (
           <WebView
             originWhitelist={['*']}

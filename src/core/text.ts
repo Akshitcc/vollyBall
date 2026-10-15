@@ -112,3 +112,109 @@ export const TEXT_ERROR_CODES: Record<TextProblem, string> = {
   control: 'text_control',
   bidi: 'text_bidi',
 };
+
+/**
+ * 1.4.20 (QA V1419-5): user-visible characters (grapheme clusters: an emoji, a flag, a Devanagari syllable with its
+ * signs = 1). Uses Intl.Segmenter where the engine has it, else Unicode code points.
+ */
+type Seg = { segment(s: string): Iterable<{ segment: string }> };
+function segmenter(): Seg | null {
+  const I = (globalThis as { Intl?: { Segmenter?: new (l?: string, o?: { granularity: string }) => Seg } }).Intl;
+  try {
+    return I?.Segmenter ? new I.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+  } catch {
+    return null;
+  }
+}
+export function graphemes(s: string): string[] {
+  const seg = segmenter();
+  return seg ? Array.from(seg.segment(s), (x) => x.segment) : fallbackGraphemes(s);
+}
+
+/**
+ * 1.4.22 (QA V1421-2): engines without Intl.Segmenter (e.g. Hermes on some phones) used to count code points, so a
+ * ZWJ family emoji was 7 on the phone and 1 on the server. This fallback follows the extended grapheme rules that
+ * matter for our text: combining marks / spacing marks / variation selectors / skin tones extend (GB9, GB9a),
+ * emoji ZWJ sequences join (GB11), regional indicators pair into flags (GB12/13), Devanagari conjuncts
+ * consonant + virama (+ZWJ) + consonant join (GB9c), CR LF is one.
+ */
+const EXTEND_RE = /[\p{M}\u200C\u200D\uFE00-\uFE0F\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}]/u;
+const PICTO_RE = /\p{Extended_Pictographic}/u;
+const RI_RE = /[\u{1F1E6}-\u{1F1FF}]/u;
+const DEVA_CONS_RE = /[\u0915-\u0939\u0958-\u095F\u0978-\u097F]/;
+export function fallbackGraphemes(s: string): string[] {
+  const cps = [...s];
+  const out: string[] = [];
+  let cur = '';
+  let lastBase = ''; // the base code point of the current cluster (for GB11 / GB12)
+  let riCount = 0;
+  for (let i = 0; i < cps.length; i++) {
+    const c = cps[i];
+    const prev = i > 0 ? cps[i - 1] : '';
+    let join = false;
+    if (!cur) join = false;
+    else if (prev === '\r' && c === '\n') join = true;
+    else if (c === '\u200D' || (EXTEND_RE.test(c) && c !== '\n')) join = true;
+    else if (prev === '\u200D' && PICTO_RE.test(c) && PICTO_RE.test(lastBase)) join = true; // GB11
+    else if (RI_RE.test(c) && RI_RE.test(prev) && riCount % 2 === 1) join = true; // GB12/13
+    else if (DEVA_CONS_RE.test(c) && (prev === '\u094D' || (prev === '\u200D' && cps[i - 2] === '\u094D'))) join = true; // GB9c
+    if (join) { cur += c; if (RI_RE.test(c)) riCount++; continue; }
+    if (cur) out.push(cur);
+    cur = c; lastBase = c; riCount = RI_RE.test(c) ? 1 : 0;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/**
+ * 1.4.22 (QA V1421-2): like stripHidden, but a zero-width joiner INSIDE an emoji sequence (👨‍👩‍👧‍👦) or a Devanagari
+ * conjunct is kept – it is part of one visible character – so the stored text is what was sent and the server counts
+ * it like the phone. Every other hidden character is still removed.
+ */
+export function stripHiddenKeepJoiners(raw: string, opts: { multiline?: boolean } = {}): string {
+  const s = opts.multiline ? raw.replace(/\r\n?/g, '\n') : raw;
+  const cps = [...s];
+  let out = '';
+  for (let i = 0; i < cps.length; i++) {
+    const c = cps[i];
+    if (c === '\u200D' || c === '\u200C') {
+      let j = i - 1;
+      while (j >= 0 && /[\uFE0F\u{1F3FB}-\u{1F3FF}]/u.test(cps[j])) j--;
+      const before = cps[j] ?? '', after = cps[i + 1] ?? '';
+      const emoji = c === '\u200D' && PICTO_RE.test(before) && PICTO_RE.test(after);
+      const deva = /[\u0900-\u097F]/.test(before) && /[\u0900-\u097F]/.test(after);
+      if (emoji || deva) { out += c; continue; }
+      continue;
+    }
+    if (new RegExp(`[${HIDDEN_CHARS}]`).test(c) && !(opts.multiline && (c === '\n' || c === '\t'))) continue;
+    out += c;
+  }
+  return out;
+}
+export const visibleLength = (s: string) => graphemes(s).length;
+
+/**
+ * 1.4.21 (QA V1420-4): cut to at most `max` VISIBLE characters – the same measure as visibleLength (the counter), so
+ * the field never stops at "1310 / 2000" for Hindi. Never splits a visible character.
+ */
+export function clampVisible(raw: string, max: number): { value: string; cut: boolean } {
+  const g = graphemes(raw);
+  return g.length <= max ? { value: raw, cut: false } : { value: g.slice(0, max).join(''), cut: true };
+}
+
+/**
+ * 1.4.20 (QA V1419-5): cut a typed / pasted text so it has at most `maxCodePoints` Unicode code points (what the API
+ * and the database store), never splitting a visible character; `cut` says so the field can warn.
+ */
+export function clampCodePoints(raw: string, maxCodePoints: number): { value: string; cut: boolean } {
+  if ([...raw].length <= maxCodePoints) return { value: raw, cut: false };
+  let out = '';
+  let n = 0;
+  for (const g of graphemes(raw)) {
+    const k = [...g].length;
+    if (n + k > maxCodePoints) break;
+    out += g;
+    n += k;
+  }
+  return { value: out, cut: true };
+}

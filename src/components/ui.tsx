@@ -19,12 +19,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { letterSpacing } from '../i18n/format';
 import { clampInput, cleanText } from '../core/text';
-import { colors, font, onColor, radius, readableFill, shadow, space, swatchRing } from '../theme';
+import { colors, currentTheme, font, onColor, radius, readableFill, shadow, space, swatchRing, themed } from '../theme';
+import { tokens } from '../theme/tokens';
+import { useHiFont } from '../theme/useHiFont';
 import { PressableScale } from './PressableScale';
 import { PRESSABLE_CARD_ROLE } from './a11yRoles';
 import { useInsets } from './SafeFooter';
 
-const DISABLED = { bg: colors.disabledBg, fg: colors.disabledText };
+const DISABLED = themed(() => ({ bg: colors.disabledBg, fg: colors.disabledText }));
 
 export function Screen({
   children,
@@ -60,10 +62,12 @@ export function H1({ children, style }: { children: React.ReactNode; style?: Sty
   // F135-5: Devanagari headings need room above the letters (the Hindi "टूर्नामेंट" title was cut / cramped)
   const { i18n } = useTranslation();
   const hi = i18n.language === 'hi';
-  return <Text style={[font.h1, { color: colors.text }, hi && { lineHeight: 44, paddingTop: 6 }, style]} accessibilityRole="header">{children}</Text>;
+  const hf = useHiFont(); // 1.4.21: Night + Hindi headings in Mukta 800 (spec v2 §4.2)
+  return <Text style={[font.h1, { color: colors.text }, hi && { lineHeight: 44, paddingTop: 6 }, hf.display, style]} accessibilityRole="header">{children}</Text>;
 }
 export function H2({ children, style }: { children: React.ReactNode; style?: StyleProp<TextStyle> }) {
-  return <Text style={[font.h2, { color: colors.text, marginTop: space(5), marginBottom: space(2) }, style]}>{children}</Text>;
+  const hf = useHiFont();
+  return <Text style={[font.h2, { color: colors.text, marginTop: space(5), marginBottom: space(2) }, hf.display, style]}>{children}</Text>;
 }
 export function P({ children, style, muted, testID }: { children: React.ReactNode; style?: StyleProp<TextStyle>; muted?: boolean; testID?: string }) {
   return <Text style={[font.body, { color: muted ? colors.muted : colors.text, lineHeight: 21 }, style]} testID={testID}>{children}</Text>;
@@ -94,12 +98,13 @@ export function Button({
   /** Shown under a disabled button: what is still missing (e.g. "Enter a 10-digit mobile number"). */
   disabledHint?: string;
 }) {
+  const hf = useHiFont();
   const v = {
     primary: { bg: colors.primary, fg: colors.onPrimary, border: colors.primary },
     dark: { bg: colors.ink, fg: colors.white, border: colors.ink },
-    secondary: { bg: colors.white, fg: colors.ink, border: colors.ink },
-    ghost: { bg: 'transparent', fg: colors.ink, border: 'transparent' },
-    danger: { bg: colors.danger, fg: colors.white, border: colors.danger },
+    secondary: { bg: colors.card, fg: colors.text, border: colors.text }, // 1.4.21: theme tokens (day unchanged: white / ink)
+    ghost: { bg: 'transparent', fg: colors.text, border: 'transparent' },
+    danger: { bg: colors.danger, fg: onColor(colors.danger), border: colors.danger },
   }[variant];
   const off = !!disabled && !loading;
   const withHint = off && !!disabledHint;
@@ -126,7 +131,7 @@ export function Button({
       ) : (
         <View style={styles.row}>
           {icon && <Ionicons name={icon} size={big ? 24 : 20} color={fg} style={{ marginRight: 8 }} />}
-          <Text style={[styles.btnText, big && { fontSize: 19 }, { color: fg }]}>{title}</Text>
+          <Text style={[styles.btnText, big && { fontSize: 19 }, { color: fg }, hf.display]}>{title}</Text>
         </View>
       )}
     </PressableScale>
@@ -252,12 +257,16 @@ export function Chip({
       accessibilityRole="button"
       accessibilityState={{ disabled: !!disabled, selected: !!active }}
       scaleTo={0.94}
-      style={[styles.chip, active && { backgroundColor: color ?? colors.ink, borderColor: color ?? colors.ink }, disabled && { opacity: 0.45, borderStyle: 'dashed' }]}
+      style={[styles.chip, active && { backgroundColor: color ?? chipActiveFill(), borderColor: color ?? chipActiveFill() }, disabled && { opacity: 0.45, borderStyle: 'dashed' }]}
     >
-      <Text style={[styles.chipText, active && { color: onColor(color ?? colors.ink) }, disabled && { textDecorationLine: 'line-through' }]}>{label}</Text>
+      <Text style={[styles.chipText, active && { color: onColor(color ?? chipActiveFill()) }, disabled && { textDecorationLine: 'line-through' }]}>{label}</Text>
     </PressableScale>
   );
 }
+
+/** 1.4.24 (V1423-3): the default selected-chip fill. Ink in Day; in Night ink is the page colour (the selected
+ * "25 km" chip was invisible), so the primary lime is used. */
+export const chipActiveFill = () => (currentTheme() === 'night' ? colors.primary : colors.ink);
 
 export function Row({ children, style, testID }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; testID?: string }) {
   return <View style={[styles.row, style]} testID={testID}>{children}</View>;
@@ -309,7 +318,7 @@ export function Empty({ icon = 'trophy-outline', title, text }: { icon?: keyof t
 export function Loading() {
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 }}>
-      <ActivityIndicator size="large" color={colors.ink} />
+      <ActivityIndicator size="large" color={colors.text} />
     </View>
   );
 }
@@ -327,13 +336,13 @@ export function Banner({
   action?: { label: string; onPress: () => void; testID?: string };
 }) {
   return (
-    <View style={[styles.banner, tone === 'warn' && { backgroundColor: colors.warnBg, borderColor: colors.primaryText }]} testID={testID}>
-      <Ionicons name={tone === 'warn' ? 'warning' : 'information-circle'} size={18} color={colors.ink} />
+    <View style={[styles.banner, tone === 'warn' && { backgroundColor: currentTheme() === 'day' ? tokens.day.accent : tokens.night.surface2, borderColor: currentTheme() === 'day' ? tokens.day.outline : tokens.night.primary }]} testID={testID}>
+      <Ionicons name={tone === 'warn' ? 'warning' : 'information-circle'} size={18} color={tokens[currentTheme()].text} />
       <View style={{ marginLeft: 8, flex: 1 }}>
-        <Text style={[font.small, { color: colors.ink, flexShrink: 1 }]}>{text}</Text>
+        <Text style={[font.small, { color: tokens[currentTheme()].text, flexShrink: 1 }]}>{text}</Text>
         {action && (
           <Pressable onPress={action.onPress} accessibilityRole={PRESSABLE_CARD_ROLE} testID={action.testID} hitSlop={8}>
-            <Text style={[font.small, { color: colors.primaryText, fontWeight: '800', textDecorationLine: 'underline', marginTop: 4 }]}>{action.label}</Text>
+            <Text style={[font.small, { color: tokens[currentTheme()].text, fontWeight: '800', textDecorationLine: 'underline', marginTop: 4 }]}>{action.label}</Text>
           </Pressable>
         )}
       </View>
@@ -341,7 +350,7 @@ export function Banner({
   );
 }
 
-export const styles = StyleSheet.create({
+export const styles = themed(() => StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   row: { flexDirection: 'row', alignItems: 'center' },
   btn: {
@@ -366,7 +375,7 @@ export const styles = StyleSheet.create({
   label: { ...font.small, color: colors.text, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
   hint: { fontSize: 12, color: colors.muted, marginTop: 4 },
   input: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.card,
     borderWidth: 2,
     borderColor: colors.border,
     borderRadius: radius.md,
@@ -382,24 +391,24 @@ export const styles = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: 2,
     borderColor: colors.border,
-    backgroundColor: colors.white,
+    backgroundColor: colors.card,
     marginRight: 8,
     marginBottom: 8,
   },
   chipText: { fontWeight: '800', color: colors.text, fontSize: 14 },
   live: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.live, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 3 },
-  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.white, marginRight: 5 },
+  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.card, marginRight: 5 },
   liveText: { color: colors.white, fontWeight: '900', fontSize: 11, letterSpacing: 1 },
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderWidth: 1,
+    backgroundColor: tokens[currentTheme()].surface, // 1.4.22 spec tokens
+    borderColor: currentTheme() === 'day' ? tokens.day.outline : tokens.night.surface2,
+    borderWidth: currentTheme() === 'day' ? 2 : 1,
     borderRadius: radius.md,
     padding: space(3),
     marginBottom: space(3),
   },
-});
+}));
 
 export { PRESSABLE_CARD_ROLE };

@@ -13,7 +13,9 @@ import { DemoQaTools } from '../../components/AboutCard';
 import { openStoreListing } from '../../services/review';
 import { MatchCard } from '../../components/MatchCard';
 import { PhotoGrid, PhotoViewer } from '../../components/PhotoGallery';
-import { RankCard } from '../../components/RankCard';
+import { Cell, RankCard } from '../../components/RankCard';
+import { Body, Display, IconBtn, Sticker, useKit } from '../../components/DNKit';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Avatar, Button, Empty, Row } from '../../components/ui';
 import { profileCareer, sideOfPlayer } from '../../core/stats';
 import type { Match, MatchPhoto, Team } from '../../core/types';
@@ -29,36 +31,31 @@ import { useWatch } from '../../state/hooks';
 import { myMatchesKey, useRankings } from '../../state/useRankings';
 import { useMemories } from '../../state/useMemories';
 import { dataLabel, positionLabel } from '../../i18n/format';
-import { colors, elevation, type } from '../../theme';
+import { colors, elevation, type, themed } from '../../theme';
 
-function Stat({ icon, label, value, testID }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string | number; testID?: string }) {
+/** 1.4.22 career stat tile (spec v2 *-05 stats grid, 3 per row). */
+function Stat({ label, value, testID, fill, accent }: { label: string; value: string | number; testID?: string; fill?: string; accent?: boolean }) {
   return (
-    <View style={{ width: '25%', alignItems: 'center', paddingVertical: 8 }} testID={testID} accessible accessibilityLabel={`${label}: ${value}`}>
-      <View style={st.statIcon}>
-        <Ionicons name={icon} size={20} color={colors.ink} />
-      </View>
-      <Text style={{ fontSize: 20, fontWeight: '800', color: colors.text, marginTop: 6 }}>{value}</Text>
-      <Text style={{ fontSize: 12, fontWeight: '600', color: colors.muted, textAlign: 'center' }} numberOfLines={2}>
-        {label}
-      </Text>
+    <View style={{ width: '33.33%' }} testID={testID} accessible accessibilityLabel={`${label}: ${value}`}>
+      <Cell label={label} value={value} fill={fill} accent={accent} />
     </View>
   );
 }
 
 /** 76 dp avatar inside a light-blue progress ring (progress to the next rank). */
-function RingAvatar({ name, uri, progress }: { name: string; uri?: string | null; progress: number }) {
-  const size = 92;
-  const r = 42;
+function RingAvatar({ name, uri, progress, big }: { name: string; uri?: string | null; progress: number; big?: boolean }) {
+  const size = big ? 132 : 92;
+  const r = big ? 60 : 42;
   const c = 2 * Math.PI * r;
   const p = Math.max(0, Math.min(1, progress));
   return (
     <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }} testID="profile-ring">
       <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
-        <Circle cx={size / 2} cy={size / 2} r={r} stroke="rgba(255,255,255,0.18)" strokeWidth={5} fill="none" />
+        <Circle cx={size / 2} cy={size / 2} r={r} stroke={colors.border} strokeWidth={5} fill="none" />
         <Circle cx={size / 2} cy={size / 2} r={r} stroke={colors.primary} strokeWidth={5} fill="none" strokeDasharray={`${c * p} ${c}`} strokeLinecap="round" transform={`rotate(-90 ${size / 2} ${size / 2})`} />
       </Svg>
-      <View style={{ borderRadius: 40, borderWidth: 2, borderColor: colors.white }}>
-        <Avatar name={name} uri={uri} size={76} color={colors.white} />
+      <View style={{ borderRadius: 60, borderWidth: 2, borderColor: colors.card }}>
+        <Avatar name={name} uri={uri} size={big ? 108 : 76} color={colors.card} />
       </View>
     </View>
   );
@@ -77,6 +74,8 @@ export default function Profile() {
   const { t, i18n } = useTranslation();
   const me = useMe();
   const { isAdmin } = useAuth();
+  const k = useKit();
+  const insets = useSafeAreaInsets();
   const matches = useWatch<Match[]>((cb) => backend.watchMyMatches(me.id, cb), [me.id]) ?? [];
   const teams = useWatch<Team[]>((cb) => backend.watchMyTeams(me.id, cb), [me.id]) ?? [];
   const pos = positionLabel(me.position, t);
@@ -106,37 +105,50 @@ export default function Profile() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <StatusBar style="light" />
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-        <HeroHeader overlap={64} testID="profile-hero">
-          {/* 1.3.8 (V137-14): Edit sits next to the title, so a long name (or Hindi label) never crowds it */}
+      <StatusBar style={k.t.statusBar} />
+      <ScrollView contentContainerStyle={{ paddingBottom: 104 + insets.bottom }} keyboardShouldPersistTaps="handled">
+        {/* 1.4.22 (spec v2 *-05-profile): Day = "Profile" title + gear, pink identity sticker with Edit profile;
+            Night = centred avatar in a Volt progress ring, big name. Gear → Appearance (spec: Settings → Appearance). */}
+        <View style={{ paddingHorizontal: 16, paddingTop: insets.top + 10 }} testID="profile-hero">
           <Row>
-            <Text style={[type.h1, { color: colors.onInk, flex: 1 }]} accessibilityRole="header">
-              {t('profile.title')}
-            </Text>
-            <PressableScale onPress={() => router.push('/edit-profile')} accessibilityRole="button" accessibilityLabel={t('profile.editProfile')} testID="profile-edit" style={st.edit}>
-              <Ionicons name="create-outline" size={16} color={colors.onPrimary} />
-              <Text style={{ color: colors.onPrimary, fontWeight: '700', fontSize: 14 }}>{t('profile.edit')}</Text>
-            </PressableScale>
+            <Display size={28} style={{ flex: 1 }} accessibilityRole="header">{k.day ? t('profile.title') : ''}</Display>
+            <IconBtn icon="settings-outline" label={t('appearance.title')} onPress={() => router.push('/appearance')} testID="profile-settings" />
           </Row>
-          <Row style={{ marginTop: 12 }}>
-            <RingAvatar name={me.name} uri={me.photoURL} progress={ringProgress} />
-            <View style={{ marginLeft: 14, flex: 1, gap: 6 }}>
-              <Text style={{ color: colors.onInk, fontSize: 22, fontWeight: '800' }} numberOfLines={2}>
-                {me.name}
-              </Text>
-              <Row style={{ flexWrap: 'wrap', gap: 6 }}>
-                {pos ? <GlassTag icon="body-outline" text={pos} /> : null}
-                {me.city ? <GlassTag icon="location-outline" text={dataLabel(me.city, t)} /> : null}
-              </Row>
-              <Text style={{ color: colors.onInkMuted, fontSize: 13, fontWeight: '600' }} testID="profile-phone">
-                {formatPhone(me.phone)}
-              </Text>
+          {k.day ? (
+            <Sticker fill={k.t.pink} style={{ marginTop: 12 }} testID="profile-identity" inner={{ padding: 16, flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+              <View style={{ transform: [{ rotate: '-4deg' }] }}>
+                <View style={{ position: 'absolute', left: 3, top: 3, width: 76, height: 76, borderRadius: 20, backgroundColor: k.t.outline }} />
+                <View style={{ width: 76, height: 76, borderRadius: 20, backgroundColor: k.t.accent, borderWidth: 2, borderColor: k.t.outline, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }} testID="profile-ring">
+                  <Avatar name={me.name} uri={me.photoURL} size={72} color={k.t.accent} />
+                </View>
+              </View>
+              <View style={{ flex: 1, gap: 4 }}>
+                <Display size={24} numberOfLines={2}>{me.name}</Display>
+                <Body bold size={13} numberOfLines={2}>{[pos, me.city ? dataLabel(me.city, t) : null].filter(Boolean).join(' · ')}</Body>
+                <Body size={12} testID="profile-phone">{formatPhone(me.phone)}</Body>
+                <PressableScale onPress={() => router.push('/edit-profile')} accessibilityRole="button" accessibilityLabel={t('profile.editProfile')} testID="profile-edit"
+                  style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 40, paddingHorizontal: 12, borderRadius: 12, backgroundColor: k.t.surface, borderWidth: 2, borderColor: k.t.outline, marginTop: 4 }}>
+                  <Ionicons name="create-outline" size={16} color={k.t.text} />
+                  <Text style={[{ color: k.t.text, fontSize: 14 }, k.f.bold]}>{t('profile.editProfile')}</Text>
+                </PressableScale>
+              </View>
+            </Sticker>
+          ) : (
+            <View style={{ alignItems: 'center', marginTop: -20 }} testID="profile-identity">
+              <RingAvatar name={me.name} uri={me.photoURL} progress={ringProgress} big />
+              <Display size={30} style={{ marginTop: 10, textAlign: 'center' }} numberOfLines={2}>{me.name}</Display>
+              <Body muted size={13} style={{ textAlign: 'center' }}>{[pos, me.city ? dataLabel(me.city, t) : null].filter(Boolean).join(' · ')}</Body>
+              <Body muted size={12} testID="profile-phone">{formatPhone(me.phone)}</Body>
+              <PressableScale onPress={() => router.push('/edit-profile')} accessibilityRole="button" accessibilityLabel={t('profile.editProfile')} testID="profile-edit"
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 40, paddingHorizontal: 14, borderRadius: 12, backgroundColor: k.t.surface2, borderWidth: 1, borderColor: k.t.outline, marginTop: 8 }}>
+                <Ionicons name="create-outline" size={16} color={k.t.text} />
+                <Text style={[{ color: k.t.text, fontSize: 14 }, k.f.bold]}>{t('profile.editProfile')}</Text>
+              </PressableScale>
             </View>
-          </Row>
-        </HeroHeader>
+          )}
+        </View>
 
-        <View style={{ paddingHorizontal: 16, marginTop: -64 }}>
+        <View style={{ paddingHorizontal: 16, marginTop: 6 }}>
           <RankCard rankings={rankings} style={{ marginTop: 0 }} />
           {/* 1.3.0: in-app points wallet (balance only) */}
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
@@ -188,32 +200,33 @@ export default function Profile() {
                     testID="profile-form"
                   >
                     {form.map((f) => (
-                      <View key={f.id} style={[st.form, f.won ? st.formW : st.formL]} testID={`profile-form-${f.won ? 'won' : 'lost'}`}>
-                        <Ionicons name={f.won ? 'checkmark' : 'close'} size={18} color={f.won ? colors.white : colors.lossText} />
+                      <View key={f.id} style={[st.form, { backgroundColor: f.won ? (k.day ? k.t.success : k.t.primary) : k.day ? k.t.surface : k.t.surface2, borderWidth: k.day ? 2 : 0, borderColor: k.t.outline, borderRadius: k.day ? 14 : 8 }]} testID={`profile-form-${f.won ? 'won' : 'lost'}`}>
+                        <Ionicons name={f.won ? 'checkmark' : 'close'} size={18} color={f.won ? (k.day ? k.t.text : k.t.onPrimary) : k.t.live} />
                       </View>
                     ))}
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden testID="profile-form-legend">
-                    <Ionicons name="checkmark" size={12} color={colors.successStrong} />
+                    <Ionicons name="checkmark" size={12} color={k.day ? k.t.teamB : k.t.primary} />
                     <Text style={st.legend}>{t('profile.formWon')}</Text>
-                    <Ionicons name="close" size={12} color={colors.lossText} style={{ marginLeft: 6 }} />
+                    <Ionicons name="close" size={12} color={k.t.live} style={{ marginLeft: 6 }} />
                     <Text style={st.legend}>{t('profile.formLost')}</Text>
                   </View>
                 </View>
               ) : null
             }
           />
-          <View style={[card, { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 4 }]} testID="career-stats">
-            <Stat icon="calendar-outline" label={t('profile.matches')} value={c ? c.matches : '–'} testID="career-matches" />
-            <Stat icon="star-outline" label={t('profile.points')} value={c ? c.points : '–'} testID="career-points" />
-            <Stat icon="flash-outline" label={t('profile.spikes')} value={c ? c.kill : '–'} />
-            <Stat icon="hand-left-outline" label={t('profile.blocks')} value={c ? c.block : '–'} />
-            <Stat icon="trophy-outline" label={t('profile.wins')} value={c ? c.wins : '–'} testID="career-wins" />
-            <Stat icon="close-circle-outline" label={t('profile.losses')} value={c ? c.losses : '–'} />
-            <Stat icon="pie-chart-outline" label={t('profile.winPct')} value={c?.finished ? Math.round(c.winRate * 100) + '%' : '–'} />
-            <Stat icon="tennisball-outline" label={t('profile.aces')} value={c ? c.ace : '–'} />
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4 }} testID="career-stats">
+            <Stat label={t('profile.matches')} value={c ? c.matches : '–'} testID="career-matches" />
+            <Stat label={t('profile.points')} value={c ? c.points : '–'} testID="career-points" />
+            <Stat label={t('profile.spikes')} value={c ? c.kill : '–'} />
+            <Stat label={t('profile.blocks')} value={c ? c.block : '–'} />
+            <Stat label={t('profile.wins')} value={c ? c.wins : '–'} testID="career-wins" fill={k.t.success} accent />
+            <Stat label={t('profile.losses')} value={c ? c.losses : '–'} />
+            <Stat label={t('profile.winPct')} value={c?.finished ? Math.round(c.winRate * 100) + '%' : '–'} fill={k.t.success} />
+            <Stat label={t('profile.aces')} value={c ? c.ace : '–'} />
+            <Stat label={t('rankings.potm')} value={rankings?.me?.potm ?? '–'} fill={k.t.accent} accent />
             {career.notCounted > 0 && (
-              <Text style={[type.caption, { color: colors.muted, width: '100%', paddingHorizontal: 10, paddingBottom: 6 }]} testID="career-not-counted">
+              <Text style={[type.caption, { color: k.t.textMuted, width: '100%', paddingHorizontal: 10, paddingBottom: 6 }]} testID="career-not-counted">
                 {t('profile.notCountedYet', { count: career.notCounted })}
               </Text>
             )}
@@ -222,19 +235,17 @@ export default function Profile() {
       <SectionHeader title={t('profile.myTeams')} action={`+ ${t('profile.newTeam')}`} onAction={() => router.push('/team/new')} />
       {teams.length === 0 && <Empty icon="people-outline" title={t('profile.noTeam')} text={t('profile.noTeamText')} />}
       {teams.map((tm) => (
-        <PressableScale key={tm.id} onPress={() => router.push(`/team/${tm.id}`)} accessibilityRole="button" style={[card, { flexDirection: 'row', alignItems: 'center', marginBottom: 10 }]}>
+        <Sticker key={tm.id} onPress={() => router.push(`/team/${tm.id}`)} style={{ marginBottom: 10 }} inner={{ flexDirection: 'row', alignItems: 'center', padding: 12 }}>
           <Avatar name={tm.name} size={44} color={tm.color} />
           <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={[type.h3, { color: colors.text }]} numberOfLines={1}>
-              {tm.name}
-            </Text>
-            <Text style={[type.caption, { color: colors.muted }]}>
+            <Body bold size={15} numberOfLines={1}>{tm.name}</Body>
+            <Text style={[type.caption, { color: k.t.textMuted }]}>
               {t('profile.players', { count: tm.memberIds.length })}
               {tm.captainId === me.id ? t('profile.captainSuffix') : ''}
             </Text>
           </View>
-          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
-        </PressableScale>
+          <Ionicons name="chevron-forward" size={18} color={k.t.text} />
+        </Sticker>
       ))}
 
       <SectionHeader title={t('profile.memories')} action={memories.length ? t('home.seeAll') : undefined} onAction={() => router.push('/memories')} />
@@ -252,6 +263,10 @@ export default function Profile() {
       <SectionHeader title={t('profile.settings')} />
       <View style={[card, { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }]}>
         <LanguageSwitch />
+      </View>
+      {/* 1.4.21 Appearance (Auto / Day / Night) */}
+      <View style={{ marginTop: 10 }}>
+        <Button title={t('appearance.title')} icon="contrast-outline" variant="secondary" onPress={() => router.push('/appearance')} testID="profile-appearance" />
       </View>
       {/* 1.3.4: demo-only testing tools (demo admin, simulate offline) and About (backend mode + API host) */}
       <View style={{ height: 12 }} />
@@ -281,11 +296,11 @@ export default function Profile() {
   );
 }
 
-const st = StyleSheet.create({
+const st = themed(() => StyleSheet.create({
   statIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: colors.tint, alignItems: 'center', justifyContent: 'center' },
   edit: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 40, paddingHorizontal: 14, borderRadius: 20, backgroundColor: colors.primary, alignSelf: 'flex-start', ...elevation.glowPrimary },
-  form: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  form: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   formW: { backgroundColor: colors.successStrong },
   formL: { backgroundColor: colors.lossBg },
   legend: { fontSize: 11, fontWeight: '700', color: colors.muted },
-});
+}));

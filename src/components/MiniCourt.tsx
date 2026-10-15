@@ -11,7 +11,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { StyleSheet, Text, View } from 'react-native';
 import { courtGrid, type Slot } from '../core/rotation';
-import { colors, onColor } from '../theme';
+import { colors, onColor, themed } from '../theme';
 
 export interface MiniCourtProps {
   positions: readonly Slot[];
@@ -70,7 +70,7 @@ export default function MiniCourt({ positions, names, server, screenSide, teamNa
   );
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   court: { width: '100%', maxWidth: 220, borderRadius: 8, padding: 3, gap: 3, borderWidth: 0 },
   courtOnColor: { backgroundColor: 'rgba(0,0,0,0.22)', borderColor: 'rgba(255,255,255,0.9)' },
   courtOnLight: { backgroundColor: 'rgba(255,255,255,0.25)', borderColor: colors.ink },
@@ -81,10 +81,10 @@ const s = StyleSheet.create({
   cell: { flex: 1, flexDirection: 'row', alignItems: 'center', borderRadius: 6, paddingHorizontal: 4, paddingVertical: 3, minWidth: 0 },
   cellOnColor: { backgroundColor: 'rgba(0,0,0,0.18)' },
   cellOnLight: { backgroundColor: 'rgba(255,255,255,0.35)' },
-  cellCard: { backgroundColor: colors.white },
+  cellCard: { backgroundColor: colors.card },
   // Outline keeps the server cell visible on any team colour, including light ones (QA contrast pass).
   cellServer: { backgroundColor: colors.primary, borderWidth: 1.5, borderColor: colors.ink, paddingHorizontal: 2.5, paddingVertical: 1.5 },
   pos: { fontSize: 10, fontWeight: '900', marginRight: 3 },
   name: { fontSize: 12, fontWeight: '800', flexShrink: 1 },
   nameCard: { color: colors.text, fontSize: 11 },
-});
+}));

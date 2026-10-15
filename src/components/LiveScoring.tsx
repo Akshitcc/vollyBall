@@ -17,8 +17,11 @@ import { courtGrid, type Slot } from '../core/rotation';
 import type { Side } from '../core/scoring';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 import { letterSpacing } from '../i18n/format';
-import { chipGradient, colors, elevation, onColor, palette, radius, servePill, teamGradient, teamInk, teamRing, type } from '../theme';
+import { chipGradient, colors, elevation, onColor, palette, radius, servePill, teamGradient, teamInk, teamRing, type, themed } from '../theme';
 import { firstName } from './MiniCourt';
+import { useTheme } from '../theme/ThemeProvider';
+import { useHiFont } from '../theme/useHiFont';
+import type { Tokens } from '../theme/tokens';
 import { PressableScale } from './PressableScale';
 
 export interface TeamHalfProps {
@@ -42,11 +45,18 @@ export interface TeamHalfProps {
 }
 
 export function TeamHalf(p: TeamHalfProps) {
+  const { t: tk, name: theme } = useTheme(); // 1.4.21: Night score numerals in Teko (spec v2 §2, also in Hindi)
+  const hf = useHiFont();
   const { t } = useTranslation();
   const reduce = useReduceMotion();
-  const ink = teamInk(p.color);
-  const pill = servePill(p.color);
-  const ring = teamRing(p.color);
+  // 1.4.22 (spec v2 *-02-live-scoring): the halves use the theme's side tokens (Team A coral, Team B teal/cyan);
+  // the team's own colour stays as the dot next to its name.
+  const day = theme === 'day';
+  const fill = halfFill(tk, p.side, day);
+  const ink = { fg: fill.fg, scrim: day ? 'rgba(255,255,255,0.28)' : tk.surface2, outline: day ? tk.outline : 'transparent', shadow: 'transparent' };
+  const pill = day ? { bg: tk.accent, fg: tk.text, border: tk.outline } : { bg: tk.primary, fg: tk.onPrimary, border: tk.primary };
+  const ring = null as string | null;
+  void teamInk; void servePill; void teamRing;
   const press = useSharedValue(1);
   const pop = useSharedValue(1);
   const plusY = useSharedValue(0);
@@ -71,9 +81,12 @@ export function TeamHalf(p: TeamHalfProps) {
   const pressIn = () => (press.value = withTiming(reduce ? 1 : 0.97, { duration: 90 }));
   const pressOut = () => (press.value = withSpring(1, { damping: 14, stiffness: 320 }));
   return (
-    <Animated.View style={[s.halfOuter, { height: p.height, flex: 1 }, ring ? { borderColor: ring, borderWidth: 2 } : null, halfStyle]} testID={`half-${p.side}`}>
-      <LinearGradient colors={teamGradient(p.color)} start={{ x: 0, y: 0 }} end={{ x: 0.35, y: 1 }} style={[s.half, { backgroundColor: p.color }]}>
-        <View style={s.highlight} pointerEvents="none" />
+    <Animated.View style={[s.halfOuter, { height: p.height, flex: 1 }, day ? { marginRight: 4, marginBottom: 4 } : null, ring ? { borderColor: ring, borderWidth: 2 } : null, halfStyle]} testID={`half-${p.side}`}>
+      {day ? <View pointerEvents="none" style={{ position: 'absolute', left: 4, top: 4, right: -4, bottom: -4, borderRadius: tk.radius.card, backgroundColor: tk.outline }} /> : null}
+      <LinearGradient colors={fill.grad} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }}
+        style={[s.half, { backgroundColor: fill.bg, borderRadius: tk.radius.card, borderWidth: day ? 2 : 1.5, borderColor: day ? tk.outline : fill.accent },
+          !day ? { shadowColor: fill.accent, shadowOpacity: p.serving ? 0.45 : 0.2, shadowRadius: 18, shadowOffset: { width: 0, height: 0 } } : null]}>
+        <View style={[s.highlight, { backgroundColor: 'transparent' }]} pointerEvents="none" />
         <Pressable
           testID={`tap-${p.side}`}
           onPress={p.onPoint}
@@ -86,18 +99,23 @@ export function TeamHalf(p: TeamHalfProps) {
         >
             {/* QA B121-5: long names wrap to 2 lines (and step down a size) instead of truncating at 360 px;
                 adjustsFontSizeToFit does nothing on web. */}
-            <Text style={[s.teamName, teamNameSize(p.name), { color: ink.fg }]} numberOfLines={2} testID={`team-name-${p.side}`}>
-              {p.name}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '100%' }}>
+              <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: p.color, borderWidth: 1.5, borderColor: day ? tk.outline : tk.text }} testID={`team-colour-${p.side}`} />
+              <Text style={[s.teamName, teamNameSize(p.name), { color: ink.fg, flexShrink: 1 }, hf.bold]} numberOfLines={2} testID={`team-name-${p.side}`}>
+                {p.name}
+              </Text>
+            </View>
             <View style={s.pips} accessible accessibilityLabel={t('score.sets', { n: p.setsWon })} testID={`sets-${p.side}`}>
               {pips.map((on, i) => (
-                <View key={i} style={[s.pip, { backgroundColor: on ? ink.fg : ink.scrim, borderColor: ink.outline }]} />
+                <View key={i} style={[s.pip, { backgroundColor: on ? (day ? tk.text : fill.accent) : day ? tk.surface : tk.surface2, borderColor: day ? tk.outline : 'transparent', borderWidth: day ? 1.5 : 0, height: 8, width: i === 0 ? 22 : 16 }]} />
               ))}
             </View>
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' }}>
-              <Animated.View style={scoreStyle}>
+              <Animated.View style={[scoreStyle, day ? { transform: [{ rotate: p.side === 'A' ? '-3deg' : '3deg' }] } : null]}>
+                {day ? <View pointerEvents="none" style={{ position: 'absolute', left: 4, top: 4, right: -4, bottom: -4, borderRadius: 18, backgroundColor: tk.outline }} /> : null}
                 <Text
-                  style={[s.score, { color: ink.fg, textShadowColor: ink.shadow }, p.compact && s.scoreCompact]}
+                  style={[s.score, { color: day ? tk.text : fill.accent, textShadowColor: 'transparent' }, p.compact && s.scoreCompact, tk.font.score ? { fontFamily: tk.font.score, fontWeight: 'normal' } : null,
+                    day ? { backgroundColor: tk.surface, borderWidth: 2, borderColor: tk.outline, borderRadius: 18, paddingHorizontal: 14, paddingTop: 6, overflow: 'hidden', minWidth: 112 } : { fontSize: 112, lineHeight: 112 }]}
                   adjustsFontSizeToFit
                   numberOfLines={1}
                   allowFontScaling={false}
@@ -121,9 +139,9 @@ export function TeamHalf(p: TeamHalfProps) {
                   {p.point === 'match' ? t('score.matchPoint') : t('score.setPoint')}
                 </Text>
               ) : p.serving ? (
-                <View style={[s.serve, { backgroundColor: pill.bg, borderColor: pill.border }]} testID={`serving-${p.side}`}>
+                <View style={[s.serve, { backgroundColor: pill.bg, borderColor: pill.border }, !day ? { borderWidth: 0 } : null]} testID={`serving-${p.side}`}>
                   <Ionicons name="tennisball" size={14} color={pill.fg} />
-                  <Text style={[s.serveText, { color: pill.fg }]} numberOfLines={1}>
+                  <Text style={[s.serveText, { color: pill.fg }, hf.bold, hf.upper && { fontFamily: tk.font.display, fontSize: 16, letterSpacing: 1 }]} numberOfLines={1}>
                     {t('score.serving')}
                   </Text>
                 </View>
@@ -140,7 +158,7 @@ export function TeamHalf(p: TeamHalfProps) {
               accessibilityLabel={t('score.timeoutBtn', { n: p.timeoutsLeft })}
               accessibilityState={{ disabled: p.timeoutsLeft <= 0 }}
               testID={`timeout-${p.side}`}
-              style={[s.toChip, { backgroundColor: ink.scrim, opacity: p.timeoutsLeft <= 0 ? 0.55 : 1 }]}
+              style={[s.toChip, { backgroundColor: day ? 'transparent' : tk.surface2, borderWidth: 1.5, borderStyle: 'dashed', borderColor: day ? fill.fg : tk.outline, opacity: p.timeoutsLeft <= 0 ? 0.55 : 1 }]}
             >
               <Ionicons name="timer-outline" size={15} color={ink.fg} />
               {/* QA C130-5: the label wraps to a second line instead of being cut ("टाइमआउट (…") */}
@@ -163,6 +181,17 @@ export function TeamHalf(p: TeamHalfProps) {
 export function teamNameSize(name: string): { fontSize: number; lineHeight: number } {
   const n = [...(name ?? '')].length;
   return n >= 20 ? { fontSize: 14, lineHeight: 18 } : n >= 13 ? { fontSize: 15, lineHeight: 19 } : { fontSize: 17, lineHeight: 22 };
+}
+
+/** 1.4.22 half colours from the side tokens (spec v2 *-02): Day = solid team fill with on-colour text;
+ *  Night = dark surface with a team-colour border / glow and the neon numeral in the team colour. */
+export function halfFill(tk: Tokens, side: Side, day: boolean) {
+  const accent = side === 'A' ? tk.teamA : tk.teamB;
+  if (day) {
+    const fg = side === 'A' ? tk.onPrimary : tk.onTeamB;
+    return { bg: accent, grad: [accent, accent] as [string, string], fg, accent };
+  }
+  return { bg: tk.surface, grad: [`${accent}29`, tk.surface] as [string, string], fg: tk.text, accent };
 }
 
 /** Last rally + the last 4 rally dots (team colours). */
@@ -230,10 +259,12 @@ export function CourtCard({
   testID?: string;
 }) {
   const { t } = useTranslation();
+  const { t: tk, name: theme } = useTheme();
+  const day = theme === 'day';
   const pts = points ?? {};
   const half = (team: CourtTeam, screenSide: 'left' | 'right') => {
     const grid = courtGrid(screenSide);
-    const fg = onColor(team.color); // white or navy text on the chip (≥ 4.5:1)
+    const fg = tk.text; void onColor; // 1.4.22: chips are surface tiles with a side-colour strip (spec v2 *-02)
     const best = Math.max(0, ...team.positions.map((id) => (id ? (pts[id] ?? 0) : 0)));
     return (
       <View style={[s.courtHalf, onPlayer && { gap: 8 }]} testID={`court-${team.side}`} accessibilityLabel={t('rotation.courtA11y', { team: team.name })}>
@@ -266,10 +297,13 @@ export function CourtCard({
     );
   };
   return (
-    <View style={s.courtCard} testID={testID}>
+    <View style={[{ marginHorizontal: 12, marginTop: 10 }, day ? { marginRight: 16, marginBottom: 4 } : null]}>
+    {/* Day hard offset shadow is a sibling behind the card (a child would paint over the card's own fill) */}
+    {day ? <View pointerEvents="none" style={[{ position: 'absolute', left: 4, top: 4, right: -4, bottom: -4, borderRadius: tk.radius.card, backgroundColor: tk.outline, shadowOpacity: 0, elevation: 0 }]} /> : null}
+    <View style={[s.courtCard, { marginHorizontal: 0, marginTop: 0, backgroundColor: tk.surface, borderRadius: tk.radius.card, borderWidth: day ? 2 : 1, borderColor: day ? tk.outline : tk.surface2, shadowOpacity: 0, elevation: 0 }]} testID={testID}>
       <View style={s.courtHead}>
-        <Ionicons name={onPlayer ? 'hand-left-outline' : 'people-outline'} size={18} color={colors.text} style={{ marginRight: 6 }} />
-        <Text style={[type.h3, { color: colors.text, flex: 1 }]} numberOfLines={2} testID="court-title">
+        <Ionicons name={onPlayer ? 'hand-left-outline' : 'people-outline'} size={18} color={tk.text} style={{ marginRight: 6 }} />
+        <Text style={[type.h3, { color: tk.text, flex: 1 }, !day ? { fontFamily: tk.font.display, fontWeight: 'normal', fontSize: 19, textTransform: 'uppercase', letterSpacing: 0.6 } : { fontFamily: tk.font.bold, fontWeight: 'normal' }]} numberOfLines={2} testID="court-title">
           {title ?? (onPlayer ? t('liveV2.tapPlayerToScore') : points ? `${t('liveV2.court')} · ${t('score.ptsShort')}` : t('score.court'))}
         </Text>
         {!onPlayer && points && (
@@ -280,16 +314,17 @@ export function CourtCard({
         )}
         {onSub && (
           <Pressable onPress={onSub} hitSlop={10} accessibilityRole="button" testID="court-sub" style={{ flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 48, paddingLeft: 8 }}>
-            <Ionicons name="swap-vertical" size={16} color={colors.primaryText} />
-            <Text style={{ color: colors.primaryText, fontWeight: '700' }}>{t('score.sub')}</Text>
+            <Ionicons name="swap-vertical" size={16} color={day ? tk.teamB : tk.primary} />
+            <Text style={{ color: day ? tk.teamB : tk.primary, fontWeight: '700' }}>{t('score.sub')}</Text>
           </Pressable>
         )}
       </View>
-      <View style={s.court}>
+      <View style={[s.court, { backgroundColor: day ? tk.track : tk.bg, borderColor: day ? tk.outline : tk.surface2, borderWidth: day ? 2 : 1 }]}>
         {half(left, 'left')}
-        <View style={s.net} />
+        <View style={[s.net, day ? { backgroundColor: 'transparent', borderLeftWidth: 3, borderStyle: 'dashed', borderColor: tk.outline, width: 0 } : { backgroundColor: tk.primary, width: 3, shadowColor: tk.primary, shadowOpacity: 0.8, shadowRadius: 8, shadowOffset: { width: 0, height: 0 } }]} testID="court-net" />
         {half(right, 'right')}
       </View>
+    </View>
     </View>
   );
 }
@@ -338,40 +373,46 @@ function PlayerTile(p: {
       </View>
     );
   const fg = p.fg;
-  const darkFill = fg === colors.white;
+  const { t: tk, name: theme } = useTheme();
+  const day = theme === 'day';
+  const strip = p.team.side === 'A' ? tk.teamA : tk.teamB;
+  const onStrip = p.team.side === 'A' ? tk.onPrimary : tk.onTeamB;
   const label = p.showCount ? t('liveV2.playerChipA11y', { name: p.fullName || p.name, pos: p.pos, count: p.count }) : `${p.fullName || p.name}, ${p.pos}`;
   const body = (pressed: boolean) => (
     <>
-      <LinearGradient colors={chipGradient(p.team.color)} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={[StyleSheet.absoluteFill, { borderRadius: 14 }]} />
-      <View style={[s.tilePos, { backgroundColor: darkFill ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.55)' }]}>
-        <Text style={[s.tilePosText, { color: darkFill ? colors.white : colors.ink }]}>{p.pos}</Text>
+      {/* 1.4.22 chip (spec v2 *-02): Day = white tile, ink border, side-colour top strip with the position;
+          Night = surface2 tile, side-colour top edge, count in the side colour (Teko). */}
+      {day ? <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 16, backgroundColor: strip, borderTopLeftRadius: 12, borderTopRightRadius: 12, borderBottomWidth: 2, borderColor: tk.outline }} />
+           : <View style={{ position: 'absolute', top: 0, left: 8, right: 8, height: 3, borderRadius: 2, backgroundColor: strip }} />}
+      <View style={[s.tilePos, { backgroundColor: 'transparent', top: day ? -1 : 4, left: 4 }]}>
+        <Text style={[s.tilePosText, { color: day ? onStrip : tk.textMuted }]}>{p.pos}</Text>
       </View>
       {p.showCount ? (
-        <Animated.View style={[{ flexDirection: 'row', alignItems: 'baseline' }, popStyle]}>
-          <Text style={[s.tileCount, { color: fg }]} testID={`court-pts-${p.id}`}>
+        <Animated.View style={[{ flexDirection: 'row', alignItems: 'baseline', marginTop: day ? 6 : 0 }, popStyle]}>
+          <Text style={[s.tileCount, { color: day ? tk.text : strip, fontFamily: tk.font.score, fontWeight: 'normal', fontSize: day ? 26 : 32, lineHeight: day ? 30 : 32 }]} testID={`court-pts-${p.id}`}>
             {p.count}
           </Text>
           <Text style={[s.tilePts, { color: fg }]}>{t('score.ptsShort')}</Text>
         </Animated.View>
       ) : null}
-      <Text style={[s.tileName, { color: fg }]} numberOfLines={1} ellipsizeMode="tail">
+      <Text style={[s.tileName, { color: fg, fontFamily: tk.font.semibold, fontWeight: 'normal' }]} numberOfLines={1} ellipsizeMode="tail">
         {p.name}
       </Text>
       {p.top && <View style={s.topBar} testID={`court-top-${p.id}`} />}
       {p.serving && (
-        <View style={s.serverBadge} testID="court-server">
-          <Ionicons name="tennisball" size={12} color={colors.ink} />
+        <View style={[s.serverBadge, { backgroundColor: day ? tk.accent : tk.primary, borderColor: tk.outline, right: 2, top: 18 }]} testID="court-server">
+          <Ionicons name="tennisball" size={12} color={day ? tk.text : tk.onPrimary} />
         </View>
       )}
       {pressed && <View pointerEvents="none" style={s.ring} />}
       {bump && (
-        <Animated.View key={bump.k} entering={FadeIn.duration(reduce ? 150 : 120)} exiting={FadeOut.duration(150)} pointerEvents="none" style={[s.bump, { backgroundColor: bump.d > 0 ? colors.success : colors.lossText }]} testID={`court-bump-${p.id}`}>
-          <Text style={s.bumpText}>{bump.d > 0 ? '+1' : '−1'}</Text>
+        <Animated.View key={bump.k} entering={FadeIn.duration(reduce ? 150 : 120)} exiting={FadeOut.duration(150)} pointerEvents="none" style={[s.bump, { backgroundColor: bump.d > 0 ? (day ? tk.teamB : tk.primary) : tk.live }]} testID={`court-bump-${p.id}`}>
+          <Text style={[s.bumpText, { color: bump.d > 0 ? (day ? tk.onTeamB : tk.onPrimary) : tk.onLive }]}>{bump.d > 0 ? '+1' : '−1'}</Text>
         </Animated.View>
       )}
     </>
   );
-  const border = { borderColor: 'rgba(255,255,255,0.35)' };
+  const border = { borderColor: day ? tk.outline : tk.outline, borderWidth: day ? 2 : 1, backgroundColor: day ? tk.surface : tk.surface2, overflow: 'hidden' as const };
   if (!p.onPress)
     return (
       <View style={[s.tile, border, s.tileViewer]} accessible accessibilityRole="text" accessibilityLabel={label} testID={`court-tile-${p.id}`}>
@@ -402,7 +443,7 @@ function PlayerTile(p: {
         accessibilityState={{ disabled: p.disabled }}
         accessibilityLabel={label}
         accessibilityHint={t('score.tileHint', { name: p.fullName || p.name, team: p.team.name })}
-        style={[s.tile, s.tileScorer, border, elevation.e1, p.disabled && { opacity: 0.4 }]}
+        style={[s.tile, s.tileScorer, border, day ? null : elevation.e1, p.disabled && { opacity: 0.4 }]}
         testID={`court-tile-${p.id}`}
       >
         {({ pressed }: { pressed: boolean }) => body(pressed && !p.disabled)}
@@ -412,7 +453,7 @@ function PlayerTile(p: {
 }
 
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   halfOuter: { borderRadius: radius.lg, ...elevation.e2, backgroundColor: 'transparent' },
   half: { flex: 1, borderRadius: radius.lg - 1, overflow: 'hidden', alignItems: 'center', paddingBottom: 10 },
   highlight: { position: 'absolute', top: 0, left: 0, right: 0, height: 60, backgroundColor: 'rgba(255,255,255,0.06)' },
@@ -433,10 +474,10 @@ const s = StyleSheet.create({
   toChip: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 32, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 3, flexShrink: 1 },
   /** over the bottom-left of the half (padding 10 + 2 px ring allowance), outside the scoring button */
   toText: { fontWeight: '800', fontSize: 13, lineHeight: 16, flexShrink: 1 },
-  ticker: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.white, borderRadius: radius.sm, paddingHorizontal: 12, minHeight: 38, marginHorizontal: 12, marginTop: 10, ...elevation.e1 },
+  ticker: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.card, borderRadius: radius.sm, paddingHorizontal: 12, minHeight: 38, marginHorizontal: 12, marginTop: 10, ...elevation.e1 },
   tickerText: { flex: 1, color: colors.text, fontWeight: '700', fontSize: 13 },
   dot: { width: 9, height: 9, borderRadius: 5 },
-  courtCard: { backgroundColor: colors.white, borderRadius: radius.md, marginHorizontal: 12, marginTop: 10, padding: 12, ...elevation.e2 },
+  courtCard: { backgroundColor: colors.card, borderRadius: radius.md, marginHorizontal: 12, marginTop: 10, padding: 12, ...elevation.e2 },
   courtHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, minHeight: 32 },
   court: { flexDirection: 'row', backgroundColor: palette.court, borderRadius: 12, borderWidth: 2, borderColor: colors.white, padding: 6 },
   courtHalf: { flex: 1, gap: 6 },
@@ -448,7 +489,7 @@ const s = StyleSheet.create({
   /** 1.3.3: the Opp. error row is gone, so scorer chips grow to 70×90 in 98 dp rows (§11.1); viewer stays 84. */
   // 1.3.4 (QA C133 chip width): never narrower than 48 dp (measured 67.5×90 at a 360 px viewport: 2 chips per row per half)
   tileScorer: { minHeight: 90, minWidth: 48 },
-  tileEmpty: { backgroundColor: colors.white, borderColor: colors.border, borderStyle: 'dashed' },
+  tileEmpty: { backgroundColor: colors.card, borderColor: colors.border, borderStyle: 'dashed' },
   tilePos: { position: 'absolute', top: 5, left: 5, width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   tilePosText: { fontSize: 10, fontWeight: '800' },
   tilePosEmpty: { position: 'absolute', top: 4, left: 6, fontSize: 10, fontWeight: '700', color: colors.muted },
@@ -461,4 +502,4 @@ const s = StyleSheet.create({
   ring: { position: 'absolute', top: -4, left: -4, right: -4, bottom: -4, borderRadius: 19, borderWidth: 3, borderColor: colors.primary },
   bump: { position: 'absolute', top: -10, alignSelf: 'center', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 },
   bumpText: { color: colors.white, fontWeight: '900', fontSize: 12 },
-});
+}));

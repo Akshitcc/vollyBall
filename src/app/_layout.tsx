@@ -1,6 +1,7 @@
 import { profileComplete } from '../core/registration';
 import { MIN_AGE } from '../services/config';
-import { router, Stack } from 'expo-router';
+import { router, Stack, usePathname } from 'expo-router';
+import { clearSignInReason, noteSignedOutPath } from '../state/signInReason';
 import { HeaderBackButton } from 'expo-router/react-navigation';
 import type { NativeStackHeaderBackProps } from 'expo-router/build/react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -16,6 +17,9 @@ import { LanguageGate } from '../i18n/LanguageGate';
 import { headerBack, leakedTabParams, NO_BACK_ROUTES } from '../services/nav';
 import { useNotificationRouting } from '../services/notifications';
 import { AuthProvider, useAuth } from '../state/AuthContext';
+import { useFonts } from 'expo-font';
+import { MUKTA_FONTS } from '../theme/fonts';
+import { ThemeProvider, useTheme } from '../theme/ThemeProvider';
 import { colors } from '../theme';
 
 const navigate = (path: string) => router.push(path as never);
@@ -47,14 +51,18 @@ function RootStack() {
   const { user, profile, loading, termsOk } = useAuth();
   const { t } = useTranslation();
   useNotificationRouting(navigate);
+  // 1.4.22 (QA V1421-5): remember the sign-in-only screen a signed-out user asked for, so Login can say why
+  const pathname = usePathname();
+  if (!loading && !user) noteSignedOutPath(pathname);
+  else if (user) clearSignInReason();
   // 1.3.6: profiles from before the registration fields must be completed first (after the T&C gate).
   const ready = !!profile && profileComplete(profile, MIN_AGE);
   if (loading) return <Loading />;
   return (
     <Stack
       screenOptions={({ route, navigation }) => ({
-        headerStyle: { backgroundColor: colors.ink },
-        headerTintColor: colors.white,
+        headerStyle: { backgroundColor: colors.header }, // 1.4.21: spec §1 – light bar by day, dark by night
+        headerTintColor: colors.onHeader,
         headerTitleStyle: { fontWeight: '800' },
         contentStyle: { backgroundColor: colors.bg },
         // The default back button is labelled "<previous title>, back" ("(tabs), back",
@@ -67,7 +75,7 @@ function RootStack() {
                 <HeaderBackButton
                   {...p}
                   onPress={() => headerBack(route.name, route.params, navigation.getState() as never)}
-                  tintColor={colors.white}
+                  tintColor={colors.onHeader}
                   accessibilityLabel={t('common.goBack')}
                   testID="header-back"
                 />
@@ -108,7 +116,9 @@ function RootStack() {
         <Stack.Screen name="admin-daily" options={{ title: t('daily.adminTitle') }} />
         <Stack.Screen name="feedback" options={{ title: t('feedback.title') }} />
         <Stack.Screen name="help" options={{ title: t('help.title') }} />
+        <Stack.Screen name="appearance" options={{ title: t('appearance.title') }} />
         <Stack.Screen name="contact" options={{ title: t('support.title') }} />
+        <Stack.Screen name="ask" options={{ title: t('ask.title') }} />
         <Stack.Screen name="about" options={{ title: t('aboutPage.title') }} />
         <Stack.Screen name="licenses" options={{ title: t('aboutPage.licensesTitle') }} />
         <Stack.Screen name="terms-view" options={{ title: t('terms.title') }} />
@@ -119,17 +129,36 @@ function RootStack() {
   );
 }
 
+function ThemedStatusBar() {
+  const { t } = useTheme();
+  return <StatusBar style={t.statusBar} />;
+}
+
+/** 1.4.21: day/night theme around the app; a switch re-renders the tree under a new key (router state is kept). */
+function ThemedRoot() {
+  const { user } = useAuth();
+  const [fontsLoaded] = useFonts(MUKTA_FONTS); // Night + Hindi (OFL, assets/fonts/mukta/OFL.txt)
+  void fontsLoaded; // text falls back to the system font until loaded
+  return (
+    <ThemeProvider uid={user?.uid}>
+      {(generation) => (
+        <View style={{ flex: 1, backgroundColor: colors.bg }} key={`theme-${generation}`}>
+          <ThemedStatusBar />
+          <RootStack />
+          <ToastHost />
+          <DialogHost />
+        </View>
+      )}
+    </ThemeProvider>
+  );
+}
+
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <LanguageGate fallback={<Loading />}>
         <AuthProvider>
-          <StatusBar style="light" />
-          <View style={{ flex: 1 }}>
-            <RootStack />
-            <ToastHost />
-            <DialogHost />
-          </View>
+          <ThemedRoot />
         </AuthProvider>
       </LanguageGate>
     </SafeAreaProvider>

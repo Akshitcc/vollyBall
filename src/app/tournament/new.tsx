@@ -34,6 +34,17 @@ export default function NewTournament() {
   const [results, setResults] = useState<Team[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 1.4.20 (QA V1419-8): a form error goes away by itself once its field is fixed
+  const [errFor, setErrFor] = useState<'name' | 'location' | 'place' | 'teams' | null>(null);
+  const fieldError = (k: NonNullable<typeof errFor>, text: string) => { setErrFor(k); setError(text); };
+  useEffect(() => {
+    if (!errFor) return;
+    const fixed = errFor === 'name' ? cleanText(name).length >= LIMITS.tournamentName.min
+      : errFor === 'location' ? !!location
+        : errFor === 'place' ? placeReady(location)
+          : teams.length >= 2;
+    if (fixed) { setError(null); setErrFor(null); }
+  }, [errFor, name, location, teams.length]);
 
   useEffect(() => {
     const t = setTimeout(() => backend.searchTeams(q).then(setResults), 250);
@@ -53,10 +64,11 @@ export default function NewTournament() {
 
   const create = async () => {
     setError(null);
-    if (cleanText(name).length < LIMITS.tournamentName.min) return setError(tr('newTournament.nameRequired'));
-    if (!location) return setError(tr('newTournament.pickLocation'));
-    if (!placeReady(location)) return setError(tr('location.nameRequired'));
-    if (teams.length < 2) return setError(tr('newTournament.minTeams'));
+    setErrFor(null);
+    if (cleanText(name).length < LIMITS.tournamentName.min) return fieldError('name', tr('newTournament.nameRequired'));
+    if (!location) return fieldError('location', tr('newTournament.pickLocation'));
+    if (!placeReady(location)) return fieldError('place', tr('location.nameRequired'));
+    if (teams.length < 2) return fieldError('teams', tr('newTournament.minTeams'));
     setBusy(true);
     try {
       const ids = teams.map((t) => t.id);
@@ -113,7 +125,7 @@ export default function NewTournament() {
         <Row key={t.id} style={{ paddingVertical: 6 }}>
           <Text style={{ width: 26, fontWeight: '900', color: colors.muted }}>{i + 1}.</Text>
           <TeamDot color={t.color} size={14} style={{ marginRight: 8 }} />
-          <Text style={{ flex: 1, fontWeight: '800' }}>{t.name}</Text>
+          <Text style={{ flex: 1, fontWeight: '800', color: colors.text }} testID={`tour-team-name-${t.id}`}>{t.name}</Text>
           <Pressable accessibilityRole="button" onPress={() => setTeams(teams.filter((x) => x.id !== t.id))}>
             <Ionicons name="close-circle" size={22} color={colors.danger} />
           </Pressable>
@@ -143,7 +155,7 @@ export default function NewTournament() {
       <H2>{tr('newTournament.venue')}</H2>
       <LocationPicker value={location} onChange={setLocation} />
       {error && <Text style={{ color: colors.danger, fontWeight: '700' }}>{error}</Text>}
-      <Button title={tr('newTournament.create')} icon="trophy" big onPress={create} loading={busy} />
+      <Button title={tr('newTournament.create')} icon="trophy" big onPress={create} loading={busy} testID="tournament-create" />
     </KeyboardAwareScreen>
   );
 }

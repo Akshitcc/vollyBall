@@ -18,15 +18,15 @@ beforeEach(async () => {
 
 it('login screen switches between English and हिन्दी', async () => {
   await render(<Login />);
-  expect(screen.getByText('Score. Track. Play anywhere.')).toBeTruthy();
-  expect(screen.getByText('Send OTP')).toBeTruthy();
+  expect(screen.getByText("Your number is your player ID. We'll text a 6-digit code.")).toBeTruthy(); // 1.4.22 spec v2 *-06 copy
+  expect(screen.getByText('Send code')).toBeTruthy();
   expect(screen.getByTestId('language-switch')).toBeTruthy();
 
   await fireEvent.press(screen.getByTestId('lang-hi'));
-  expect(screen.getByText('स्कोर करें। ट्रैक करें। कहीं भी खेलें।')).toBeTruthy();
+  expect(screen.getByText('आपका नंबर ही आपकी प्लेयर ID है। हम 6 अंकों का कोड SMS करेंगे।')).toBeTruthy();
   expect(screen.getByText('कोड भेजें')).toBeTruthy();
   expect(screen.getByText('मोबाइल नंबर')).toBeTruthy();
-  expect(screen.queryByText('Send OTP')).toBeNull();
+  expect(screen.queryByText('Send code')).toBeNull();
   expect(await AsyncStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe('hi');
 
   // validation errors follow the language too
@@ -36,8 +36,8 @@ it('login screen switches between English and हिन्दी', async () => {
   expect(screen.getByTestId('send-otp').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
 
   await fireEvent.press(screen.getByTestId('lang-en'));
-  expect(screen.getByText('Send OTP')).toBeTruthy();
-  expect(screen.getByText('Score. Track. Play anywhere.')).toBeTruthy();
+  expect(screen.getByText('Send code')).toBeTruthy();
+  expect(screen.getByText("Your number is your player ID. We'll text a 6-digit code.")).toBeTruthy(); // 1.4.22 spec v2 *-06 copy
   expect(await AsyncStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe('en');
 });
 

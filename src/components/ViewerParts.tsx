@@ -17,7 +17,9 @@ import Animated, { Easing, FadeIn, runOnJS, useAnimatedStyle, useSharedValue, wi
 import type { MatchState, Side } from '../core/scoring';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 import { letterSpacing } from '../i18n/format';
-import { colors } from '../theme';
+import { colors, themed } from '../theme';
+import { useTheme } from '../theme/ThemeProvider';
+import { useHiFont } from '../theme/useHiFont';
 import { PressableScale } from './PressableScale';
 
 /** What a score change looks like: a roll, or with Reduce Motion a fade (never movement). */
@@ -77,10 +79,14 @@ export const BumpScore = RollScore;
 
 export function ServingPill({ testID }: { testID?: string }) {
   const { t } = useTranslation();
+  const { t: tk, name } = useTheme();
+  const f = useHiFont();
+  const day = name === 'day';
+  // 1.4.22 (spec v2 *-02): Day = Ball pill with ink border; Night = Volt pill, Teko caps
   return (
-    <View style={st.pill} testID={testID} accessible accessibilityLabel={t('viewer.serving')}>
-      <Ionicons name="tennisball" size={14} color={colors.onPrimary} />
-      <Text style={st.pillText} numberOfLines={1}>
+    <View style={[st.pill, { backgroundColor: day ? tk.accent : tk.primary }, day ? { borderWidth: 2, borderColor: tk.outline } : null]} testID={testID} accessible accessibilityLabel={t('viewer.serving')}>
+      <Ionicons name="tennisball" size={14} color={day ? tk.text : tk.onPrimary} />
+      <Text style={[st.pillText, { color: day ? tk.text : tk.onPrimary }, day ? f.bold : f.display, f.upper && { textTransform: 'uppercase', fontSize: 17, letterSpacing: 1 }]} numberOfLines={1}>
         {t('viewer.serving')}
       </Text>
     </View>
@@ -96,10 +102,12 @@ export function PulsingLive() {
     if (!reduce) v.value = withRepeat(withSequence(withTiming(0.25, { duration: 700 }), withTiming(1, { duration: 700 })), -1, false);
   }, [reduce, v]);
   const dot = useAnimatedStyle(() => ({ opacity: v.value }));
+  const { t: tk, name } = useTheme();
+  const day = name === 'day';
   return (
-    <View style={st.live} testID="live-pill" accessible accessibilityLabel={t('common.live')}>
-      <Animated.View style={[st.liveDot, dot]} />
-      <Text style={[st.liveText, { letterSpacing: letterSpacing(1) }]}>{t('common.live')}</Text>
+    <View style={[st.live, { backgroundColor: tk.live, borderColor: day ? tk.outline : tk.live, borderRadius: day ? 999 : 6 }]} testID="live-pill" accessible accessibilityLabel={t('common.live')}>
+      <Animated.View style={[st.liveDot, { backgroundColor: tk.onLive }, dot]} />
+      <Text style={[st.liveText, { color: tk.onLive, letterSpacing: letterSpacing(1) }]}>{t('common.live')}</Text>
     </View>
   );
 }
@@ -137,6 +145,14 @@ export const LiveScoreboard = forwardRef<View, {
     return () => clearTimeout(tm);
   }, [bump]);
   const order: Side[] = left === 'A' ? ['A', 'B'] : ['B', 'A'];
+  // 1.4.22 (spec v2 *-02 / *-15): Day = team-filled sticker panels (ink border + hard shadow) with the score on a
+  // tilted white sticker; Night = dark panels with a side-colour border/glow and neon Teko numerals. Side tokens
+  // (teamA / teamB) colour the panels; the team's own colour stays as the dot by its name.
+  const { t: tk, name: theme } = useTheme();
+  const hf = useHiFont();
+  const day = theme === 'day';
+  const sideCol = (side: Side) => (side === 'A' ? tk.teamA : tk.teamB);
+  const onSide = (side: Side) => (day ? (side === 'A' ? tk.onPrimary : tk.onTeamB) : tk.text);
   const score = (side: Side) => (live || showCurrent ? (side === 'A' ? st.current.a : st.current.b) : side === 'A' ? st.setsWon.A : st.setsWon.B);
   const lead = score('A') === score('B') ? null : score('A') > score('B') ? 'A' : 'B';
   return (
@@ -149,18 +165,18 @@ export const LiveScoreboard = forwardRef<View, {
           <React.Fragment key={side}>
             {i === 1 && (
               <View style={st2.center} testID="viewer-sets">
-                <Text style={st2.overline}>{t('common.sets')}</Text>
-                <Text style={st2.sets} testID="viewer-sets-count">
+                <Text style={[st2.overline, { color: tk.textMuted }, day ? hf.bold : hf.display, !day && hf.upper && { fontSize: 15 }]}>{t('common.sets')}</Text>
+                <Text style={[st2.sets, { color: tk.text, fontFamily: tk.font.score, fontWeight: 'normal' }, !day && { fontSize: 34 }]} testID="viewer-sets-count">
                   {left === 'A' ? `${st.setsWon.A}:${st.setsWon.B}` : `${st.setsWon.B}:${st.setsWon.A}`}
                 </Text>
                 {st.sets.map((x, k) => (
-                  <View key={k} style={st2.setChip}>
-                    <Text style={st2.setChipText}>{left === 'A' ? `${x.a}–${x.b}` : `${x.b}–${x.a}`}</Text>
+                  <View key={k} style={[st2.setChip, { backgroundColor: day ? tk.surface : 'transparent', borderWidth: day ? 1.5 : 0, borderColor: tk.outline }]}>
+                    <Text style={[st2.setChipText, { color: day ? tk.text : tk.textMuted }]}>{left === 'A' ? `${x.a}–${x.b}` : `${x.b}–${x.a}`}</Text>
                   </View>
                 ))}
                 {live && !st.finished && (
-                  <View style={[st2.setChip, { backgroundColor: colors.primary }]} testID="viewer-set-now">
-                    <Text style={[st2.setChipText, { color: colors.onPrimary }]}>{t('match.setShort', { n: st.setIndex + 1 })}</Text>
+                  <View style={[st2.setChip, { backgroundColor: day ? tk.accent : 'transparent', borderWidth: day ? 1.5 : 0, borderColor: tk.outline }]} testID="viewer-set-now">
+                    <Text style={[st2.setChipText, { color: day ? tk.text : tk.primary }]}>{t('match.setShort', { n: st.setIndex + 1 })}</Text>
                   </View>
                 )}
               </View>
@@ -169,18 +185,21 @@ export const LiveScoreboard = forwardRef<View, {
               const content = (pressed: boolean) => (
                 <View style={{ alignItems: 'center', width: '100%' }} testID={`viewer-team-${side}`}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', maxWidth: '100%' }}>
-                    <View style={[st2.dot, { backgroundColor: team.color }]} />
+                    <View style={[st2.dot, { backgroundColor: team.color, borderColor: day ? tk.outline : tk.text }]} />
                     {/* 1.3.4: long names ("Yamuna Blockers") wrap to 2 lines / shrink instead of "Yamuna Block…" */}
-                    <Text style={st2.name} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.75} testID={`team-name-${side}`}>
+                    <Text style={[st2.name, { color: onSide(side) }, hf.bold]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.75} testID={`team-name-${side}`}>
                       {team.name}
                     </Text>
                   </View>
-                  <View ref={scoreRefs?.[side]} collapsable={false}>
-                    <RollScore value={score(side)} style={lead && lead !== side ? { color: TRAILING_SCORE } : null} testID={`viewer-score-${side}`} />
+                  <View ref={scoreRefs?.[side]} collapsable={false} style={day ? { marginTop: 8, marginBottom: 4, transform: [{ rotate: side === 'A' ? '-3deg' : '3deg' }] } : null}>
+                    {day ? <View pointerEvents="none" style={{ position: 'absolute', left: 3, top: 3, right: -3, bottom: -3, borderRadius: 16, backgroundColor: tk.outline }} /> : null}
+                    <View style={day ? { backgroundColor: tk.surface, borderRadius: 16, borderWidth: 2, borderColor: tk.outline, paddingHorizontal: 8 } : null}>
+                      <RollScore value={score(side)} style={[{ fontFamily: tk.font.score, fontWeight: 'normal', color: day ? tk.text : sideCol(side) }, day ? { fontSize: 64, lineHeight: 72 } : { fontSize: 92, lineHeight: 92 }, !day && lead && lead !== side ? { opacity: 0.8 } : null]} testID={`viewer-score-${side}`} />
+                    </View>
                   </View>
                   <View style={{ flexDirection: 'row', gap: 4 }} accessibilityLabel={t('viewer.setsWon', { count: won })} testID={`sets-won-${side}`}>
                     {Array.from({ length: setsNeeded }, (_, k) => (
-                      <View key={k} style={[st2.pip, k < won && { backgroundColor: colors.primary }]} />
+                      <View key={k} style={[st2.pip, { backgroundColor: day ? tk.surface : tk.surface2, borderWidth: day ? 1.5 : 0, borderColor: tk.outline, height: 7 }, k < won && { backgroundColor: day ? tk.text : sideCol(side) }]} />
                     ))}
                   </View>
                   {/* 1.4.5 (QA V144-7): the Serving badge is information only – on the scorer's panel a press on it is caught
@@ -198,16 +217,26 @@ export const LiveScoreboard = forwardRef<View, {
                   )}
                   {/* 1.4.4 (QA V143-12): no "Tap · team +1" once the match is over (the panels no longer score) */}
                   {onTeamPoint && !st.finished && (
-                    <View style={[st2.hint, pressed && { backgroundColor: 'rgba(255,255,255,0.14)' }]} testID={`team-panel-hint-${side}`}>
-                      <Ionicons name="add-circle" size={14} color={colors.white} />
-                      <Text style={st2.hintText} numberOfLines={1}>
+                    <View style={[st2.hint, { borderColor: day ? onSide(side) : tk.outline, backgroundColor: day ? (pressed ? tk.surface : 'transparent') : pressed ? tk.surface2 : 'transparent' }]} testID={`team-panel-hint-${side}`}>
+                      <Ionicons name="add-circle" size={14} color={day ? (pressed ? tk.text : onSide(side)) : tk.textMuted} />
+                      <Text style={[st2.hintText, { color: day ? (pressed ? tk.text : onSide(side)) : tk.textMuted }]} numberOfLines={1}>
                         {t('liveV2.tapTeamHint')}
                       </Text>
                     </View>
                   )}
                 </View>
               );
-              if (!onTeamPoint) return <View style={{ flex: 1, alignItems: 'center' }}>{content(false)}</View>;
+              const panelLook = [st2.panel, day
+                ? { backgroundColor: sideCol(side), borderWidth: 2, borderColor: tk.outline, borderRadius: tk.radius.card }
+                : { backgroundColor: tk.surface, borderWidth: 1.5, borderColor: sideCol(side), borderRadius: tk.radius.card, shadowColor: sideCol(side), shadowOpacity: serving ? 0.45 : 0.2, shadowRadius: 18, shadowOffset: { width: 0, height: 0 } }];
+              const shadowV = day ? <View pointerEvents="none" style={{ position: 'absolute', left: 4, top: 4, right: -4, bottom: -4, borderRadius: tk.radius.card, backgroundColor: tk.outline }} /> : null;
+              if (!onTeamPoint)
+                return (
+                  <View style={{ flex: 1, marginRight: day ? 4 : 0, marginBottom: day ? 4 : 0 }} testID={`viewer-panel-${side}`}>
+                    {shadowV}
+                    <View style={panelLook}>{content(false)}</View>
+                  </View>
+                );
               return (
                 <PressableScale
                   onPress={() => {
@@ -220,15 +249,18 @@ export const LiveScoreboard = forwardRef<View, {
                   accessibilityState={{ disabled: !!disabled }}
                   accessibilityLabel={t('liveV2.teamPanelA11y', { team: team.name, score: score(side) })}
                   accessibilityHint={t('liveV2.teamPanelHint', { team: team.name })}
-                  style={({ pressed }: { pressed: boolean }) => [st2.panel, pressed && !disabled && st2.panelPressed, disabled && { opacity: 0.55 }]}
+                  style={({ pressed }: { pressed: boolean }) => [{ flex: 1, minHeight: 214, marginRight: day ? 4 : 0, marginBottom: day ? 4 : 0 }, disabled && { opacity: 0.55 }]}
                   testID={`team-panel-${side}`}
                 >
                   {({ pressed }: { pressed: boolean }) => (
                     <>
-                      {content(pressed && !disabled)}
+                      {shadowV}
+                      <View style={[panelLook, pressed && !disabled && { borderWidth: 3, borderColor: day ? tk.outline : tk.primary, paddingVertical: 8, paddingHorizontal: 4 }]}>
+                        {content(pressed && !disabled)}
+                      </View>
                       {bump?.side === side && (
-                        <Animated.View key={bump.k} entering={FadeIn.duration(reduce ? 150 : 120)} pointerEvents="none" style={st2.bump} testID={`team-panel-bump-${side}`}>
-                          <Text style={st2.bumpText}>+1</Text>
+                        <Animated.View key={bump.k} entering={FadeIn.duration(reduce ? 150 : 120)} pointerEvents="none" style={[st2.bump, { backgroundColor: day ? tk.accent : tk.primary, borderColor: tk.outline }]} testID={`team-panel-bump-${side}`}>
+                          <Text style={[st2.bumpText, { color: day ? tk.text : tk.onPrimary }]}>+1</Text>
                         </Animated.View>
                       )}
                     </>
@@ -243,18 +275,18 @@ export const LiveScoreboard = forwardRef<View, {
   );
 });
 
-const st = StyleSheet.create({
+const st = themed(() => StyleSheet.create({
   score: { color: colors.white, fontSize: 76, lineHeight: 84, fontWeight: '900', fontVariant: ['tabular-nums'], textAlign: 'center' },
   glow: { position: 'absolute', width: 96, height: 96, borderRadius: 48, backgroundColor: colors.primary },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.primary, borderRadius: 999, paddingHorizontal: 12, minHeight: 30, marginTop: 8, maxWidth: '100%' },
   pillText: { color: colors.onPrimary, fontWeight: '800', fontSize: 13, flexShrink: 1 },
   live: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.live, borderRadius: 999, paddingHorizontal: 12, minHeight: 32, borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)' },
-  liveDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.white },
+  liveDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.card },
   liveText: { color: colors.white, fontWeight: '900', fontSize: 13 },
-});
-const st2 = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'flex-start' },
-  center: { width: 76, alignItems: 'center', paddingTop: 4 },
+}));
+const st2 = themed(() => StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'stretch' },
+  center: { width: 64, alignItems: 'center', paddingTop: 22 },
   overline: { color: colors.onInkMuted, fontWeight: '800', fontSize: 11, letterSpacing: 1 },
   sets: { color: colors.white, fontSize: 28, lineHeight: 34, fontWeight: '900', fontVariant: ['tabular-nums'] },
   setChip: { backgroundColor: 'rgba(255,255,255,0.14)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2, marginTop: 4 },
@@ -262,13 +294,13 @@ const st2 = StyleSheet.create({
   dot: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5, borderColor: colors.white, marginRight: 6 },
   name: { color: colors.white, fontWeight: '800', fontSize: 14, lineHeight: 18, flexShrink: 1, textAlign: 'center' },
   pip: { width: 18, height: 5, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.25)' },
-  panel: { flex: 1, minHeight: 48, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', backgroundColor: 'rgba(255,255,255,0.07)', paddingVertical: 10, paddingHorizontal: 6, alignItems: 'center' },
+  panel: { flex: 1, minHeight: 214, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', backgroundColor: 'rgba(255,255,255,0.07)', paddingVertical: 10, paddingHorizontal: 6, alignItems: 'center' },
   panelPressed: { backgroundColor: 'rgba(255,255,255,0.14)', borderWidth: 3, borderColor: colors.primary, paddingVertical: 8, paddingHorizontal: 4 },
   hint: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 24, borderRadius: 999, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(255,255,255,0.45)', paddingHorizontal: 10, marginTop: 8, maxWidth: '100%' },
   hintText: { color: colors.white, fontSize: 11, fontWeight: '700', flexShrink: 1 },
   bump: { position: 'absolute', top: -10, right: 10, backgroundColor: colors.success, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, borderWidth: 2, borderColor: colors.white },
   bumpText: { color: colors.white, fontWeight: '900', fontSize: 12 },
-});
+}));
 
 export interface Flight {
   from: { x: number; y: number };
@@ -310,7 +342,7 @@ export function FlyingPoint({ flight, onDone }: { flight: Flight | null; onDone:
   );
 }
 
-const st3 = StyleSheet.create({
+const st3 = themed(() => StyleSheet.create({
   token: { position: 'absolute', left: 0, top: 0, zIndex: 50, backgroundColor: colors.success, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, borderWidth: 1.5, borderColor: colors.white },
   tokenText: { color: colors.white, fontWeight: '900', fontSize: 12 },
-});
+}));

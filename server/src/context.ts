@@ -29,6 +29,8 @@ export interface Services {
   /** 1.3.6: pincode lookup (absent = format check only) and the minimum age (default 10). */
   pincode?: import('./pincode').PincodeLookup;
   minAge?: number;
+  /** 1.4.20 Ask VolleyLive answer step (ASK_PROVIDER); absent = the mock (extractive, no network). */
+  ask?: import('../../src/core/ask').AskProvider;
   /** Pushes are fire-and-forget; tests can await them through this hook. */
   pending?: Set<Promise<unknown>>;
 }

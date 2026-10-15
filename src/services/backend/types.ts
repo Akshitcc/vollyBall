@@ -201,6 +201,8 @@ export interface Backend {
   // ---- 1.4.19 Help Center > Contact us (core/support) ----
   /** Signed-in user: a new ticket (topic, message, app version, optional gallery screenshot); returns its id. */
   createSupportTicket(t: import('../../core/support').NewSupportTicket): Promise<string>;
+  /** 1.4.20 Ask VolleyLive: a grounded answer with sources, or idk (then the app offers Contact us). */
+  askVolleyLive(question: string, lang: 'en' | 'hi'): Promise<import('../../core/ask').AskAnswer>;
   /** My own tickets, newest first. */
   listMySupportTickets(): Promise<import('../../core/support').SupportTicket[]>;
   /** App admins only: every ticket, newest first. */

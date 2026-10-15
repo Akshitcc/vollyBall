@@ -13,7 +13,12 @@ import { devanagariToAscii, formatPhone, isValidMobile, toE164 } from '../core/p
 import { backend, type OtpSession } from '../services/backend';
 import { DEMO_OTP, SHOW_DEMO_OTP, USES_FIREBASE_AUTH } from '../services/config';
 import { translateError } from '../i18n/format';
-import { colors, elevation, type } from '../theme';
+import { colors, currentTheme, elevation, type, themed, tokens } from '../theme';
+import { StepDots } from '../components/DayNightKit';
+import { signInReasonKey } from '../state/signInReason';
+import { Blob, Body, Display, Glow, KButton, Over, useKit } from '../components/DNKit';
+const T = () => tokens[currentTheme()];
+const DAY = () => currentTheme() === 'day';
 
 /**
  * Room for a pasted code with separators ("123 456", "12-34-56"): the native limit must not cut the
@@ -29,6 +34,9 @@ export const isCompactLogin = (windowHeight: number) => windowHeight < COMPACT_L
 export default function Login() {
   const { t } = useTranslation();
   const compact = isCompactLogin(useWindowDimensions().height);
+  const k = useKit();
+  // 1.4.22 (QA V1421-5): why Login opened (a signed-out user asked for /ask or another sign-in-only screen)
+  const [reasonKey] = useState(() => signInReasonKey());
   const verifier = useRef<PhoneVerifierHandle>(null);
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
@@ -101,7 +109,7 @@ export default function Login() {
 
   return (
     <KeyboardAwareScreen
-      style={{ backgroundColor: session ? colors.white : colors.ink }}
+      style={{ backgroundColor: k.t.bg }}
       edges={['top', 'bottom']}
       padded={false}
       contentContainerStyle={{ flexGrow: 1 }}
@@ -109,66 +117,45 @@ export default function Login() {
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, minHeight: 52 }}>
           {session && (
             <Pressable onPress={changeNumber} accessibilityRole="button" accessibilityLabel={t('login.changeNumber')} hitSlop={8} style={{ width: 44, height: 44, justifyContent: 'center' }} testID="otp-back">
-              <Ionicons name="arrow-back" size={24} color={colors.ink} />
+              <Ionicons name="arrow-back" size={24} color={k.t.text} />
             </Pressable>
           )}
           <View style={{ flex: 1 }} />
-          <LanguageSwitch dark={!session} showLabel={false} />
+          <LanguageSwitch showLabel={false} />
         </View>
       }
       testID="login-screen"
     >
-      <StatusBar style={session ? 'dark' : 'light'} />
+      <StatusBar style={k.t.statusBar} />
+      {/* 1.4.22 (spec v2 *-06-login-keyboard): step dots "Step 1 of 3", display title, MOBILE NUMBER field and Send code
+          right below it so both stay above the keyboard. Day: Ball blob top-right; Night: Volt glow. */}
+      {k.day ? <Blob color={k.t.accent} size={220} style={{ top: -120, right: -80 }} /> : <Glow color={k.t.primary} size={240} style={{ top: -120, right: -100 }} opacity={0.25} />}
       {!session ? (
-        <View style={{ flex: 1 }}>
-          <View style={{ alignItems: 'center', paddingTop: compact ? 0 : 12, paddingBottom: compact ? 18 : 56 }} testID={compact ? 'login-brand-compact' : 'login-brand'}>
-            <View style={[s.logo, compact && s.logoCompact]}>
-              <MaterialCommunityIcons name="volleyball" size={compact ? 32 : 52} color={colors.ink} />
-            </View>
-            <Text style={{ color: colors.white, marginTop: compact ? 6 : 14, fontSize: compact ? 26 : 34, fontWeight: '900' }}>VolleyLive</Text>
-            <Text style={{ color: colors.onInkMuted, fontSize: compact ? 14 : 16, marginTop: compact ? 2 : 4, fontWeight: '500' }}>{t('login.tagline')}</Text>
+        <View style={{ flex: 1, paddingHorizontal: 20 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: compact ? 0 : 4 }} testID={compact ? 'login-brand-compact' : 'login-brand'}>
+            <StepDots step={0} total={3} testID="login-steps" />
           </View>
-          <View style={[s.sheet, compact && { paddingTop: 16 }]}>
-            {SHOW_DEMO_OTP && <Banner tone="warn" text={t('login.demoBanner', { code: DEMO_OTP })} />}
-            <Text style={[type.display, { color: colors.text }, compact && { fontSize: 24, lineHeight: 30 }]}>{t('login.welcome')}</Text>
-            <Text style={[type.body, { color: colors.muted, marginTop: 4, marginBottom: compact ? 10 : 16, fontSize: compact ? 14 : 15, lineHeight: compact ? 20 : 22 }]}>{t('login.welcomeText')}</Text>
-            <PhoneInput digitsOnly label={t('common.mobileNumber')} value={phone} onChangeText={onPhone} onShownInvalid={setShownInvalid} size="lg" testID="phone-input" onSubmitEditing={() => canSend && send()} returnKeyType="send" />
-            <Button title={t('login.sendOtp')} icon="arrow-forward" onPress={send} loading={busy} disabled={!canSend} disabledHint={t('login.sendOtpHint')} big style={{ marginTop: 4 }} testID="send-otp" />
-            {error && <ErrorLine text={error} />}
-            <View style={{ flexDirection: 'row', marginTop: 22 }}>
-              {(
-                [
-                  ['radio', 'login.featLive'],
-                  ['podium', 'login.featRank'],
-                  ['camera', 'login.featPhotos'],
-                ] as const
-              ).map(([icon, key]) => (
-                <View key={key} style={{ flex: 1, alignItems: 'center', paddingHorizontal: 4 }}>
-                  <View style={s.feat}>
-                    <Ionicons name={icon} size={22} color={colors.ink} />
-                  </View>
-                  <Text style={[type.caption, { color: colors.text, textAlign: 'center', marginTop: 6 }]}>{t(key)}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
+          {SHOW_DEMO_OTP && <View style={{ marginTop: 10 }}><Banner tone="warn" text={t('login.demoBanner', { code: DEMO_OTP })} /></View>}
+          <Display size={compact ? 30 : 36} style={{ marginTop: compact ? 12 : 22 }} accessibilityRole="header" testID="login-title">{k.day ? t('dn.loginTitleDay') : t('dn.loginTitleNight')}</Display>
+          {reasonKey ? <View style={{ marginTop: 12 }} accessibilityLiveRegion="polite"><Banner tone="warn" text={t(reasonKey)} testID="login-reason" /></View> : null}
+          <Body muted bold size={15} style={{ marginTop: 6, marginBottom: compact ? 12 : 18 }}>{t('dn.loginSub')}</Body>
+          <Over style={{ marginBottom: 6 }} color={k.t.text}>{t('common.mobileNumber')}</Over>
+          <PhoneInput digitsOnly label="" value={phone} onChangeText={onPhone} onShownInvalid={setShownInvalid} size="lg" testID="phone-input" onSubmitEditing={() => canSend && send()} returnKeyType="send" />
+          <KButton title={t('dn.sendCode')} icon="arrow-forward" onPress={send} loading={busy} disabled={!canSend} accessibilityLabel={canSend ? t('dn.sendCode') : `${t('dn.sendCode')}. ${t('login.sendOtpHint')}`} style={{ marginTop: 4 }} testID="send-otp" />
+          {!canSend ? <Body muted size={12} style={{ marginTop: 6 }} testID="send-otp-hint">{t('login.sendOtpHint')}</Body> : null}
+          {error && <ErrorLine text={error} />}
+          <Body muted size={12} style={{ marginTop: 16 }}>{t('login.welcomeText')}</Body>
         </View>
       ) : (
         <View style={{ paddingHorizontal: 20, paddingTop: 8 }}>
-          {SHOW_DEMO_OTP && <Banner tone="warn" text={t('login.demoBanner', { code: DEMO_OTP })} />}
-          <View style={s.otpIcon}>
-            <Ionicons name="chatbubble-ellipses-outline" size={40} color={colors.ink} />
-            <View style={s.lock}>
-              <Ionicons name="lock-closed" size={22} color={colors.white} />
-            </View>
-          </View>
-          <Text style={[type.display, { color: colors.text, marginTop: 20 }]} accessibilityRole="header">
-            {t('login.enterTitle')}
-          </Text>
-          <Text style={[type.body, { color: colors.muted, marginTop: 4, fontSize: 15 }]} testID="otp-sent-to">
+          {/* 1.4.22 (spec v2 *-10-otp): Step 2 of 3, title, 6 cells 46×58 (Day ink border + hard shadow on focus) */}
+          <StepDots step={1} total={3} testID="otp-steps" />
+          {SHOW_DEMO_OTP && <View style={{ marginTop: 10 }}><Banner tone="warn" text={t('login.demoBanner', { code: DEMO_OTP })} /></View>}
+          <Display size={32} style={{ marginTop: 18 }} accessibilityRole="header">{t('login.enterTitle')}</Display>
+          <Text style={[type.body, { color: k.t.textMuted, marginTop: 4, fontSize: 15 }, k.f.body]} testID="otp-sent-to">
             {t('login.sentTo', { phone: formatPhone(e164) })}
             {' · '}
-            <Text style={{ color: colors.primaryText, fontWeight: '700' }} onPress={changeNumber} accessibilityRole="button" testID="otp-change">
+            <Text style={{ color: k.day ? k.t.teamAText : k.t.primary, fontWeight: '700' }} onPress={changeNumber} accessibilityRole="button" testID="otp-change">
               {t('login.change')}
             </Text>
           </Text>
@@ -201,19 +188,20 @@ export default function Login() {
             />
           </Pressable>
           <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 18 }}>
-            <Text style={[type.body, { color: colors.muted, flex: 1 }]}>{t('login.didntGet')}</Text>
+            <Text style={[type.body, { color: k.t.textMuted, flex: 1 }]}>{t('login.didntGet')}</Text>
             {left > 0 ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }} testID="otp-resend-wait">
-                <Ionicons name="time-outline" size={16} color={colors.muted} />
-                <Text style={[type.body, { color: colors.muted }]}>{t('login.resendIn', { s: `0:${String(left).padStart(2, '0')}` })}</Text>
+                <Ionicons name="time-outline" size={16} color={k.t.textMuted} />
+                <Text style={[type.body, { color: k.t.textMuted }]}>{t('login.resendIn', { s: `0:${String(left).padStart(2, '0')}` })}</Text>
               </View>
             ) : (
               <Pressable onPress={resend} accessibilityRole="button" hitSlop={8} style={{ minHeight: 44, justifyContent: 'center' }} testID="otp-resend">
-                <Text style={{ color: colors.primaryText, fontWeight: '700', fontSize: 15 }}>{t('login.resend')}</Text>
+                <Text style={{ color: k.day ? k.t.teamAText : k.t.primary, fontWeight: '700', fontSize: 15 }}>{t('login.resend')}</Text>
               </Pressable>
             )}
           </View>
-          <Button title={t('login.verify')} icon="shield-checkmark-outline" onPress={confirm} loading={busy} disabled={code.length < 6} disabledHint={t('login.verifyHint')} big style={{ marginTop: 16 }} testID="verify-otp" />
+          <KButton title={t('login.verify')} icon="shield-checkmark-outline" onPress={confirm} loading={busy} disabled={code.length < 6} accessibilityLabel={code.length < 6 ? `${t('login.verify')}. ${t('login.verifyHint')}` : t('login.verify')} style={{ marginTop: 16 }} testID="verify-otp" />
+          {code.length < 6 ? <Body muted size={12} style={{ marginTop: 6 }} testID="verify-otp-hint">{t('login.verifyHint')}</Body> : null}
           {error && <ErrorLine text={error} />}
         </View>
       )}
@@ -225,26 +213,26 @@ export default function Login() {
 function ErrorLine({ text }: { text: string }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 }} accessibilityLiveRegion="polite">
-      <Ionicons name="alert-circle" size={16} color={colors.lossText} />
-      <Text style={{ color: colors.lossText, fontWeight: '600', fontSize: 13, flex: 1 }}>{text}</Text>
+      <Ionicons name="alert-circle" size={16} color={T().live} />
+      <Text style={{ color: T().live, fontWeight: '600', fontSize: 13, flex: 1 }}>{text}</Text>
     </View>
   );
 }
 
 const RESEND_S = 30;
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   logoCompact: { width: 52, height: 52, borderRadius: 16 },
   logo: { width: 84, height: 84, borderRadius: 26, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', ...elevation.glowPrimary },
-  sheet: { flex: 1, backgroundColor: colors.white, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, paddingTop: 24 },
+  sheet: { flex: 1, backgroundColor: colors.card, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, paddingTop: 24 },
   feat: { width: 44, height: 44, borderRadius: 12, backgroundColor: colors.tint, alignItems: 'center', justifyContent: 'center' },
   otpIcon: { width: 96, height: 96, borderRadius: 24, backgroundColor: colors.tint, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   lock: { position: 'absolute', top: -10, right: -10, width: 36, height: 36, borderRadius: 10, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
   boxes: { flexDirection: 'row', gap: 8, marginTop: 24 },
-  box: { flex: 1, height: 56, borderRadius: 12, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
-  boxFilled: { borderColor: colors.ink, backgroundColor: colors.white },
-  boxCurrent: { borderWidth: 2, borderColor: colors.primaryText, backgroundColor: colors.white },
-  boxWrong: { borderColor: colors.lossText },
-  boxText: { fontSize: 24, fontWeight: '800', color: colors.text },
+  box: { flex: 1, height: 58, borderRadius: 14, borderWidth: DAY() ? 2 : 1, borderColor: DAY() ? T().outline : T().outline, backgroundColor: T().surface, alignItems: 'center', justifyContent: 'center' },
+  boxFilled: { borderColor: DAY() ? T().outline : T().textMuted, backgroundColor: T().surface },
+  boxCurrent: DAY() ? { borderWidth: 2, borderColor: T().outline, shadowColor: T().primary, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 3, height: 3 } } : { borderWidth: 2, borderColor: T().primary, shadowColor: T().primary, shadowOpacity: 0.4, shadowRadius: 12, shadowOffset: { width: 0, height: 0 } },
+  boxWrong: { borderColor: T().live },
+  boxText: { fontSize: 26, fontFamily: T().font.display, color: T().text },
   hiddenInput: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, opacity: 0.02, color: 'transparent' },
-});
+}));

@@ -1576,7 +1576,7 @@ service cloud.firestore {
         && request.resource.data.userId == uid()
         && request.resource.data.status == 'open'
         && request.resource.data.topic in ['account', 'teams', 'match', 'scoring', 'wallet', 'tournament', 'bug', 'other']
-        && request.resource.data.message is string && request.resource.data.message.size() >= 10 && request.resource.data.message.size() <= 2000
+        && request.resource.data.message is string && request.resource.data.message.size() <= 2000 && request.resource.data.message.trim().size() >= 10 // 1.4.20: trimmed, like the app
         && !request.resource.data.message.matches('(?s).*[\\x{0}-\\x{8}\\x{B}-\\x{1F}\\x{7F}-\\x{9F}\\x{AD}\\x{61C}\\x{180E}\\x{200B}-\\x{200F}\\x{2028}\\x{2029}\\x{202A}-\\x{202E}\\x{2060}-\\x{2064}\\x{2066}-\\x{2069}\\x{FEFF}].*')
         && (request.resource.data.get('appVersion', null) == null || (request.resource.data.appVersion is string && request.resource.data.appVersion.size() <= 40))
         && (request.resource.data.get('screenshotPath', null) == null

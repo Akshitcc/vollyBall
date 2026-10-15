@@ -137,7 +137,10 @@ describe('V140-14: accessible names, Save → Profile, closable result sheet', (
     const sheet = src.slice(src.indexOf('{/* match over */}'), src.indexOf('<LineupPicker'));
     expect(sheet).toMatch(/<Modal visible=\{st\.finished && !attrib && !overClosed\}[^>]*onRequestClose=\{\(\) => setOverClosed\(true\)\}/);
     expect(sheet).toMatch(/testID="match-over-backdrop"/);
-    expect(sheet).toMatch(/accessibilityLabel=\{tr\('score\.closeResult'\)\}/);
+    // 1.4.22: the sheet is the full-screen RewardScreen; its Close button carries the label
+    expect(sheet).toMatch(/<RewardScreen[\s\S]*onClose=\{\(\) => setOverClosed\(true\)\}/);
+    const reward = require('fs').readFileSync(require('path').join(__dirname, '../RewardScreen.tsx'), 'utf8') as string;
+    expect(reward).toMatch(/accessibilityLabel=\{t\('score\.closeResult'\)\}[\s\S]{0,80}testID="match-over-close"/);
     expect(i18n.t('score.closeResult', { lng: 'en' })).toBe('Close result');
     expect(i18n.t('score.closeResult', { lng: 'hi' })).toBe('नतीजा बंद करें');
   });

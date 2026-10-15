@@ -2,7 +2,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { EmptyCard } from '../components/Hero';
 import { Card, Chip } from '../components/ui';
 import { Image } from 'react-native';
@@ -39,10 +39,13 @@ export default function AdminFeedbackScreen() {
       <Text style={[type.body, { fontWeight: '900', color: colors.text, marginBottom: 8 }]} accessibilityRole="header">{t('support.inbox')}</Text>
       {tickets && tickets.length === 0 ? <Text style={[type.body, { color: colors.muted, marginBottom: 12 }]} testID="support-inbox-empty">{t('support.inboxEmpty')}</Text> : null}
       {(tickets ?? []).map((x) => (
-        <Card key={x.id} style={{ marginBottom: 10 }} onPress={() => setOpenId(openId === x.id ? null : x.id)} testID={`ticket-${x.id}`}>
+        // 1.4.20 (QA V1419-10): only the summary is the toggle – the status chips are siblings, never a button inside a button
+        <Card key={x.id} style={{ marginBottom: 10 }}>
+          <Pressable onPress={() => setOpenId(openId === x.id ? null : x.id)} accessibilityRole="button" accessibilityState={{ expanded: openId === x.id }} testID={`ticket-${x.id}`}>
           <Text style={[type.caption, { color: colors.text, fontWeight: '800' }]} numberOfLines={1}>{t('support.from', { name: x.userName ?? x.userId })} · {t(`support.topics.${x.topic}`)}</Text>
           <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]} testID={`ticket-meta-${x.id}`}>{[t(`support.status.${x.status}`), x.appVersion, formatWhenT(x.createdAt)].filter(Boolean).join(' · ')}</Text>
           <Text style={[type.body, { color: colors.text, marginTop: 6 }]} selectable numberOfLines={openId === x.id ? undefined : 2}>{x.message}</Text>
+          </Pressable>
           {openId === x.id ? (
             <View testID={`ticket-open-${x.id}`}>
               {x.screenshotUrl ? (

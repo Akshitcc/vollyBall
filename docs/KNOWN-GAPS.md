@@ -411,6 +411,37 @@ the worst cases with 10 pads on create and 30 on update.
   rules field; not done.
 - **Abandon policy:** still interim ('review'), pending Akshit's decision.
 
+## 1.4.20 – Help Center Lows (QA 1.4.19) + Ask VolleyLive (RAG phase 1)
+
+- **Still waiting on Akshit:** SUPPORT_URL (V1419-0, currently https://www.contact.com – an unrelated third-party site)
+  is unchanged; owner edit screens for tournaments (V1419-7) are not built. The Firebase match-create tournament tag
+  gap (1.4.19 above) stays documented: no expression budget.
+- Support message length: the app counts what the user sees (an emoji / Devanagari syllable = 1) and cuts a longer
+  paste at 2000 code points (what the API column stores) with a notice. A grapheme made of several code points (👍🏽,
+  family emoji) uses more than 1 of the 2000. Firestore `size()` counts UTF-16 units, so on Firebase a message of more
+  than ~1000 non-BMP emoji is refused by the rules although the app accepted it.
+- Firestore rules: the minimum is now on `message.trim()`; the rules still can't strip zero-width characters other
+  than refusing them, and still can't rate-limit tickets (no write counting – needs App Check / a Function).
+- Storage rules: the file name must be `<ticket id>.<ext>` with the extension of the declared type (.jpg ↔ image/jpeg,
+  .png ↔ image/png, .webp ↔ image/webp). Rules can't read the bytes, so a non-image labelled image/png with a .png name
+  is still stored (only the owner and admins can read it; the API checks magic bytes). Uploads are not tied to an
+  existing ticket document (the Firebase app uploads before writing the ticket) – no per-user count cap on Firebase.
+- Screenshot links on Firebase are download-token URLs (no expiry); API signed links expire (FILE_URL_TTL_SECONDS).
+- Ticket rate rule: demo and API both use 5 at once, then 1 per 12 minutes (token bucket, `SUPPORT_RATE`); only valid
+  tickets count. Feedback (FB-5) still uses the old demo "5 per hour".
+- **Ask VolleyLive:** answers only from the Help Center FAQs and our own rule summaries – it can't answer anything else
+  (says "I don't know" + Contact us). Retrieval is local keyword/trigram embeddings (512-d, no embedding API): good
+  for short questions, weak on paraphrases with no shared word. The API stores vectors in MySQL (`ask_chunks`, 0021)
+  and searches them in memory (about 70 rows). On Firebase and in the demo the same index is built on the device and
+  the answer is extractive (mock) – no AI provider there. A real provider (ASK_PROVIDER=openai|gemini|anthropic +
+  ASK_API_KEY in the server env) is not configured or tested against a live service (no keys/accounts were used);
+  the adapters are tested with a fake fetch. The question is sent to that provider when one is configured – the
+  privacy policy needs a line before that is turned on. The API needs accepted T&C for /ask (all writes do).
+  Rate limit: 10 at once, then 2 per minute per user (in memory unless REDIS_URL).
+- **FIVB rules:** `src/core/ask/rulesKnowledge.ts` holds 10 short notes WRITTEN IN OUR OWN WORDS, linking to the
+  official FIVB page; no FIVB text is copied or stored. Before adding more (or quoting rule numbers / diagrams), the
+  FIVB copyright / licence position should be confirmed. Rule-note Hindi: NEEDS REVIEW by a native speaker.
+
 ## 1.4.19 – tournament admin permissions + Help Center
 
 - Firebase: the match create rule has no expression budget left (the 12-a-side create sits at 1000), so it can't check
@@ -562,3 +593,11 @@ the worst cases with 10 pads on create and 30 on update.
   card ("7:49 am IST"). A browser or phone set to UTC shows UTC; that is the device setting, not a stored-time error.
 - **Demo admin handoff (V146-9):** in the demo the fixed demo admin account (+91 90000 00001) counts as an admin for
   the handoff whether or not admin mode is switched on.
+
+## 1.4.21 – QA 1.4.20 fixes
+
+- **No in-app account deletion.** The new FAQ `account-delete` (and Ask VolleyLive) says so and points to Contact us → "Account and sign-in"; deletion is handled by hand by the team.
+- **Support messages: 2000 visible characters.** Needs migration 0022 (widens the column to 8000 code points). A 1.4.21 app against a server WITHOUT 0022 can be refused for long Hindi/emoji messages (> 2000 code points) – deploy the server first.
+- **Signed-out Ask:** the app's route guard sends a signed-out user to sign in before Ask opens; the friendly `ask_sign_in` message covers the remaining case (session lost while on the screen / demo reset).
+- **Ask relevance cut-off:** extra sources under half the best match's score are dropped (`ASK_RELATIVE_MIN` 0.5); a genuinely two-topic question may now cite one source.
+- **Day/Night (1.4.21):** token-level theming only; per-screen mockup layouts/decor not rebuilt; hard-coded colours remain in team/medal gradients, map, avatar initials; Baloo 2 / Hind not bundled; no expo-system-ui (possible brief flash of the native window colour on Android cold start); Auto ignores OS dark mode by decision.

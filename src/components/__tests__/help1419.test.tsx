@@ -16,6 +16,7 @@ jest.mock('expo-router', () => ({
   router: { replace: jest.fn(), back: jest.fn(), canGoBack: () => true, push: jest.fn() },
   Stack: { Screen: () => null },
   useFocusEffect: (cb: () => void) => { const R = require('react'); R.useEffect(() => cb(), []); },
+  useLocalSearchParams: () => ({}), // 1.4.20: Help opens one FAQ from Ask VolleyLive (?faq=)
 }));
 jest.mock('react-native-safe-area-context', () => {
   const { View } = require('react-native');

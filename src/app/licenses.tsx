@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { FlatList, Pressable, Text, TextInput, View } from 'react-native';
 import { filterLicenses, licenseText, type LicenseData, type LicensePackage } from '../core/licenses';
 import licenses from '../generated/licenses.json';
+import { FONT_LICENSES } from '../core/fontLicenses';
 import { colors, type } from '../theme';
 
 const DATA = licenses as LicenseData;
@@ -60,6 +61,8 @@ export default function LicensesScreen() {
           <Text style={[type.body, { color: colors.text, fontWeight: '700' }]} testID="licenses-count">{t('aboutPage.licenses', { count: DATA.packages.length })}</Text>
           <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]}>{t('aboutPage.licensesNote')}</Text>
           <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]}>{t('aboutPage.licensesNative')}</Text>
+          {/* 1.4.21: bundled fonts (SIL OFL 1.1) */}
+          {FONT_LICENSES.map((f) => <FontLicense key={f.name} f={f} />)}
           <TextInput
             value={q}
             onChangeText={setQ}
@@ -80,5 +83,18 @@ export default function LicensesScreen() {
         return <Row p={item} open={open === k} onToggle={() => setOpen((o) => (o === k ? null : k))} />;
       }}
     />
+  );
+}
+
+function FontLicense({ f }: { f: (typeof FONT_LICENSES)[number] }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <View style={{ marginTop: 8 }} testID={`font-license-${f.name}`}>
+      <Pressable onPress={() => setOpen((o) => !o)} accessibilityRole="button" accessibilityState={{ expanded: open }} style={{ minHeight: 40, justifyContent: 'center' }}>
+        <Text style={[type.body, { color: colors.text, fontWeight: '700' }]}>{`${f.name} (font) · ${f.license}`}</Text>
+        <Text style={[type.caption, { color: colors.muted }]}>{f.files.join(', ')}</Text>
+      </Pressable>
+      {open ? <Text style={[type.caption, { color: colors.text }]} selectable>{f.text}</Text> : null}
+    </View>
   );
 }

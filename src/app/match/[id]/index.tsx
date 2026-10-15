@@ -9,6 +9,7 @@ import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-nati
 import { formatWhen } from '../../../components/MatchCard';
 import { CourtCard, RallyTicker } from '../../../components/LiveScoring';
 import { LiveScoreboard, PulsingLive } from '../../../components/ViewerParts';
+import { ReactionButton } from '../../../components/DayNightKit';
 import { AddPhotoButtons } from '../../../components/PhotoSheet';
 import { PhotoGrid, PhotoViewer } from '../../../components/PhotoGallery';
 import { PotmBadge, PotmPicker } from '../../../components/Potm';
@@ -19,7 +20,7 @@ import { ownMatchReview } from '../../../core/antifraud';
 import { confirmAsk } from '../../../services/dialogs';
 import { SUPPORT_EMAIL } from '../../../services/config';
 import { VerdictRepairCard } from '../../../components/VerdictRepairCard';
-import { Avatar, Banner, breakWords, Button, Card, Chip, Empty, H2, Loading, LiveBadge, P, Row, Screen } from '../../../components/ui';
+import { Avatar, Banner, TeamDot, breakWords, Button, Card, Chip, Empty, H2, Loading, LiveBadge, P, Row, Screen } from '../../../components/ui';
 import { rotationState } from '../../../core/rotation';
 import { computeState, timeline, type MatchEvent, type Side } from '../../../core/scoring';
 import { acceptedEvents, creditLabel, kindBreakdown, longestRun, playerStats, teamTotals } from '../../../core/stats';
@@ -33,7 +34,8 @@ import { useReviewPrompt } from '../../../state/useReviewPrompt';
 import { useProfiles } from '../../../state/profiles';
 import { canAddMatchPhoto } from '../../../core/photos';
 import { dataLabel, describeRulesT, letterSpacing, matchStatusLabel, shareTextT as shareText, translateError } from '../../../i18n/format';
-import { colors, font, gradients, teamText } from '../../../theme';
+import { colors, currentTheme, font, gradients, teamText, themed } from '../../../theme';
+import { tokens } from '../../../theme/tokens';
 import { shareOrCopy } from '../../../services/share';
 
 type Tab = 'stats' | 'timeline' | 'photos';
@@ -125,7 +127,8 @@ export default function MatchPage() {
     <Screen edges={[]}>
       <Stack.Screen options={{ title: dataLabel(m.title, tr) || tr('titles.match') }} />
       {/* scoreboard (1.3.2, design 11 v2 viewer): big current-set scores, set count, serving pill */}
-      <LinearGradient colors={gradients.hero as unknown as [string, string, string]} locations={gradients.heroLocations as unknown as [number, number, number]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hs.hero} testID="summary-hero">
+      {/* 1.4.22 (spec v2 *-15): Day = panels straight on the cream page; Night = the hero gradient token */}
+      <LinearGradient colors={(currentTheme() === 'day' ? [tokens.day.bg, tokens.day.bg, tokens.day.bg] : tokens.night.hero) as unknown as [string, string, string]} locations={gradients.heroLocations as unknown as [number, number, number]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={hs.hero} testID="summary-hero">
         <Row style={{ justifyContent: 'space-between', marginBottom: 8 }}>
           <Text style={hs.setHead} numberOfLines={1} testID="viewer-set-head">
             {live
@@ -136,7 +139,7 @@ export default function MatchPage() {
         </Row>
         {!online || photoQ.pending > 0 ? (
           <View style={hs.syncPill} testID="viewer-sync" accessibilityLiveRegion="polite">
-            <Ionicons name={online ? 'cloud-upload-outline' : 'cloud-offline'} size={13} color={online ? colors.onInkMuted : colors.gold} />
+            <Ionicons name={online ? 'cloud-upload-outline' : 'cloud-offline'} size={13} color={online ? tokens[currentTheme()].textMuted : colors.gold} />
             <Text style={[hs.syncText, !online && { color: colors.gold }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
               {!online
                 ? photoQ.pending > 0
@@ -147,6 +150,14 @@ export default function MatchPage() {
           </View>
         ) : null}
         <LiveScoreboard teamA={m.teamA} teamB={m.teamB} st={st} setsNeeded={setsNeeded} live={live} showCurrent={m.status === 'abandoned'} />
+        {/* 1.4.22 (spec v2 *-15 live viewer): reaction row. UI only – there is no reactions backend, nothing is sent or stored. */}
+        {live ? (
+          <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 14, marginTop: 12 }} testID="viewer-reactions" accessibilityLabel={tr('dn.react')}>
+            {(['🔥', '👏', '🏐', '😮'] as const).map((e, i) => (
+              <ReactionButton key={e} emoji={e} label={`${tr('dn.react')} ${e}`} onPress={() => undefined} testID={`reaction-${i}`} />
+            ))}
+          </View>
+        ) : null}
         {(['A', 'B'] as Side[]).map((side) =>
           st.winner === side ? (
             <View key={side} style={[hs.winner, { alignSelf: side === 'A' ? 'flex-start' : 'flex-end' }]} testID={`winner-${side}`}>
@@ -157,7 +168,7 @@ export default function MatchPage() {
             </View>
           ) : null,
         )}
-        <Text style={{ color: colors.onInkMuted, textAlign: 'center', marginTop: 10, fontSize: 12, fontWeight: '600' }}>{describeRulesT(m.rules, tr)}</Text>
+        <Text style={{ color: tokens[currentTheme()].textMuted, textAlign: 'center', marginTop: 10, fontSize: 12, fontWeight: '600' }}>{describeRulesT(m.rules, tr)}</Text>
       </LinearGradient>
 
       {live && lastPt && (
@@ -250,6 +261,7 @@ export default function MatchPage() {
             icon="hand-left"
             variant="dark"
             onPress={wantToPlay}
+            testID="want-to-play"
             style={{ flex: 1 }}
           />
         )}
@@ -336,7 +348,7 @@ export default function MatchPage() {
           {Object.values(interested).map((p) => (
             <Row key={p.id} style={{ marginVertical: 3 }}>
               <Avatar name={p.name} uri={p.photoURL} size={28} />
-              <Text style={{ marginLeft: 8, fontWeight: '700' }}>{p.name}</Text>
+              <Text style={{ marginLeft: 8, fontWeight: '700', color: colors.text }} testID={`want-name-${p.id}`}>{p.name}</Text>
             </Row>
           ))}
         </Card>
@@ -414,13 +426,13 @@ export default function MatchPage() {
               .map(({ p, line }) => (
                 <Row key={p.id} style={{ paddingVertical: 6 }}>
                   <Avatar name={p.name} uri={p.photoURL} size={32} color={p.side === 'A' ? m.teamA.color : m.teamB.color} />
-                  <Text style={{ flex: 1, marginLeft: 8, fontWeight: '700' }} numberOfLines={1}>
+                  <Text style={{ flex: 1, marginLeft: 8, fontWeight: '700', color: colors.text }} numberOfLines={1} testID={`pp-name-${p.id}`}>
                     {p.name}
                   </Text>
                   <Text style={{ color: colors.muted, fontWeight: '700', marginRight: 10, fontSize: 12 }}>
                     {kindBreakdown(line)}
                   </Text>
-                  <Text style={{ fontWeight: '900', fontSize: 17, width: 30, textAlign: 'right' }}>{line?.points ?? 0}</Text>
+                  <Text style={{ fontWeight: '900', fontSize: 17, width: 30, textAlign: 'right', color: colors.text }}>{line?.points ?? 0}</Text>
                 </Row>
               ))}
           </Card>
@@ -457,12 +469,12 @@ function Timeline({ m, nameOf }: { m: Match; nameOf: (s: Side) => string }) {
       {tl.slice(0, 300).map((e, i) => (
         <Row key={i} style={{ paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: colors.divider }}>
           <Text style={{ width: i18n.language === 'hi' ? 44 : 34, color: colors.muted, fontWeight: '800', fontSize: 12 }}>{t('match.setShort', { n: e.set })}</Text>
-          <Text style={{ width: 64, fontWeight: '900', fontSize: 15 }}>
+          <Text style={{ width: 64, fontWeight: '900', fontSize: 15, color: colors.text }} testID={`timeline-score-${i}`}>
             {e.a}-{e.b}
           </Text>
-          <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: e.event.side === 'A' ? m.teamA.color : m.teamB.color, marginRight: 8 }} />
+          <TeamDot color={e.event.side === 'A' ? m.teamA.color : m.teamB.color} size={10} style={{ marginRight: 8 }} testID={`timeline-dot-${i}`} />
           {/* 1.3.5 (QA E134-3): wraps to 2 lines at 360 px instead of "Yamuna Blockers · Tea…" */}
-          <Text style={{ flex: 1, fontWeight: '600' }} numberOfLines={2} testID={`timeline-text-${i}`}>
+          <Text style={{ flex: 1, fontWeight: '600', color: colors.text }} numberOfLines={2} testID={`timeline-text-${i}`}>
             {e.event.type === 'timeout'
               ? t('match.timeoutFor', { team: nameOf(e.event.side) })
               : e.event.playerId
@@ -479,13 +491,13 @@ function statusLabel(m: Match, t: TFunction) {
   return matchStatusLabel(m.status, t);
 }
 
-const hs = StyleSheet.create({
-  syncPill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', gap: 5, backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, marginBottom: 8, maxWidth: '100%' },
-  syncText: { color: colors.onInkMuted, fontWeight: '700', fontSize: 12 },
+const hs = themed(() => StyleSheet.create({
+  syncPill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', gap: 5, backgroundColor: tokens[currentTheme()].surface2, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, marginBottom: 8, maxWidth: '100%' },
+  syncText: { color: tokens[currentTheme()].textMuted, fontWeight: '700', fontSize: 12 },
   hero: { borderRadius: 22, paddingHorizontal: 14, paddingVertical: 16, marginBottom: 12 },
-  setHead: { color: colors.white, fontWeight: '800', fontSize: 15, flexShrink: 1 },
+  setHead: { color: tokens[currentTheme()].text, fontFamily: tokens[currentTheme()].font.bold, fontSize: 15, flexShrink: 1 },
   center: { alignItems: 'center', paddingHorizontal: 4, minWidth: 76, paddingTop: 6 },
-  overline: { color: colors.onInkMuted, fontWeight: '800', fontSize: 11, letterSpacing: 1 },
+  overline: { color: tokens[currentTheme()].textMuted, fontWeight: '800', fontSize: 11, letterSpacing: 1 },
   setsBig: { color: colors.white, fontSize: 32, lineHeight: 38, fontWeight: '900', fontVariant: ['tabular-nums'] },
   setPill: { backgroundColor: 'rgba(255,255,255,0.14)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2, marginTop: 4 },
   setPillText: { color: colors.white, fontWeight: '800', fontSize: 12, fontVariant: ['tabular-nums'] },
@@ -495,9 +507,9 @@ const hs = StyleSheet.create({
   pip: { width: 18, height: 5, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.25)' },
   winner: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6, backgroundColor: colors.gold, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   recentHead: { color: colors.muted, fontWeight: '800', fontSize: 12, letterSpacing: 1, marginBottom: 4 },
-  tabs: { flexDirection: 'row', backgroundColor: colors.white, borderRadius: 14, padding: 4, marginTop: 12, marginBottom: 4, borderWidth: 1, borderColor: colors.hairline },
+  tabs: { flexDirection: 'row', backgroundColor: colors.card, borderRadius: 14, padding: 4, marginTop: 12, marginBottom: 4, borderWidth: 1, borderColor: colors.hairline },
   tab: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 10, paddingHorizontal: 6 },
   tabOn: { backgroundColor: colors.ink },
   tabText: { color: colors.text, fontWeight: '700', fontSize: 14 },
   tabTextOn: { color: colors.white, fontWeight: '800' },
-});
+}));

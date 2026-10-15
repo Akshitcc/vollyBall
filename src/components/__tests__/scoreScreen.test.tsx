@@ -317,13 +317,13 @@ test('text on the team colours uses onColor; the SERVING pill stays distinct on 
   await act(async () => {
     await jest.advanceTimersByTimeAsync(5);
   });
-  // navy (theme ink) digits on orange (white would be 2.9:1), white on Team B navy
-  expect(flat(screen.getByTestId('score-A').props.style).color).toBe('#002E6E');
-  expect(flat(screen.getByTestId('score-B').props.style).color).toBe('#FFFFFF');
+  // 1.4.22 (spec v2 *-02): Day digits are ink on a white score sticker on both halves (never white on a team colour)
+  expect(flat(screen.getByTestId('score-A').props.style).color).toBe(require('../../theme').colors.ink);
+  expect(flat(screen.getByTestId('score-B').props.style).color).toBe(require('../../theme').colors.ink);
   // A serves first: the pill is light blue with a ring in the team's onColor (navy on orange), so it is ≥3:1 from the team colour
   const pill = flat(screen.getByTestId('serving-A').props.style);
-  expect(pill.backgroundColor).toBe('#00BAF2');
-  expect(pill.borderColor).toBe('#002E6E');
+  expect(pill.backgroundColor).toBe(require('../../theme/tokens').tokens.day.accent); // 1.4.22 spec: Day SERVING pill = Ball
+  expect(pill.borderColor).toBe(require('../../theme').colors.ink); // 1.4.21 theme token
 });
 
 // 1.4.3 (QA V142-7): once the winning rally is in, the ⋮ menu offers nothing that changes the match

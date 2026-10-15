@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { TEAM_COLORS } from '../../core/types';
-import { colors, contrast, onColor, palette, readableFill, servePill, teamInk, teamRing, teamText } from '../index';
+import { NAVY_LIVE, colors, contrast, onColor, palette, readableFill, servePill, teamInk, teamRing, teamText } from '../index';
 import { tabBarMetrics } from '../tabBar';
 
 const AA = 4.5; // normal text
@@ -167,9 +167,9 @@ describe('theme contrast (WCAG AA)', () => {
     const score = read('app/match/[id]/score.tsx');
     expect(score).toContain('<TeamHalf');
     const live = read('components/LiveScoring.tsx');
-    expect(live).toContain('teamInk(p.color)');
-    expect(live).toContain('servePill(p.color)');
-    expect(live).toContain('onColor(team.color)');
+    // 1.4.22 (spec v2 *-02): the halves use the side tokens with their AA "on" colours; the team's own colour is only a dot
+    expect(live).not.toMatch(/backgroundColor: p\.color[\s\S]{0,200}color: colors\.white/);
+    expect(live).toContain('tk.onTeamB');
     expect(read('components/ui.tsx')).toContain('color: onColor(fill)');
   });
 
@@ -220,7 +220,7 @@ describe('QA N121-5 (1.3.1): muted 12 px text on every hero gradient', () => {
   });
   test('the QA reference: old #B8C7DC failed on #0A56B5 (≈4.07), the new colour clears it with margin', () => {
     expect(contrast('#B8C7DC', '#0A56B5')).toBeLessThan(AA);
-    expect(contrast(colors.onInkMuted, '#0A56B5')).toBeGreaterThanOrEqual(6);
+    expect(contrast(NAVY_LIVE.onInkMuted, '#0A56B5')).toBeGreaterThanOrEqual(6); // 1.4.21: Navy Live reference; live themes: themes1421.test.ts
   });
   test('every hero gradient file uses gradients.hero (so the checks above cover it)', () => {
     const root = path.resolve(__dirname, '../..');

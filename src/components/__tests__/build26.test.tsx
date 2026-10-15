@@ -52,7 +52,7 @@ describe('N2: OTP paste with separators', () => {
     });
     const otp = await screen.findByTestId('otp-input');
     expect(otp.props.maxLength).toBe(OTP_PASTE_ROOM);
-    expect(flat(screen.getByTestId('verify-otp').props.style).backgroundColor).toBe(colors.disabledBg);
+    expect(screen.getByTestId('verify-otp').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true })); // 1.4.22: KButton dims (opacity) instead of a grey fill
     expect(screen.getByTestId('verify-otp-hint')).toBeTruthy(); // says what's missing
     await fireEvent.changeText(otp, paste);
     expect(screen.getByTestId('otp-input').props.value).toBe('123456');

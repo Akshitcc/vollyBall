@@ -167,7 +167,7 @@ export function ProfileForm({ onSaved }: { onSaved?: () => void }) {
     <View>
       <Pressable accessibilityRole="button" onPress={pickPhoto} style={{ alignItems: 'center', marginBottom: 20 }}>
         <Avatar name={name || '?'} uri={localPhoto ?? photo} size={96} />
-        <Text style={{ color: colors.ink, fontWeight: '800', marginTop: 8 }}>{localPhoto || photo ? t('profileForm.changePhoto') : t('profileForm.addPhoto')}</Text>
+        <Text style={{ color: colors.text, fontWeight: '800', marginTop: 8 }}>{localPhoto || photo ? t('profileForm.changePhoto') : t('profileForm.addPhoto')}</Text>
       </Pressable>
       {profile?.phone && !isValidE164(profile.phone) && (
         <Banner tone="warn" text={t('profileForm.phoneOutdated', { phone: profile.phone })} testID="phone-outdated" />

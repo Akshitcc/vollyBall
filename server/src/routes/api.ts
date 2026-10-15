@@ -20,6 +20,9 @@ import * as rankings from '../domain/rankings';
 import * as terms from '../domain/terms';
 import * as feedback from '../domain/feedback';
 import * as support from '../domain/support';
+import * as ask from '../domain/ask';
+import { ASK_RATE } from '../../../src/core/ask';
+import { SUPPORT_RATE } from '../../../src/core/support';
 import { isAdmin } from '../context';
 import { RATE_LIMITED, RateLimiter } from '../rateLimit';
 import crypto from 'node:crypto';
@@ -295,8 +298,14 @@ export function apiRouter(s: Services): Router {
   r.get('/admin/feedback', h(async (req, res) => res.json(await feedback.listFeedback(s, me(req)))));
   // 1.4.19 Help Center > Contact us: own tickets (create / list / one screenshot) + admin inbox (list / status).
   r.post('/support/tickets', h(async (req, res) => {
-    await limited(me(req).uid, 'support', FEEDBACK_RATE);
-    res.status(201).json(await support.createTicket(s, me(req), req.body ?? {}));
+    // 1.4.20: validated first, then rate limited (core/support SUPPORT_RATE, the same rule as the demo)
+    res.status(201).json(await support.createTicket(s, me(req), req.body ?? {}, () => limited(me(req).uid, 'support', SUPPORT_RATE)));
+  }));
+  // 1.4.20 Ask VolleyLive: validated first, then rate limited per user (core/ask ASK_RATE), then answered
+  r.post('/ask', h(async (req, res) => {
+    const q = ask.validateAsk(req.body ?? {});
+    await limited(me(req).uid, 'ask', ASK_RATE);
+    res.json(await ask.ask(s, me(req), q));
   }));
   r.get('/support/tickets', h(async (req, res) => res.json(await support.listMine(s, me(req)))));
   r.post('/support/tickets/:id/screenshot', raw, h(async (req, res) => {

@@ -33,6 +33,9 @@ type Lookup =
   | { state: 'notRegistered' }
   | { state: 'error'; message: string };
 
+/** 1.4.20: the number a queued rejection was for, as typed (spaced after five digits). */
+export const formatQueuedNumber = (d: string) => d.replace(/\D/g, '').replace(/^(\d{5})(\d)/, '$1 $2');
+
 export function TeamBuilder({
   value,
   onChange,
@@ -153,27 +156,36 @@ export function TeamBuilder({
     phoneInput.current?.focus?.();
     return n || null;
   };
-  const [queueMsg, setQueueMsg] = useState<string | null>(null);
-  const queue = useRef<string[]>([]);
+  // 1.4.21 (QA V1420-5): every number taken by Enter is LISTED until it is resolved – "checking…" while its lookup
+  // runs (so a fast Enter never makes it vanish), then removed when added, or kept with its reason and a Dismiss
+  // button when refused (not registered, invalid, already added…). A later add or typing never removes a row.
+  type Pending = { key: number; digits: string; status: 'checking' | 'refused'; reason?: string };
+  const [pending, setPending] = useState<Pending[]>([]);
+  const errSeq = useRef(0);
+  const refuse = (key: number, reason: string) => setPending((l) => l.map((x) => (x.key === key ? { ...x, status: 'refused', reason } : x)));
+  const listRefused = (digits: string, reason: string) =>
+    setPending((l) => (l.some((x) => x.status === 'refused' && x.digits === digits) ? l : [...l, { key: ++errSeq.current, digits, status: 'refused' as const, reason }]).slice(-6));
+  const dismiss = (key: number) => setPending((l) => l.filter((x) => x.key !== key));
+  const queue = useRef<{ key: number; digits: string }[]>([]);
   const running = useRef(false);
   const runQueue = async () => {
     if (running.current) return;
     running.current = true;
     try {
       while (queue.current.length) {
-        const digits = queue.current.shift()!;
+        const { key, digits } = queue.current.shift()!;
         const e164 = toE164(digits);
-        if (!e164) { setQueueMsg(t('errors.invalidPhone')); continue; }
+        if (!e164) { refuse(key, t('errors.invalidPhone')); continue; }
         try {
           const u = await lookupOnce(e164);
-          if (!u) { setQueueMsg(t('errors.notRegistered')); continue; }
+          if (!u) { refuse(key, t('errors.notRegistered')); continue; }
           const why = refusal(u);
-          if (why) { setQueueMsg(why); continue; }
+          if (why) { refuse(key, why); continue; }
           commit({ id: u.id, name: u.name, photoURL: u.photoURL ?? null });
-          setQueueMsg(null);
+          dismiss(key);
           revealPhone();
         } catch (err) {
-          setQueueMsg(translateError(err));
+          refuse(key, translateError(err));
         }
       }
     } finally {
@@ -182,10 +194,16 @@ export function TeamBuilder({
   };
   const submit = () => {
     if (!toE164(phone)) return; // incomplete number: Enter does nothing (the field keeps it)
+    // 1.4.20 (V1419-3) + 1.4.21 (V1420-5): a number already shown as not registered stays in the field to be corrected,
+    // and is listed with its reason + Dismiss
+    if (lookup.state === 'notRegistered' && !queue.current.length && !running.current) return listRefused(phone, t('errors.notRegistered'));
     if (found && !queue.current.length && !running.current) return add(); // already looked up: add now
+    // lookup still running (or a queue in progress): the number is listed as "checking…" and queued – never lost
     const n = takeNumber();
     if (!n) return;
-    queue.current.push(n);
+    const key = ++errSeq.current;
+    setPending((l) => [...l, { key, digits: n, status: 'checking' as const }]);
+    queue.current.push({ key, digits: n });
     void runQueue();
   };
   // the found card's Add button: the shown player, same single clear
@@ -193,12 +211,10 @@ export function TeamBuilder({
     if (!found || problem) return;
     takeNumber();
     commit(found);
-    setQueueMsg(null);
     revealPhone();
   };
   const typePhone = (n: string) => {
     if (n) setHold(0);
-    if (n) setQueueMsg(null);
     setPhone(n);
   };
   // 1.4.18 (QA V1417-2): the "N more players" line keeps its space once it goes (at the 6th player), so the phone
@@ -211,6 +227,8 @@ export function TeamBuilder({
   const missing = Math.max(0, MIN_PLAYERS - value.players.length);
   useEffect(() => { if (!full) revealPhone(); }, [missing > 0, needH, full, value.players.length, revealPhone]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 1.4.21: the inline line is not repeated when the same number is already listed (refused) above
+  const showNotRegistered = lookup.state === 'notRegistered' && !pending.some((x) => x.status === 'refused' && x.digits === phone);
   return (
     <View testID={testID} style={hold ? { minHeight: hold } : undefined} onLayout={(e) => { if (!hold) height.current = e.nativeEvent.layout.height; }}>
       <Text style={[ui.hint, { marginBottom: 8 }]}>{t('newMatch.buildHint')}</Text>
@@ -279,13 +297,24 @@ export function TeamBuilder({
         </>
       )}
       {lookup.state === 'looking' && <Text style={ui.hint}>{t('newMatch.lookingUp')}</Text>}
-      {/* 1.4.9 (QA V148-7): messages scroll into view when they appear, also with the keyboard up */}
-      <RevealOnShow show={!!queueMsg} dep={queueMsg}>
-        <Text style={{ color: colors.danger, fontWeight: '700', marginBottom: 8 }} accessibilityRole="alert" testID={`${testID}-queue-error`}>
-          {queueMsg}
-        </Text>
+      {/* 1.4.9 (QA V148-7) / 1.4.21 (QA V1420-5): the queued / refused numbers, each with its reason and Dismiss */}
+      <RevealOnShow show={pending.length > 0} dep={pending.map((x) => `${x.key}${x.status}`).join(',')}>
+        <View testID={`${testID}-pending`}>
+          {pending.map((x) => (
+            <Row key={x.key} style={{ marginBottom: 6, alignItems: 'flex-start' }} testID={`${testID}-pending-${x.status}`}>
+              <Text style={{ flex: 1, color: x.status === 'refused' ? colors.danger : colors.muted, fontWeight: '700' }} accessibilityRole={x.status === 'refused' ? 'alert' : undefined}>
+                {formatQueuedNumber(x.digits)}: {x.status === 'refused' ? x.reason : t('newMatch.checkingNumber')}
+              </Text>
+              {x.status === 'refused' ? (
+                <Pressable onPress={() => dismiss(x.key)} accessibilityRole="button" accessibilityLabel={`${t('common.dismiss')} ${formatQueuedNumber(x.digits)}`} hitSlop={8} testID={`${testID}-dismiss-${x.digits.replace(/\D/g, '')}`} style={{ marginLeft: 8 }}>
+                  <Text style={{ color: colors.primaryText, fontWeight: '800' }}>{t('common.dismiss')}</Text>
+                </Pressable>
+              ) : null}
+            </Row>
+          ))}
+        </View>
       </RevealOnShow>
-      <RevealOnShow show={lookup.state === 'notRegistered'}>
+      <RevealOnShow show={showNotRegistered}>
         <Text style={{ color: colors.danger, fontWeight: '700', marginBottom: 8 }} testID={`${testID}-not-registered`}>
           {t('errors.notRegistered')}
         </Text>
@@ -299,7 +328,7 @@ export function TeamBuilder({
         <View
           ref={foundRef}
           testID={`${testID}-found`}
-          style={{ borderWidth: 2, borderColor: colors.border, borderRadius: radius.md, padding: 10, marginBottom: 10, backgroundColor: colors.white }}
+          style={{ borderWidth: 2, borderColor: colors.border, borderRadius: radius.md, padding: 10, marginBottom: 10, backgroundColor: colors.card }}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <Avatar name={found.name} uri={found.photoURL} size={44} color={value.color} />

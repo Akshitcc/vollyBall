@@ -1,8 +1,9 @@
 -- VolleyLive 0020 (build 1.4.19): Help Center > Contact us – support tickets.
 -- ADDITIVE ONLY: one new table; no existing row or column is touched.
+-- 1.4.20 (QA V1419-4): IF NOT EXISTS so a re-run (row removed from schema_migrations) is safe; allowlisted in migrate.ts.
 -- A user creates tickets and reads only their own; app admins (ADMIN_UIDS) read all and set the status.
 -- ;;
-CREATE TABLE support_tickets (
+CREATE TABLE IF NOT EXISTS support_tickets (
   id              VARCHAR(36)   NOT NULL,
   user_id         VARCHAR(128)  NOT NULL COMMENT 'signed-in sender (no FK: kept if the user is removed)',
   topic           VARCHAR(20)   NOT NULL COMMENT 'src/core/support.ts SUPPORT_TOPICS',

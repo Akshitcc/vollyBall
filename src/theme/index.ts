@@ -1,3 +1,6 @@
+import { SUNDAY_COURT, THEME_GRADIENTS, THEMES, type ThemeName, type ThemeTokens } from './themes';
+export * from './themes';
+export { tokens, type Tokens } from './tokens';
 /**
  * VolleyLive theme (1.2.1 "Navy Live", /workspace/volleylive-design/design-spec.md): Paytm-like
  * navy + light blue on a cool light background, navy gradient heroes, gold for achievements.
@@ -55,7 +58,7 @@ export const palette = {
 
 /** expo-linear-gradient stops (design-spec §2). */
 export const gradients = {
-  hero: ['#002E6E', '#003B8C', '#0A56B5'] as const,
+  hero: THEME_GRADIENTS.day.hero as readonly string[],
   heroLocations: [0, 0.7, 1] as const,
   // QA N121-4: white 17 px team name needs 4.5:1 at the top stop under the 6 % highlight (4.80)
   // 1.3.2 (live match v2): the Team A dark red is #B92A2A.
@@ -64,15 +67,48 @@ export const gradients = {
   /** Player chips on the live court (§11.2): white text ≥ 4.5:1 on both stops. */
   chipA: ['#D93636', '#B92A2A'] as const,
   chipB: ['#0F3A78', '#001F4D'] as const,
-  progress: ['#0072BC', '#00BAF2'] as const,
+  progress: THEME_GRADIENTS.day.progress as readonly string[],
   gold: ['#FFD75E', '#F2B300'] as const,
   silver: ['#C9D3DF', '#9FB0C4'] as const,
   bronze: ['#F1B88C', '#D98A4E'] as const,
-  rankCard: ['#E6F7FD', '#FFFFFF'] as const,
-  potm: ['#FFF6D6', '#FFFFFF'] as const,
+  rankCard: THEME_GRADIENTS.day.rankCard as readonly string[],
+  potm: THEME_GRADIENTS.day.potm as readonly string[],
 };
 
-export const colors = {
+/**
+ * 1.4.21: `colors` is the LIVE token map of the current theme (themes.ts: Sunday Court by day, Floodlight by night).
+ * Read it at render time (inline styles) or through `themed()` for module-level StyleSheets – both follow a switch.
+ * The 1.2.1 "Navy Live" map is kept below as NAVY_LIVE (reference; no longer applied).
+ */
+export const colors: ThemeTokens = { ...SUNDAY_COURT };
+let current: ThemeName = 'day';
+let version = 0;
+const listeners = new Set<(t: ThemeName) => void>();
+export const currentTheme = () => current;
+export const themeVersion = () => version;
+export function applyTheme(name: ThemeName): boolean {
+  if (name === current) return false;
+  current = name;
+  version++;
+  Object.assign(colors, THEMES[name]);
+  const g = THEME_GRADIENTS[name];
+  Object.assign(gradients, { hero: g.hero, progress: g.progress, rankCard: g.rankCard, potm: g.potm });
+  listeners.forEach((l) => l(name));
+  return true;
+}
+export const onThemeChange = (l: (t: ThemeName) => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
+/**
+ * Module-level styles that follow the theme: `const styles = themed(() => StyleSheet.create({...}))`. The factory
+ * re-runs (once) after each theme switch; `styles.x` always gives the current theme's style.
+ */
+export function themed<T extends object>(make: () => T): T {
+  let v = -1;
+  let cache: T;
+  const get = () => { if (v !== version) { cache = make(); v = version; } return cache; };
+  return new Proxy({} as T, { get: (_t, k) => (get() as Record<string | symbol, unknown>)[k], has: (_t, k) => k in get(), ownKeys: () => Reflect.ownKeys(get()), getOwnPropertyDescriptor: (_t, k) => ({ ...Object.getOwnPropertyDescriptor(get(), k), configurable: true }) });
+}
+
+export const NAVY_LIVE = {
   /** Main buttons, Add/Start, highlights, serve pill, active tab. Text on it: `onPrimary` (navy). */
   primary: palette.blue,
   onPrimary: palette.navy,
@@ -227,6 +263,8 @@ export function teamRing(teamColor: string): string | null {
  */
 export function swatchRing(teamColor: string, width = 2): { borderWidth: number; borderColor: string } | null {
   if (!/^#[0-9a-f]{6}$/i.test(teamColor)) return null;
+  // 1.4.24 (V1423-3): in Night a dot too dark for the card (#151B2E, under 3:1, e.g. navy #001F4D) gets a light ring
+  if (currentTheme() === 'night') return contrast(teamColor, '#151B2E') < 3 ? { borderWidth: width, borderColor: colors.text } : null;
   // near-navy (within 1.5:1 of the navy chrome/text, e.g. #001F4D at 1.24:1) -> light-blue ring
   if (contrast(teamColor, colors.ink) < 1.5) return { borderWidth: width, borderColor: palette.blueLine };
   if (contrast(teamColor, colors.white) < 3) return { borderWidth: width, borderColor: colors.muted };
@@ -276,10 +314,20 @@ export function teamGradient(teamColor: string): [string, string] {
  * A team colour used as TEXT on a light background: the colour itself when it already reaches
  * `min` against `bg`, otherwise the same hue darkened just enough (e.g. yellow or light team names/numbers).
  */
-export function teamText(color: string, bg: string = colors.white, min = 4.5): string {
+export function teamText(color: string, bg?: string, min = 4.5): string {
+  // 1.4.23 (V1422-4): the default background follows the theme (Night card #151B2E), and on a dark background a
+  // too-dark team colour is lightened (mixed toward white) instead of darkened.
+  if (bg === undefined) bg = currentTheme() === 'night' ? '#151B2E' : colors.white;
   if (!/^#[0-9a-f]{6}$/i.test(color)) return colors.text;
   if (contrast(color, bg) >= min) return color;
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+  if (contrast('#FFFFFF', bg) > contrast('#000000', bg)) {
+    for (let k = 0.05; k <= 1.0001; k += 0.05) {
+      const hex = '#' + [r, g, b].map((c) => Math.round(c + (255 - c) * k).toString(16).padStart(2, '0')).join('');
+      if (contrast(hex, bg) >= min) return hex.toUpperCase();
+    }
+    return colors.text;
+  }
   for (let k = 0.95; k > 0; k -= 0.05) {
     const hex = '#' + [r, g, b].map((c) => Math.round(c * k).toString(16).padStart(2, '0')).join('');
     if (contrast(hex, bg) >= min) return hex.toUpperCase();
@@ -342,10 +390,13 @@ export const shadow = {
 } as const;
 export const space = (n: number) => n * 4;
 
+// 1.4.22 (QA V1421-4): every text style carries the live theme text colour. Before, `font.h3` had no colour, so a
+// title without its own colour fell back to the platform default (black) – unreadable on Night cards.
+const live = <T extends object>(o: T) => Object.defineProperty(o, 'color', { get: () => colors.text, enumerable: true }) as T & { readonly color: string };
 export const font = {
-  h1: { fontSize: 30, fontWeight: '900' as const, letterSpacing: -0.5 },
-  h2: { fontSize: 22, fontWeight: '800' as const },
-  h3: { fontSize: 17, fontWeight: '800' as const },
-  body: { fontSize: 15, fontWeight: '500' as const },
-  small: { fontSize: 13, fontWeight: '600' as const },
+  h1: live({ fontSize: 30, fontWeight: '900' as const, letterSpacing: -0.5 }),
+  h2: live({ fontSize: 22, fontWeight: '800' as const }),
+  h3: live({ fontSize: 17, fontWeight: '800' as const }),
+  body: live({ fontSize: 15, fontWeight: '500' as const }),
+  small: live({ fontSize: 13, fontWeight: '600' as const }),
 };

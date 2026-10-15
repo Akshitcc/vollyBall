@@ -141,7 +141,7 @@ const publish = (s: Services, id: string, deleted = false) => {
 
 /** tournaments create: organizerId == uid() */
 export async function createTournament(s: Services, viewer: Identity, t: Doc, fixedId?: string) {
-  if (t.organizerId !== viewer.uid) throw forbidden('tournaments.create', 'You must be the organiser');
+  if (t.organizerId !== viewer.uid) throw notAdmin(); // 1.4.20 (QA V1419-1): same code as edit / delete
   const id = fixedId ?? newId(); // fixedId: seeds only
   await s.db.transaction((trx) => writeTournament(trx, id, null, t));
   publish(s, id);

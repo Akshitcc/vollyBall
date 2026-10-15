@@ -187,11 +187,13 @@ describe('V141-1: migration checksums', () => {
     assert.equal((await sums())['0018_verdict_repair.sql'], undefined); // nor 0018 (1.4.8)
     assert.equal((await sums())['0019_verdict_repair_type.sql'], undefined); // nor 0019 (1.4.9)
     assert.equal((await sums())['0020_support_tickets.sql'], undefined); // nor 0020 (1.4.19)
+    assert.equal((await sums())['0021_ask_chunks.sql'], undefined); // nor 0021 (1.4.20)
+    assert.equal((await sums())['0022_support_message_visible.sql'], undefined); // nor 0022 (1.4.21)
     // CRLF line endings are the same file
     const crlf = migrationsBefore('9999', (_f, sql) => sql.replace(/\n/g, '\r\n'));
     // (1.4.5: 0016 is new too)
     // (1.4.6: and 0017)
-    assert.deepEqual(await migrate(db(), crlf), ['0015_daily_items_tombstones.sql', '0016_match_abandon.sql', '0017_match_lifecycle.sql', '0018_verdict_repair.sql', '0019_verdict_repair_type.sql', '0020_support_tickets.sql']);
+    assert.deepEqual(await migrate(db(), crlf), ['0015_daily_items_tombstones.sql', '0016_match_abandon.sql', '0017_match_lifecycle.sql', '0018_verdict_repair.sql', '0019_verdict_repair_type.sql', '0020_support_tickets.sql', '0021_ask_chunks.sql', '0022_support_message_visible.sql']);
   });
 
   it('0014 recorded as its 1.4.0 / 1.4.1 version: allowlisted (a warning, no failure); any other checksum fails', async () => {

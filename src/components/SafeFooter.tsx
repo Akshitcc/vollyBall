@@ -25,7 +25,7 @@ export function SafeFooter({ children, style, testID = 'safe-footer' }: { childr
   const insets = useInsets();
   return (
     <View
-      style={[{ backgroundColor: colors.white, paddingHorizontal: 16, paddingTop: 12, paddingBottom: bottomPadding(insets.bottom), ...elevation.barTop }, style]}
+      style={[{ backgroundColor: colors.card, paddingHorizontal: 16, paddingTop: 12, paddingBottom: bottomPadding(insets.bottom), ...elevation.barTop }, style]}
       testID={testID}
     >
       {children}

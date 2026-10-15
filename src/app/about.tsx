@@ -24,7 +24,7 @@ export const ABOUT_FEATURES = ['score', 'teams', 'rankings', 'tournaments', 'cou
 function Link({ icon, label, onPress, testID }: { icon: keyof typeof Ionicons.glyphMap; label: string; onPress: () => void; testID: string }) {
   return (
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} testID={testID} style={{ flexDirection: 'row', alignItems: 'center', minHeight: 48, gap: 10 }}>
-      <Ionicons name={icon} size={20} color={colors.ink} />
+      <Ionicons name={icon} size={20} color={colors.text} />
       <Text style={[type.body, { color: colors.text, flex: 1, fontWeight: '600' }]}>{label}</Text>
       <Ionicons name="chevron-forward" size={18} color={colors.muted} />
     </Pressable>

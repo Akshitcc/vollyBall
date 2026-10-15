@@ -1,5 +1,6 @@
 /** Server entry point: wires real implementations and starts HTTP + WebSocket. */
 import { PincodeLookup } from './pincode';
+import { createAskProvider } from './ask/providers';
 import 'dotenv/config';
 import http from 'node:http';
 import { createApp } from './app';
@@ -12,6 +13,7 @@ import type { Services } from './context';
 import { createDb, sslFromEnv } from './db/knex';
 import { checkSchema, migrateLocked } from './db/migrate';
 import { uidForPhone } from './domain/users';
+import { warmAskIndex } from './domain/ask';
 import { LiveBus } from './live/bus';
 import { attachLive } from './live/ws';
 import { Logger, log, setLogger } from './ops/logger';
@@ -75,13 +77,16 @@ async function main() {
     corsOrigins: cfg.corsOrigins,
     adminUids: new Set(cfg.adminUids),
     rateLimiter,
+    ask: createAskProvider(process.env), // 1.4.20: ASK_PROVIDER / ASK_API_KEY (the key is never logged)
     auth,
     trustProxy: cfg.trustProxy,
     info: { version: VERSION, storage: storage.kind ?? 'local', rateStore: redis ? 'redis' : 'memory', auth: cfg.authMode === 'otp' ? `otp:${cfg.otp?.provider}` : cfg.authMode },
   };
+  log.info('ask provider', { provider: services.ask!.name });
   if (cfg.adminUids.length) log.info('admins from ADMIN_UIDS', { count: cfg.adminUids.length });
   const server = http.createServer(createApp(services));
   const live = attachLive(server, services.bus, verifier);
+  void warmAskIndex(services, log); // 1.4.24: index ready before the first question
   server.listen(cfg.port, () => log.info('listening', { port: cfg.port, auth: services.info!.auth, storage: services.info!.storage, rateStore: services.info!.rateStore, version: VERSION }));
   const stop = () => {
     log.info('shutting down');

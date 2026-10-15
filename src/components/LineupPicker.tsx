@@ -11,7 +11,7 @@ import { Modal } from './AppModal'; // 1.4.0 (V139-7): holds the review prompt w
 import { COURT_SIZE, assignPosition, courtGrid, defaultLineup, type SideLineups, type Slot } from '../core/rotation';
 import type { Side } from '../core/scoring';
 import type { Match } from '../core/types';
-import { colors, onColor, teamText } from '../theme';
+import { colors, onColor, teamText, themed } from '../theme';
 import { Button } from './ui';
 import { firstName } from './MiniCourt';
 
@@ -145,9 +145,9 @@ export default function LineupPicker({ visible, match, setNumber, initial, scree
 
 export const emptyLineup = (): Slot[] => Array.from({ length: COURT_SIZE }, () => null);
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   bg: { flex: 1, backgroundColor: colors.scrim, justifyContent: 'flex-end' },
-  sheet: { backgroundColor: colors.white, borderTopLeftRadius: 22, borderTopRightRadius: 22, maxHeight: '92%' },
+  sheet: { backgroundColor: colors.card, borderTopLeftRadius: 22, borderTopRightRadius: 22, maxHeight: '92%' },
   title: { fontSize: 20, fontWeight: '900', color: colors.text, textAlign: 'center' },
   hint: { color: colors.muted, fontWeight: '600', textAlign: 'center', marginTop: 6, marginBottom: 8 },
   team: { marginTop: 10, marginBottom: 6 },
@@ -155,7 +155,7 @@ const s = StyleSheet.create({
   courtWrap: { alignItems: 'stretch', alignSelf: 'center', width: '100%', maxWidth: 360 },
   court: { flex: 1, borderWidth: 2, borderRadius: 10, padding: 4, gap: 4, backgroundColor: colors.surface },
   row: { flexDirection: 'row', gap: 4 },
-  slot: { flex: 1, minHeight: 44, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.white, borderRadius: 8, borderWidth: 2, borderColor: colors.border, paddingHorizontal: 6 },
+  slot: { flex: 1, minHeight: 44, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 8, borderWidth: 2, borderColor: colors.border, paddingHorizontal: 6 },
   slotPos: { fontWeight: '900', color: colors.muted, marginRight: 6 },
   slotName: { fontWeight: '800', color: colors.text, flexShrink: 1 },
   net: { width: 30, backgroundColor: colors.ink, borderRadius: 4, marginHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
@@ -164,4 +164,4 @@ const s = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: { borderWidth: 2, borderColor: colors.border, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, maxWidth: '100%' },
   chipText: { fontWeight: '800', color: colors.text },
-});
+}));

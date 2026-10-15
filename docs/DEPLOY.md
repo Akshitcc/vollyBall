@@ -217,6 +217,53 @@ EXPO_PUBLIC_BACKEND=api EXPO_PUBLIC_API_AUTH=otp EXPO_PUBLIC_STRIP_DEMO=1 APP_VA
 - `scripts/run-policy-suites.sh` now exits with the suites' real status (strict mode; full log in `$LOG`, default
   `/tmp/policy-suites.log`) and always restores 'review'.
 
+## 1.4.21 – QA 1.4.20 fixes
+
+**Akshit deploys these – nothing was deployed by the build.**
+
+- New migration `0022_support_message_visible.sql` (additive: widens `support_tickets.message` VARCHAR(2000) → VARCHAR(8000); no data changes). Support messages are now limited to **2000 visible characters** (app counter, cut and server check all use the same measure).
+- Ask VolleyLive: no config changes. The `ask_chunks` index re-syncs itself (content changed: new FAQs `account-delete`, `team-positions`).
+
+### Rollback and the 0020 checksum (QA V1420-3)
+
+1.4.20 edited `0020_support_tickets.sql` in place (`CREATE TABLE` → `CREATE TABLE IF NOT EXISTS`). The runner records the
+checksum of the file **as it was when applied** and never rewrites it:
+
+| Where 0020 was applied | `schema_migrations.checksum` for 0020 | Roll back to 1.4.19 server? |
+|---|---|---|
+| under 1.4.19 | `5a5ae45554122ccd0d5ee6acd42fa2d02960501eabe58f9821da992fbccbc44a` | works as is |
+| under 1.4.20 / 1.4.21 (new DB, or row re-applied) | `c719de6fa1abd4b2443c47b2d9f32b31510a14736ea1aa724bf61d8e1dede5b0` | **1.4.19 refuses to start** (`MigrationChecksumError … 0020_support_tickets.sql`) |
+
+Check first: `SELECT checksum FROM schema_migrations WHERE version = '0020_support_tickets.sql';`
+
+To roll back a database in the second row, pick ONE (take a backup first):
+1. **Preferred:** roll back the app only and keep a 1.4.20+ server (its runner accepts both checksums), or
+2. Point the record at the 1.4.19 file (the table itself is identical – only the file text differed):
+   `UPDATE schema_migrations SET checksum = '5a5ae45554122ccd0d5ee6acd42fa2d02960501eabe58f9821da992fbccbc44a' WHERE version = '0020_support_tickets.sql';`
+   Rolling forward again later needs nothing: 1.4.20+ lists `5a5ae455…` as an accepted earlier version (one warning, once).
+
+Rows for 0021 / 0022 can stay when rolling back: their tables/columns are additive and older servers ignore them (a
+1.4.19/1.4.20 server writing a support message only uses ≤ 2000 code points, which fits the wider column).
+
+## 1.4.20 – QA 1.4.19 fixes + Ask VolleyLive (RAG phase 1)
+
+**Akshit deploys these – nothing was deployed by the build.**
+
+- **Migration 0020 edited in place (V1419-4):** `CREATE TABLE` → `CREATE TABLE IF NOT EXISTS` only (same end state).
+  It is in `CHECKSUM_ALLOWLIST` with the 1.4.19 checksum as `earlier`, so a database that already applied 1.4.19's
+  0020 just logs a one-time warning; nothing re-runs. A re-run after removing the 0020 row now succeeds.
+- **Migration 0021_ask_chunks.sql** (additive: one new table `ask_chunks`, IF NOT EXISTS). The server fills it on the
+  first question (generated from the app's FAQ + rule notes); safe to empty – it is rebuilt.
+- **API server:** new `POST /api/ask` (signed in, T&C accepted, 10 + 2/min per user). `POST /api/tournaments` with
+  someone else's organizerId now answers `403 not_tournament_admin`. Support tickets: validated before the rate limit.
+- **Ask provider (optional):** `ASK_PROVIDER=mock` (default, no AI, extractive) | `openai` | `gemini` | `anthropic`,
+  with `ASK_API_KEY` (the provider key – set it only in the server environment / secret store, never in the repo) and
+  optional `ASK_MODEL`, `ASK_TIMEOUT_MS`. A real provider without a key stops the server at start. The key is never
+  logged or sent to the app. Turning a real provider on sends users' questions to that provider – update the privacy
+  policy first.
+- **Firebase (if used):** deploy **firestore.rules** and **storage.rules** (ticket message trimmed minimum; screenshot
+  name/extension must match the type): `firebase deploy --only firestore:rules,storage`.
+
 ## 1.4.19 – tournament admin permissions + Help Center
 
 **Akshit deploys these – nothing was deployed by the build.**

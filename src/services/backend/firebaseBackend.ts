@@ -1,3 +1,5 @@
+import { askLocally } from '../askLocal';
+import { stripHidden } from '../../core/text';
 import { assertSupportImage, checkSupportStatus, checkSupportTicket, SUPPORT_IMAGE_TYPES, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
 import { checkFeedback } from '../../core/reviewPrompt';
 import { checkDailyItem, dailyTombstone, type DailyItem } from '../../core/dailyItems';
@@ -818,6 +820,10 @@ export class FirebaseBackend implements Backend {
     await addDoc(collection(this.fb.db, 'feedback'), { userId: me, stars: c.stars, text: c.text, appVersion: c.appVersion, createdAt: serverTimestamp() });
   }
   // 1.4.19 support tickets: supportTickets/{id} (firestore.rules) + support/{uid}/{id}.{ext} (storage.rules)
+  /** 1.4.20: on-device RAG with the mock answer step (services/askLocal). */
+  async askVolleyLive(question: string, lang: 'en' | 'hi') {
+    return askLocally(this.fb.auth.currentUser?.uid, question, lang);
+  }
   async createSupportTicket(t: NewSupportTicket) {
     const me = this.fb.auth.currentUser?.uid;
     if (!me) throw new Error('Not signed in yet');
@@ -830,7 +836,9 @@ export class FirebaseBackend implements Backend {
       screenshotPath = `support/${me}/${ref0.id}.${SUPPORT_IMAGE_TYPES[type]}`;
       await uploadBytes(ref(this.fb.storage, screenshotPath), blob, { contentType: type });
     }
-    await setDoc(ref0, { userId: me, topic: c.topic, message: c.message, appVersion: c.appVersion, status: 'open', screenshotPath, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    // 1.4.22 (V1421-2): firestore.rules still refuse U+200D in a message, so the Firebase backend keeps the old strip
+    // (a rules change needs approval – listed in RELEASE-1.4.22 gaps). The API server and demo keep emoji joiners.
+    await setDoc(ref0, { userId: me, topic: c.topic, message: stripHidden(c.message, { multiline: true }), appVersion: c.appVersion, status: 'open', screenshotPath, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
     return ref0.id;
   }
   private async ticketsFrom(q: ReturnType<typeof query>) {

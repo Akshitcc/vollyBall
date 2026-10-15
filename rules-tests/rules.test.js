@@ -3406,3 +3406,25 @@ describe('1.4.19 support tickets', () => {
     await assertFails(getMetadata(ref(ctx('eve').storage(), p)));
   });
 });
+
+// 1.4.20 (QA Help Center Lows): the ticket minimum counts trimmed text; a screenshot's name must carry the extension of
+// its declared type (no .html / .svg stored as image/png).
+describe('1.4.20 support tickets: trim + screenshot name/type', () => {
+  const tk = (over = {}) => ({ userId: 'cap', topic: 'scoring', message: 'The score did not update.', appVersion: '1.4.20 (36)', status: 'open', screenshotPath: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp(), ...over });
+  test('whitespace-padded short message refused; real one accepted', async () => {
+    const db = ctx('cap').firestore();
+    await assertFails(setDoc(doc(db, 'supportTickets/w1'), tk({ message: '      short      ' })));
+    await assertFails(setDoc(doc(db, 'supportTickets/w2'), tk({ message: '\n\n\n\n\n\n\n\n\n\nab' })));
+    await assertSucceeds(setDoc(doc(db, 'supportTickets/w3'), tk({ message: '  Ten chars!  ' })));
+  });
+  test('extension must match the content type; odd names refused', async () => {
+    const img = new Uint8Array(120);
+    const st = ctx('cap').storage();
+    await assertFails(uploadBytes(ref(st, `support/cap/x-${RUN}.html`), img, { contentType: 'image/png' }));
+    await assertFails(uploadBytes(ref(st, `support/cap/y-${RUN}.svg`), img, { contentType: 'image/png' }));
+    await assertFails(uploadBytes(ref(st, `support/cap/z-${RUN}.jpg`), img, { contentType: 'image/png' }));
+    await assertFails(uploadBytes(ref(st, `support/cap/a.b-${RUN}.png`), img, { contentType: 'image/png' }));
+    await assertSucceeds(uploadBytes(ref(st, `support/cap/ok-${RUN}.webp`), img, { contentType: 'image/webp' }));
+    await assertSucceeds(uploadBytes(ref(st, `support/cap/ok-${RUN}.jpg`), img, { contentType: 'image/jpeg' }));
+  });
+});

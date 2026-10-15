@@ -169,6 +169,12 @@ const CODED = new Set([
   'terms_not_accepted', 'terms_version_mismatch', 'match_bad_status', 'match_terminal', 'match_finished', 'match_status_move', 'server_time', 'server_field', 'match_delete_forbidden', 'captains_required', 'captains_same', 'captain_not_team_captain', 'captain_not_on_side', 'not_completed', 'not_captain', 'scoring_side', 'already_reviewed', 'no_captains', 'admin_only', 'potm_required',
   // 1.3.1 (QA C130-2)
   'rate_limited',
+  'support_message_type',
+  'ask_question_type',
+  'ask_sign_in',
+  'ask_question_short',
+  'ask_question_long',
+  'ask_unavailable',
   // launch prep: server-side SMS OTP
   'otp_expired', 'otp_too_many_attempts', 'otp_send_failed', 'otp_use_device', 'own_match',
   // 1.3.6 registration
@@ -218,7 +224,11 @@ export function translateCode(e: unknown, t: TFunction = tr): string | null {
   const code = typeof err.code === 'string' ? err.code : null;
   if (!code) return null;
   if (code === INVALID_PHONE_CODE) return t('errors.invalidPhone');
-  if (code === 'rate_limited') return t('errors.codes.rate_limited', { seconds: Math.max(1, Math.ceil(err.retryAfter ?? 1)) });
+  if (code === 'rate_limited') {
+    // 1.4.20 (QA V1419-6): the real wait – minutes when it is 2 minutes or more
+    const s0 = Math.max(1, Math.ceil(err.retryAfter ?? 1));
+    return s0 >= 120 ? t('errors.codes.rate_limited_min', { minutes: Math.ceil(s0 / 60) }) : t('errors.codes.rate_limited', { seconds: s0 });
+  }
   const secs = Math.max(1, Math.ceil(err.retryAfter ?? 1));
   if (code === 'otp_resend_wait') return t('errors.codes.otp_resend_wait', { seconds: secs });
   if (code === 'otp_too_many') return t('errors.codes.otp_too_many', { minutes: Math.max(1, Math.ceil(secs / 60)) });

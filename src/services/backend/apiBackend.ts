@@ -1,3 +1,4 @@
+import { checkAskQuestion, type AskAnswer } from '../../core/ask';
 import type { RepairFix } from '../../core/verdictRepair';
 import { assertSupportImage, checkSupportStatus, checkSupportTicket, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
 import { checkFeedback } from '../../core/reviewPrompt';
@@ -649,6 +650,11 @@ export class ApiBackend implements Backend {
     await this.request('POST', '/feedback', c);
   }
   // 1.4.19 support tickets: JSON create, then the screenshot as a raw image body
+  /** 1.4.20: the server's RAG (provider chosen there by ASK_PROVIDER). */
+  askVolleyLive(question: string, lang: 'en' | 'hi') {
+    const q = checkAskQuestion({ question, lang });
+    return this.request<AskAnswer>('POST', '/ask', q);
+  }
   async createSupportTicket(t: NewSupportTicket) {
     const c = checkSupportTicket(t);
     if (t.screenshot) assertSupportImage(t.screenshot.type, t.screenshot.size);

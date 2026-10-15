@@ -18,7 +18,7 @@ import { Avatar } from '../components/ui';
 import { MIN_RANKED_MATCHES, RANKING_POINTS_PER_POTM, RANKING_POINTS_PER_WIN, type RankingRow } from '../core/ranking';
 import { useMe } from '../state/AuthContext';
 import { useRankings } from '../state/useRankings';
-import { colors, elevation, gradients, palette, radius, type } from '../theme';
+import { colors, elevation, gradients, palette, radius, type, themed } from '../theme';
 
 const label = (r: RankingRow, mine: boolean, t: TFunction) =>
   `${r.rank ? `#${r.rank} ` : ''}${r.name ?? ''}${mine ? `, ${t('rankings.you')}` : ''}, ${t('rankings.ptsShort', { count: r.rankingPoints })}`;
@@ -176,7 +176,7 @@ export default function RankingsScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   hero: { paddingHorizontal: 12, paddingTop: 16 },
   goldGlow: { shadowColor: palette.gold, shadowOpacity: 0.6, shadowRadius: 14, shadowOffset: { width: 0, height: 0 }, elevation: 8 },
   podName: { color: colors.white, fontWeight: '800', fontSize: 14, marginTop: 6, maxWidth: '95%' },
@@ -186,8 +186,8 @@ const s = StyleSheet.create({
   head: { flexDirection: 'row', gap: 6, marginHorizontal: 16, marginTop: 14 },
   formula: { flex: 1, color: colors.text, fontSize: 13, lineHeight: 19 },
   count: { color: colors.muted, fontSize: 12, fontWeight: '700', marginHorizontal: 16, marginTop: 6, marginBottom: 8 },
-  cell: { marginHorizontal: 16, backgroundColor: colors.white },
-  listCard: { backgroundColor: colors.white, borderRadius: radius.md, overflow: 'hidden', ...elevation.e1 },
+  cell: { marginHorizontal: 16, backgroundColor: colors.card },
+  listCard: { backgroundColor: colors.card, borderRadius: radius.md, overflow: 'hidden', ...elevation.e1 },
   row: { flexDirection: 'row', alignItems: 'center', minHeight: 54, paddingVertical: 8, paddingHorizontal: 12, borderBottomWidth: 1, borderBottomColor: colors.hairline, borderLeftWidth: 4, borderLeftColor: 'transparent' },
   mine: { backgroundColor: colors.tint, borderLeftColor: colors.primaryText },
   pos: { width: 30, fontSize: 14, fontWeight: '800', color: colors.muted },
@@ -198,4 +198,4 @@ const s = StyleSheet.create({
   youBar: { position: 'absolute', left: 12, right: 12, bottom: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.ink, borderRadius: 16, padding: 12, ...elevation.e3 },
   youRank: { color: colors.primary, fontSize: 24, fontWeight: '900' },
   play: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 44, paddingHorizontal: 16, borderRadius: 12, backgroundColor: colors.primary },
-});
+}));

@@ -51,6 +51,11 @@ export const CHECKSUM_ALLOWLIST: Readonly<Record<string, { current: string; earl
     ],
     why: 'fixed in place in 1.4.1 (V140-1..3) and 1.4.2 (V141-1); never deployed to any server',
   },
+  '0020_support_tickets.sql': {
+    current: 'c719de6fa1abd4b2443c47b2d9f32b31510a14736ea1aa724bf61d8e1dede5b0', // 1.4.20
+    earlier: ['5a5ae45554122ccd0d5ee6acd42fa2d02960501eabe58f9821da992fbccbc44a'], // 1.4.19 as shipped
+    why: '1.4.20 (QA V1419-4): CREATE TABLE -> CREATE TABLE IF NOT EXISTS only; same end state, so an applied 1.4.19 database is unaffected',
+  },
 });
 
 /** Recorded for a file applied before checksums existed whose applied version can't be told (1.4.3). */

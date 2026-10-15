@@ -23,7 +23,8 @@ import { buildMatch, matchTeamFromTeam } from '../../services/matchFactory';
 import { useMe } from '../../state/AuthContext';
 import { useWatch } from '../../state/hooks';
 import { describeRulesT, formatDayChipT, hourLabel, translateError } from '../../i18n/format';
-import { colors, elevation, onColor, readableFill, type } from '../../theme';
+import { colors, currentTheme, elevation, onColor, readableFill, type, themed } from '../../theme';
+import { tokens } from '../../theme/tokens';
 import { captainsProblem } from '../../core/antifraud';
 import { SafeFooter } from '../../components/SafeFooter';
 import { canOpenStep, exactDefaultPick, previousStep, teamSidePlayers, teamsProblem, toggleExactPick, type NewMatchStep, type SideSummary, type TeamsProblem } from '../../core/newMatchFlow';
@@ -513,10 +514,10 @@ export default function NewMatch() {
         options={{
           // Header arrow follows the steps too (Android back is handled by BackHandler above).
           headerLeft: () => (
-            <HeaderBackButton onPress={() => back() || goBackOr('/')} tintColor={colors.white} accessibilityLabel={t('common.goBack')} testID="header-back" />
+            <HeaderBackButton onPress={() => back() || goBackOr('/')} tintColor={colors.onHeader} accessibilityLabel={t('common.goBack')} testID="header-back" />
           ),
           headerRight: () => (
-            <Text style={{ color: colors.onInkMuted, fontWeight: '700', marginRight: Platform.OS === 'web' ? 16 : 0 }} testID="new-match-step-of">
+            <Text style={{ color: colors.onHeader, fontWeight: '700', marginRight: Platform.OS === 'web' ? 16 : 0 }} testID="new-match-step-of">
               {t('newMatch.stepOf', { n: step + 1, total: 3 })}
             </Text>
           ),
@@ -687,8 +688,9 @@ function Stepper({ step, canOpen, onOpen }: { step: NewMatchStep; canOpen: (i: N
             style={{ flex: 1, marginRight: i < 2 ? 6 : 0, minHeight: 36, justifyContent: 'flex-end' }}
             testID={`step-tab-${i}`}
           >
-            <View style={[st.seg3, { backgroundColor: done ? colors.primary : colors.ink2 }]} />
-            <Text style={{ color: i === step ? colors.onInk : colors.onInkMuted, fontWeight: i === step ? '800' : '700', fontSize: 12, marginTop: 6 }} numberOfLines={1}>
+            {/* 1.4.22 (spec v2 Stepper): dot 10, current 28 wide; done / current / todo */}
+            <View testID={`step-dot-${i < step ? 'done' : i === step ? 'current' : 'todo'}`} style={[st.seg3, { width: i === step ? 28 : 10, backgroundColor: done ? tokens[currentTheme()].primary : tokens[currentTheme()].surface2, borderColor: tokens[currentTheme()].outline }]} />
+            <Text style={{ color: i === step ? tokens[currentTheme()].text : tokens[currentTheme()].textMuted, fontWeight: i === step ? '800' : '700', fontSize: 12, marginTop: 6 }} numberOfLines={1}>
               {label}
             </Text>
           </Pressable>
@@ -698,18 +700,18 @@ function Stepper({ step, canOpen, onOpen }: { step: NewMatchStep; canOpen: (i: N
   );
 }
 
-const st = StyleSheet.create({
-  stepper: { flexDirection: 'row', backgroundColor: colors.ink, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12 },
-  seg3: { height: 4, borderRadius: 2 },
+const st = themed(() => StyleSheet.create({
+  stepper: { flexDirection: 'row', backgroundColor: tokens[currentTheme()].bg, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: tokens[currentTheme()].surface2 },
+  seg3: { height: 10, borderRadius: 5, borderWidth: 1 },
   badge: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   seg: { flexDirection: 'row', backgroundColor: colors.bg, borderRadius: 12, padding: 4, marginBottom: 10 },
   // 1.3.9 (V138-14): minWidth 0 lets a long (Hindi) label wrap onto 2 lines instead of overflowing the tab at 360 px
   segItem: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: 44, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 4 },
-  segOn: { backgroundColor: colors.white, ...elevation.e1 },
+  segOn: { backgroundColor: colors.card, ...elevation.e1 },
   hidden: { display: 'none' },
   sumSection: { paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
   sumRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
   sumText: { color: colors.text, fontWeight: '700', fontSize: 15 },
   sumMuted: { color: colors.muted, fontWeight: '600', marginTop: 2 },
   vs: { color: colors.muted, fontWeight: '800', marginLeft: 38, marginVertical: 2 },
-});
+}));

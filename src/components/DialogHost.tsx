@@ -1,7 +1,8 @@
 import React, { useEffect } from 'react';
 import { Modal, Platform, Pressable, Text, View } from 'react-native';
 import { closeDialog, useDialog, type DialogButton } from '../state/dialog';
-import { colors } from '../theme';
+import { colors, currentTheme } from '../theme';
+import { tokens } from '../theme/tokens';
 
 type Focusable = { focus?: () => void };
 
@@ -77,9 +78,13 @@ export function DialogHost() {
     };
   }, [d]);
   if (!d) return null;
+  // 1.4.23 (QA V1422-6): the dialog card, text and buttons come from the spec tokens of the current theme (it was
+  // a hard-coded white card with Night's light text on it – unreadable).
+  const T = tokens[currentTheme()];
+  const day = currentTheme() === 'day';
   return (
     <Modal visible transparent animationType="fade" onRequestClose={() => closeDialog(false)}>
-      <Pressable onPress={() => closeDialog(false)} accessible={false} style={{ flex: 1, backgroundColor: colors.scrim, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <Pressable onPress={() => closeDialog(false)} accessible={false} style={{ flex: 1, backgroundColor: T.scrim, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
         <Pressable
           onPress={() => {}}
           accessible={false}
@@ -88,13 +93,13 @@ export function DialogHost() {
           accessibilityViewIsModal
           aria-modal
           aria-labelledby="app-dialog-title"
-          style={{ width: '100%', maxWidth: 380, backgroundColor: 'white', borderRadius: 16, padding: 20 }}
+          style={{ width: '100%', maxWidth: 380, backgroundColor: T.surface, borderRadius: T.radius.card, borderWidth: day ? 2 : 1, borderColor: day ? T.outline : T.surface2, padding: 20 }}
         >
-          <Text nativeID="app-dialog-title" style={{ fontSize: 18, fontWeight: '900', color: colors.text, marginBottom: 8 }} testID="app-dialog-title">
+          <Text nativeID="app-dialog-title" style={{ fontSize: 18, fontWeight: '900', color: T.text, marginBottom: 8 }} testID="app-dialog-title">
             {d.title}
           </Text>
           {!!d.message && (
-            <Text style={{ fontSize: 15, color: colors.text, marginBottom: 18 }} testID="app-dialog-message">
+            <Text style={{ fontSize: 15, color: T.text, marginBottom: 18 }} testID="app-dialog-message">
               {d.message}
             </Text>
           )}
@@ -113,17 +118,17 @@ export function DialogHost() {
                     paddingHorizontal: 16,
                     justifyContent: 'center',
                     borderRadius: 12,
-                    backgroundColor: danger ? colors.danger : ghost ? 'transparent' : colors.ink,
+                    backgroundColor: danger ? T.live : ghost ? 'transparent' : T.primary,
                     borderWidth: ghost ? 2 : 0,
-                    borderColor: colors.ink,
+                    borderColor: T.text,
                     // visible keyboard focus ring
                     outlineStyle: focused ? 'solid' : undefined,
                     outlineWidth: focused ? 3 : undefined,
-                    outlineColor: focused ? colors.primaryText : undefined,
+                    outlineColor: focused ? (day ? T.teamAText : T.primary) : undefined,
                     outlineOffset: focused ? 2 : undefined,
                   }; }) as never}
                 >
-                  <Text style={{ fontWeight: '800', fontSize: 15, color: ghost ? colors.ink : colors.white }}>{b.text}</Text>
+                  <Text style={{ fontWeight: '800', fontSize: 15, color: ghost ? T.text : danger ? T.onLive : T.onPrimary }} testID={`app-dialog-btn-text-${i}`}>{b.text}</Text>
                 </Pressable>
               );
             })}

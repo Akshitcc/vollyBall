@@ -1,4 +1,5 @@
-import { assertSupportImage, checkSupportStatus, checkSupportTicket, SUPPORT_IMAGE_TYPES, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
+import { askLocally } from '../askLocal';
+import { assertSupportImage, checkSupportStatus, checkSupportTicket, SUPPORT_IMAGE_TYPES, supportRateWait, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
 import { checkFeedback, REVIEW_LAST_ASKED_PREFIX } from '../../core/reviewPrompt';
 import { BUNDLED_DAILY_ITEMS, checkDailyItem, dailyTombstone, type DailyItem } from '../../core/dailyItems';
 /**
@@ -12,7 +13,7 @@ import { repairPatch, type RepairFix } from '../../core/verdictRepair';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEMO_ADMIN_UIDS, DEMO_MODE, DEMO_OTP } from '../config';
 import { addPoint, computeState, summarize, type Side } from '../../core/scoring';
-import { assertTournamentAdmin, guardTournamentEdit, NOT_TOURNAMENT_ADMIN_MESSAGE, TOURNAMENT_LINK_KEYS, tournamentLinkProblem } from '../../core/tournamentAdmin';
+import { assertTournamentAdmin, guardTournamentEdit, NOT_TOURNAMENT_ADMIN, NOT_TOURNAMENT_ADMIN_MESSAGE, TOURNAMENT_LINK_KEYS, tournamentLinkProblem } from '../../core/tournamentAdmin';
 import { assertRoster, TEAM_SIZE_MODES, canonicalParticipants, challengeProblem, isAbandonOnly, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, teamCanPlay, TEAM_TOO_SMALL_MESSAGE, tournamentTeamsProblem } from '../../core/roster';
 import type { Challenge, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
 import { DEMO_QA_ADMIN, DemoDB, demoPhotoUrl, demoQaAdminProfile, makeSeed, refreshSeedColours, SEED_PHOTO_SCENES } from './demoSeed';
@@ -799,6 +800,10 @@ export class DemoBackend implements Backend {
     this.changed();
   }
   // ---------- 1.4.19 support tickets (local) ----------
+  /** 1.4.20: on-device RAG with the mock answer step (services/askLocal). */
+  async askVolleyLive(question: string, lang: 'en' | 'hi') {
+    return askLocally(this.authUser?.uid, question, lang);
+  }
   async createSupportTicket(t: NewSupportTicket) {
     await this.ready;
     const me = this.authUser?.uid;
@@ -807,7 +812,9 @@ export class DemoBackend implements Backend {
     const c = checkSupportTicket(t);
     if (t.screenshot) assertSupportImage(t.screenshot.type, t.screenshot.size);
     const list = (this.db.supportTickets ??= []);
-    if (list.filter((x) => x.userId === me && Date.now() - x.createdAt < 3_600_000).length >= 5) throw new CodedError('rate_limited', 'Too many requests. Wait a moment and try again.');
+    // 1.4.20 (QA V1419-6): the API's rule (core/support SUPPORT_RATE) and the real wait in seconds
+    const wait = supportRateWait(list.filter((x) => x.userId === me).map((x) => x.createdAt), Date.now());
+    if (wait) throw Object.assign(new CodedError('rate_limited', 'Too many requests. Wait a moment and try again.'), { retryAfter: wait });
     const now = Date.now();
     const id = 'st_' + uid();
     list.unshift({ id, userId: me, userName: this.db.users[me]?.name ?? null, ...c, status: 'open', screenshotUrl: t.screenshot?.uri ?? null, createdAt: now, updatedAt: now });
@@ -934,8 +941,11 @@ export class DemoBackend implements Backend {
     const t = checkTournamentFields(t0, { startChanged: true });
     const problem = tournamentTeamsProblem(t.teams, (id) => this.db.teams[id]);
     if (problem) throw new Error(problem);
+    // 1.4.20 (QA V1419-1): the caller is always the owner – a passed organizerId for someone else is refused
+    const me = this.authUser?.uid;
+    if (!me || (t0.organizerId != null && t0.organizerId !== me)) throw new CodedError(NOT_TOURNAMENT_ADMIN, NOT_TOURNAMENT_ADMIN_MESSAGE);
     const id = 'tour_' + uid();
-    this.db.tournaments[id] = { ...t, id, createdAt: Date.now() };
+    this.db.tournaments[id] = { ...t, organizerId: me, id, createdAt: Date.now() };
     this.changed();
     return id;
   }

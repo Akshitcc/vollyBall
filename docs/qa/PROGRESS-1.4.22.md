@@ -1,0 +1,11 @@
+# 1.4.22 progress (updated after each step)
+- [x] Backups: /workspace/backups/volleylive-1.4.21.apk (3593769e…) and .zip (a6fe9156…), bak38/bak52/pre1422 – intact
+- [x] Mockup rebuild (01–08, 10, 14 stepper, 15 reactions) + tokens; V1421-1…10 + Live theme control; tests added
+- [x] Screenshots 422-* (52, all scrollWidth 360) + 422-compare-* + 422-qa-*
+- [x] Suites (logs/s1422): tsc app 0, tsc server 0, jest 1600/1600, tz ×5 1600, server 360/360 (rerun alone after a transient deadlock), rules 226/226, policy exit 0
+- [x] Zip /workspace/volleylive.zip (final sha in report)
+- [x] APK tree: copied src/assets/docs/config/package/rules, build.gradle 38 / 1.4.22
+- [x] npm ci in APK tree (exit 0)
+- [x] gradle assembleRelease → build34.log (BUILD SUCCESSFUL 7m03s)
+- [x] APK /workspace/volleylive-latest.apk 2d257ab4… – 38/1.4.22, arm64-v8a+x86_64, cert fac61745…033b9c, all 8 fonts in res/, no example.invalid
+- [x] final report

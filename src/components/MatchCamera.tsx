@@ -22,7 +22,7 @@ import { photoQueue } from '../services/photoQueue';
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 import { usePhotoQueue } from '../state/usePhotoQueue';
-import { colors } from '../theme';
+import { colors, themed } from '../theme';
 import { Button } from './ui';
 
 type Panel = null | 'explain' | 'denied' | { error: string; title?: string };
@@ -154,7 +154,7 @@ export function CameraPanel({ panel, onAllow, onGallery, onClose }: { panel: Pan
         <View style={s.card} testID={typeof panel === 'string' ? `camera-${panel}` : 'camera-error'} accessibilityViewIsModal>
           {panel === 'explain' && (
             <>
-              <Ionicons name="camera" size={36} color={colors.ink} style={{ alignSelf: 'center' }} />
+              <Ionicons name="camera" size={36} color={colors.text} style={{ alignSelf: 'center' }} />
               <Text style={s.title} accessibilityRole="header">{t('camera.explainTitle')}</Text>
               <Text style={s.text}>{t('camera.explainText')}</Text>
               <Button title={t('camera.continue')} icon="camera" onPress={onAllow} testID="camera-explain-continue" />
@@ -315,22 +315,22 @@ export function UploadChip({ matchId, tone = 'dark' }: { matchId: string; tone?:
   );
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   added: { color: colors.successStrong, fontWeight: '700', marginTop: 6 },
   refused: { color: colors.danger, fontWeight: '700', marginTop: 6 },
   slots: { color: colors.muted, fontWeight: '600', fontSize: 12, marginTop: 6 },
   livePill: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 36, minWidth: 44, paddingHorizontal: 12, borderRadius: 999, backgroundColor: colors.live, borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)' },
   webPill: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 36, minWidth: 44, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1.5, borderColor: colors.onInkMuted },
   livePillText: { color: colors.white, fontWeight: '900', fontSize: 13 },
-  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.white },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.card },
   pulse: { borderRadius: 999, borderWidth: 3, borderColor: 'rgba(198,40,40,0.35)', margin: -4 },
   bg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 20 },
-  card: { backgroundColor: colors.white, borderRadius: 20, padding: 20, maxWidth: 420, width: '100%', alignSelf: 'center' },
-  title: { fontSize: 20, fontWeight: '900', color: colors.ink, textAlign: 'center', marginTop: 8, marginBottom: 8 },
-  text: { fontSize: 15, color: colors.ink, lineHeight: 22, marginBottom: 12, textAlign: 'center' },
+  card: { backgroundColor: colors.card, borderRadius: 20, padding: 20, maxWidth: 420, width: '100%', alignSelf: 'center' },
+  title: { fontSize: 20, fontWeight: '900', color: colors.text, textAlign: 'center', marginTop: 8, marginBottom: 8 },
+  text: { fontSize: 15, color: colors.text, lineHeight: 22, marginBottom: 12, textAlign: 'center' },
   round: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.ink2 },
   labelled: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 44, borderRadius: 14, paddingHorizontal: 14, gap: 8 },
   labelText: { color: colors.white, fontWeight: '800', fontSize: 15, flexShrink: 1 },
   chip: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', borderRadius: 11, paddingHorizontal: 8, height: 22, marginTop: 2, gap: 4, maxWidth: '100%' },
   chipText: { fontSize: 12, fontWeight: '800', flexShrink: 1 },
-});
+}));

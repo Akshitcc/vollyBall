@@ -11,8 +11,10 @@ import { pickPlayerOfMatch, potmLines, potmProblem } from '../core/potm';
 import type { Match } from '../core/types';
 import { translateError } from '../i18n/format';
 import { backend } from '../services/backend';
-import { colors } from '../theme';
+import { colors, themed } from '../theme';
 import { Avatar, Button } from './ui';
+import { playerStats } from '../core/stats';
+import { Body, Over, Sticker, useKit } from './DNKit';
 
 /** QA C130-3: 0-point players are disabled in the picker when anyone was credited a point. */
 export const potmZeroBlocked = (lines: readonly { points: number }[]) => lines.some((l) => l.points > 0);
@@ -29,30 +31,53 @@ export function PotmBadge({ match, compact }: { match: Match; compact?: boolean 
   if (!id || !p) return null;
   // (no auto-pick = nobody was credited a point: no rule to show)
   const basis = auto === null ? null : auto === id ? t('potm.basisAuto') : t('potm.basisScorer');
+  // 1.4.22 (spec v2 *-07 reward): POTM card – Day Ball sticker / Night surface with Volt border + glow; avatar, name,
+  // team, four stat tiles (Points, Spikes, Blocks, Aces).
+  return <PotmCard p={p} pts={pts} basis={basis} compact={compact} team={match.teamA.players.some((x) => x.id === id) ? match.teamA.name : match.teamB.name} line={playerStats(match.rules, match.events, match.firstServe ?? 'A', match)[id]} />;
+}
+
+function PotmCard({ p, pts, basis, compact, team, line }: { p: { name: string; photoURL?: string | null; color: string }; pts: number; basis: string | null; compact?: boolean; team: string; line?: { kill?: number; block?: number; ace?: number } }) {
+  const { t } = useTranslation();
+  const k = useKit();
+  const tile = (label: string, v: number | string) => (
+    <View style={{ flex: 1 }} key={label}>
+      <Sticker fill={k.day ? k.t.surface : k.t.surface2} radius={14} shadow={2} border={k.day ? undefined : k.t.surface2} inner={{ paddingVertical: 8, alignItems: 'center' }}>
+        <Text style={[{ fontSize: k.day ? 22 : 28, lineHeight: k.day ? 26 : 28, color: k.t.text }, k.f.display]}>{v}</Text>
+        <Body size={11} muted={!k.day}>{label}</Body>
+      </Sticker>
+    </View>
+  );
   return (
-    <View style={[s.badge, compact && { marginVertical: 6 }]} testID="potm-badge" accessible accessibilityLabel={`${t('potm.title')}: ${p.name}${basis ? `. ${basis}` : ''}`}>
-      <View style={s.star}>
-        <Ionicons name="star" size={18} color={colors.ink} />
-      </View>
-      <Avatar name={p.name} uri={p.photoURL} size={36} color={p.color} />
-      <View style={{ flex: 1, marginLeft: 10 }}>
-        {/* 1.3.9 (V138-12): the label wraps instead of being cut ("PLAYER OF THE MAT…") */}
-        <Text style={s.badgeLabel} numberOfLines={2} testID="potm-label">
-          {t('potm.title')}
-        </Text>
-        <Text style={s.badgeName} numberOfLines={1}>
-          {p.name}
-        </Text>
-        {basis ? (
-          <Text style={s.badgeBasis} testID="potm-basis">
-            {basis}
-          </Text>
+    <Sticker fill={k.day ? k.t.accent : k.t.surface} highlight={!k.day} style={{ marginVertical: compact ? 6 : 10 }}
+      inner={[{ padding: 14 }, !k.day ? { shadowColor: k.t.primary, shadowOpacity: 0.3, shadowRadius: 20, shadowOffset: { width: 0, height: 0 } } : null]}>
+      <View accessible testID="potm-badge" accessibilityLabel={`${t('potm.title')}: ${p.name}${basis ? `. ${basis}` : ''}`}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Ionicons name="star" size={16} color={k.day ? k.t.text : k.t.primary} />
+          <Over color={k.day ? k.t.text : k.t.primary} style={{ flex: 1 }} numberOfLines={2} testID="potm-label">{t('potm.title')}</Over>
+          <View style={{ backgroundColor: k.day ? k.t.surface : k.t.primary, borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2, borderWidth: k.day ? 1.5 : 0, borderColor: k.t.outline }}>
+            <Text style={[{ fontSize: 12, color: k.day ? k.t.text : k.t.onPrimary }, k.f.bold]} numberOfLines={1}>{t('potm.points', { count: pts })}</Text>
+          </View>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 12 }}>
+          <View style={{ borderRadius: 30, borderWidth: k.day ? 2 : 2, borderColor: k.day ? k.t.outline : k.t.primary }}>
+            <Avatar name={p.name} uri={p.photoURL} size={56} color={k.day ? k.t.primary : k.t.success} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[{ fontSize: k.day ? 22 : 28, color: k.t.text, lineHeight: k.day ? 26 : 28 }, k.f.display, k.f.upper && { textTransform: 'uppercase' }]} numberOfLines={1}>{p.name}</Text>
+            <Body size={12} muted={!k.day}>{team}</Body>
+            {basis ? <Body size={11} muted={!k.day} testID="potm-basis">{basis}</Body> : null}
+          </View>
+        </View>
+        {!compact ? (
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+            {tile(t('profile.points'), pts)}
+            {tile(t('profile.spikes'), line?.kill ?? 0)}
+            {tile(t('profile.blocks'), line?.block ?? 0)}
+            {tile(t('profile.aces'), line?.ace ?? 0)}
+          </View>
         ) : null}
       </View>
-      <Text style={s.badgePts} numberOfLines={1}>
-        {t('potm.points', { count: pts })}
-      </Text>
-    </View>
+    </Sticker>
   );
 }
 
@@ -159,22 +184,22 @@ export function PotmPicker({ match, uid, onDark }: { match: Match; uid: string; 
   );
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   badge: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.warnBg, borderColor: colors.primaryText, borderWidth: 2, borderRadius: 16, padding: 10, marginVertical: 8 },
   star: { width: 30, height: 30, borderRadius: 15, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
   badgeLabel: { fontSize: 12, fontWeight: '900', color: colors.primaryText, textTransform: 'uppercase' },
   badgeName: { fontSize: 17, fontWeight: '900', color: colors.ink },
   badgePts: { fontSize: 13, fontWeight: '800', color: colors.ink, marginLeft: 6 },
   badgeBasis: { fontSize: 12, fontWeight: '600', color: colors.muted, marginTop: 2 },
-  picker: { borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 12, marginVertical: 8, backgroundColor: colors.white },
-  pickerTitle: { fontSize: 17, fontWeight: '900', color: colors.ink },
+  picker: { borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 12, marginVertical: 8, backgroundColor: colors.card },
+  pickerTitle: { fontSize: 17, fontWeight: '900', color: colors.text },
   note: { fontSize: 13, color: colors.muted, marginTop: 2, marginBottom: 4 },
   player: { width: 76, alignItems: 'center', padding: 6, marginRight: 6, borderRadius: 12, borderWidth: 2, borderColor: 'transparent' },
   playerOff: { opacity: 0.4 },
   zeroHint: { fontSize: 12, color: colors.muted, marginBottom: 6 },
   playerOn: { borderColor: colors.primaryText, backgroundColor: colors.selectedBg },
-  playerName: { fontSize: 13, fontWeight: '800', color: colors.ink, marginTop: 4 },
+  playerName: { fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 4 },
   playerPts: { fontSize: 11, fontWeight: '700', color: colors.muted },
   autoTag: { fontSize: 10, fontWeight: '900', color: colors.primaryText, marginTop: 2 },
   error: { color: colors.danger, fontWeight: '700', marginBottom: 6 },
-});
+}));

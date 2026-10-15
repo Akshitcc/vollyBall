@@ -23,9 +23,9 @@ export default function Tournaments() {
       {(list ?? []).map((t) => (
         <Card key={t.id} onPress={() => router.push(`/tournament/${t.id}`)}>
           <Row>
-            <Text style={{ fontSize: 26, marginRight: 10 }}>🏆</Text>
+            <Text style={{ fontSize: 26, marginRight: 10, color: colors.text }}>🏆</Text>
             {/* QA V5: long names wrap to two lines and end with "…" inside the card. */}
-            <Text style={[font.h3, { flex: 1, minWidth: 0 }, breakWords]} numberOfLines={2} ellipsizeMode="tail" testID={`tournament-name-${t.id}`}>
+            <Text style={[font.h3, { flex: 1, minWidth: 0, color: colors.text }, breakWords]} numberOfLines={2} ellipsizeMode="tail" testID={`tournament-name-${t.id}`}>
               {t.name}
             </Text>
             <Text testID={`tournament-status-${t.id}`} style={{ fontWeight: '900', color: tournamentDisplayStatus(t) === 'running' ? colors.danger : colors.muted, fontSize: 12, marginLeft: 8, flexShrink: 0 }}>{tournamentStatusLabel(tournamentDisplayStatus(t), tr)}</Text>

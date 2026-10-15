@@ -11,7 +11,7 @@ import { Modal } from './AppModal'; // 1.4.0 (V139-7): holds the review prompt w
 import type { SideLineups } from '../core/rotation';
 import type { Side } from '../core/scoring';
 import type { Match } from '../core/types';
-import { colors, onColor, teamText } from '../theme';
+import { colors, onColor, teamText, themed } from '../theme';
 import { Button } from './ui';
 
 /** Replace `off` (on court) with `on` (bench) at the same position. Unchanged if either is invalid. */
@@ -101,9 +101,9 @@ export function SubSheet({ visible, match, setNumber, initial, onSave, onClose }
   );
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   bg: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
-  sheet: { backgroundColor: colors.white, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '90%' },
+  sheet: { backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '90%' },
   title: { fontSize: 20, fontWeight: '800', color: colors.text, textAlign: 'center' },
   label: { fontSize: 13, fontWeight: '800', color: colors.text, marginTop: 12, marginBottom: 6, textTransform: 'uppercase' },
   hint: { fontSize: 13, color: colors.muted, marginTop: 6 },
@@ -112,4 +112,4 @@ const s = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 6 },
   chip: { borderWidth: 1.5, borderColor: colors.border, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, minHeight: 40, justifyContent: 'center', maxWidth: '100%' },
   chipText: { fontWeight: '700', color: colors.text },
-});
+}));

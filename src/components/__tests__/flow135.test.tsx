@@ -97,7 +97,7 @@ test('Profile → Simulate offline → Score tab → Continue scoring → tap: p
   await fireEvent(sw, 'valueChange', true);
   await settle();
   // 2) Score tab (pressed in the tab bar, as a user does)
-  await fireEvent.press(screen.getAllByText('Score').slice(-1)[0]); // the tab bar label
+  await fireEvent.press(screen.getAllByTestId('tab-fab').slice(-1)[0]); // 1.4.22: the centre FAB (no caption)
   await settle(800);
   // 3) "Continue scoring" on the seeded live match
   await fireEvent.press((await until(() => screen.queryAllByText('Continue scoring')))[0]);

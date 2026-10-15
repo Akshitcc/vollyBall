@@ -1,3 +1,4 @@
+import { useLiveThemeHold } from '../../../theme/ThemeProvider';
 /**
  * LIVE SCORING SCREEN – the heart of the app.
  *
@@ -26,6 +27,7 @@ import Animated, { SlideInDown } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CourtCard, RallyTicker, TeamHalf, type ChipOrigin } from '../../../components/LiveScoring';
 import { FlyingPoint, LiveScoreboard, type Flight } from '../../../components/ViewerParts';
+import { RewardScreen } from '../../../components/RewardScreen';
 import { PhotoHeaderButton } from '../../../components/PhotoSheet';
 import { CHIP_DEBOUNCE_MS, LEGACY_HALVES, TEAM_HALF_TAP } from '../../../core/liveFlags';
 import { firstName } from '../../../components/MiniCourt';
@@ -62,8 +64,14 @@ import { connectivity, isNetworkError, syncView, useOnline, type SyncView } from
 import { usePhotoQueue } from '../../../state/usePhotoQueue';
 import { useMe } from '../../../state/AuthContext';
 import { useReviewPrompt } from '../../../state/useReviewPrompt';
-import { letterSpacing, shareTextT as shareText, translateError } from '../../../i18n/format';
-import { colors, elevation, palette } from '../../../theme';
+import { dataLabel, letterSpacing, shareTextT as shareText, translateError } from '../../../i18n/format';
+import { sideOfPlayer } from '../../../core/stats';
+import { colors, currentTheme, elevation, palette, themed, tokens } from '../../../theme';
+import { useTheme } from '../../../theme/ThemeProvider';
+import { useHiFont } from '../../../theme/useHiFont';
+/** 1.4.22: spec v2 tokens of the current theme (the themed() styles below rebuild on a switch). */
+const T = () => tokens[currentTheme()];
+const DAY = () => currentTheme() === 'day';
 import { shareOrCopy } from '../../../services/share';
 import { ABANDON_POLICY, abandonedAt, abandonPending, maxEventsOf } from '../../../core/abandon';
 import { abandonScoreOf } from '../../../components/AbandonPanel';
@@ -80,6 +88,8 @@ export default function ScoreScreen() {
   const me = useMe();
   const [match, setMatch] = useState<Match | null | undefined>(undefined);
   const [events, setEvents] = useState<MatchEvent[] | null>(null);
+  // 1.4.21 (spec §4.1): a day/night switch waits for the rally to end, then a 400 ms fade only (no scene, no remount)
+  useLiveThemeHold(events ? events.length : 0);
   const [swapped, setSwapped] = useState(false);
   // The rally being credited: its team and its index in the event log (captured at tap time).
   const [attrib, setAttrib] = useState<{ side: Side; index: number } | null>(null);
@@ -108,6 +118,8 @@ export default function ScoreScreen() {
   const [abandoning, setAbandoning] = useState(false);
   const pushSeq = useRef(0);
   const insets = useSafeAreaInsets();
+  const hf = useHiFont();
+  const themeCtl = useTheme(); // re-render on a theme switch (the scorer is soft-swapped, not remounted)
   const { height: winH } = useWindowDimensions();
   const reduceMotion = useReduceMotion();
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -480,17 +492,17 @@ export default function ScoreScreen() {
       <View style={[s.header, { paddingTop: insets.top + 6 }]}>
         <View style={s.top}>
           <Pressable onPress={() => goBackOr(`/match/${match.id}`)} hitSlop={10} accessibilityRole="button" accessibilityLabel={tr('common.close')} style={s.iconBtn}>
-            <Ionicons name="close" size={26} color={colors.white} />
+            <Ionicons name="close" size={24} color={T().text} />
           </Pressable>
           <View style={{ flex: 1, alignItems: 'center' }}>
-            <Text style={[s.topTitle, ls1]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+            <Text style={[s.topTitle, ls1, hf.upper || DAY() ? null : { fontFamily: T().font.displayHi, textTransform: 'none', fontSize: 22 }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
               {st.finished
                 ? tr('score.matchOver')
                 : `${tr('score.setHeader', { n: st.setIndex + 1 })}${st.isDecidingSet ? tr('score.decider') : ''}${tr('score.toPoints', { n: st.targetPoints })}`}
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
-              <Ionicons name={sv.kind === 'synced' ? 'cloud-done' : sv.kind === 'syncing' ? 'cloud-upload-outline' : 'cloud-offline'} size={14} color={sv.kind === 'synced' ? palette.syncIcon : sv.kind === 'offline' ? colors.gold : colors.onInkMuted} />
-              <Text style={[s.topSub, sv.kind === 'offline' && { color: colors.gold }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} testID="sync-label" accessibilityLiveRegion="polite">
+              <Ionicons name={sv.kind === 'synced' ? 'cloud-done' : sv.kind === 'syncing' ? 'cloud-upload-outline' : 'cloud-offline'} size={14} color={sv.kind === 'synced' ? (DAY() ? T().teamB : T().primary) : sv.kind === 'offline' ? T().live : T().textMuted} />
+              <Text style={[s.topSub, sv.kind === 'offline' && { color: T().live }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} testID="sync-label" accessibilityLiveRegion="polite">
                 {syncLabel(sv, tr)}
               </Text>
             </View>
@@ -500,7 +512,7 @@ export default function ScoreScreen() {
           {LEGACY_HALVES ? <LiveCameraButton matchId={match.id} uid={me.id} pill /> : <PhotoHeaderButton matchId={match.id} uid={me.id} onOpenPhotos={() => router.replace(`/match/${match.id}`)} />}
           {/* 44 px target: hitSlop does nothing on web, so the bare 24 px icon was easy to miss (QA retest) */}
           <Pressable onPress={() => setMenu(true)} hitSlop={10} accessibilityRole="button" accessibilityLabel={tr('score.options')} testID="score-menu" style={s.iconBtn}>
-            <Ionicons name="ellipsis-vertical" size={22} color={colors.white} />
+            <Ionicons name="ellipsis-vertical" size={22} color={T().text} />
           </Pressable>
         </View>
         {!LEGACY_HALVES && (
@@ -602,31 +614,31 @@ export default function ScoreScreen() {
         <View style={[s.bottom, { paddingTop: 10, paddingBottom: Math.max(16, insets.bottom) }]} testID="score-bottom-bar">
           <Pressable
             onPress={doUndo}
-            style={({ pressed }) => [s.undo, !canUndo ? s.undoDisabled : elevation.glowPrimary, pressed && canUndo ? { opacity: 0.85 } : null]}
+            style={({ pressed }) => [s.undo, !canUndo ? s.undoDisabled : null, pressed && canUndo ? { opacity: 0.85 } : null]}
             disabled={!canUndo}
             accessibilityRole="button"
             accessibilityState={{ disabled: !canUndo }}
             accessibilityLabel={`${tr('score.undo')}. ${undoSub}`}
             testID="undo"
           >
-            <Ionicons name="arrow-undo" size={24} color={canUndo ? colors.onPrimary : colors.disabledText} />
+            <Ionicons name="arrow-undo" size={24} color={canUndo ? T().onPrimary : colors.disabledText} />
             <View style={{ flexShrink: 1 }}>
-              <Text style={[s.undoText, ls1, { color: canUndo ? colors.onPrimary : colors.disabledText }]} numberOfLines={1}>
+              <Text style={[s.undoText, ls1, { color: canUndo ? T().onPrimary : colors.disabledText }, hf.upper ? null : DAY() ? null : { fontFamily: T().font.displayHi, textTransform: 'none' }]} numberOfLines={1}>
                 {tr('score.undo')}
               </Text>
-              <Text style={[s.undoSub, { color: canUndo ? colors.onPrimary : colors.disabledText }]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8} testID="undo-sub">
+              <Text style={[s.undoSub, { color: canUndo ? T().onPrimary : colors.disabledText }]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8} testID="undo-sub">
                 {undoSub}
               </Text>
             </View>
           </Pressable>
           <Pressable onPress={() => setSwapped((x) => !x)} style={s.tile} accessibilityRole="button" testID="swap">
-            <Ionicons name="swap-horizontal" size={22} color={colors.ink} />
+            <Ionicons name="swap-horizontal" size={22} color={T().text} />
             <Text style={[s.tileText, ls1]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
               {tr('score.swap')}
             </Text>
           </Pressable>
           <Pressable onPress={() => router.replace(`/match/${match.id}`)} style={s.tile} accessibilityRole="button" testID="stats">
-            <Ionicons name="stats-chart" size={20} color={colors.ink} />
+            <Ionicons name="stats-chart" size={20} color={T().text} />
             <Text style={[s.tileText, ls1]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
               {tr('score.stats')}
             </Text>
@@ -637,41 +649,32 @@ export default function ScoreScreen() {
       {/* match over */}
       {!st.finished && overClosed ? <ResetFlag reset={() => setOverClosed(false)} /> : null}
       <Modal visible={st.finished && !attrib && !overClosed} transparent animationType="fade" onRequestClose={() => setOverClosed(true)}>
-        <View style={s.modalBg}>
-          {/* tap outside the sheet closes it (a mouse/touch convenience; keyboard users have the Close button and Escape) */}
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setOverClosed(true)} focusable={false} tabIndex={-1} accessible={false} importantForAccessibility="no" testID="match-over-backdrop" />
-          {/* 1.4.5 (QA V144-9): taps inside the result sheet always reach its buttons (no tap spent on the scroll view) */}
-          <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }} keyboardShouldPersistTaps="handled">
-          <View style={s.modal} testID="match-over">
-            <Pressable
-              onPress={() => setOverClosed(true)}
-              accessibilityRole="button"
-              accessibilityLabel={tr('score.closeResult')}
-              hitSlop={8}
-              style={s.modalClose}
-              testID="match-over-close"
-            >
-              <Ionicons name="close" size={22} color={colors.ink} />
-            </Pressable>
-            <Text style={{ fontSize: 36, textAlign: 'center' }}>🏆</Text>
-            <Text style={s.winner}>{tr('score.teamWins', { team: st.winner === 'A' ? match.teamA.name : match.teamB.name })}</Text>
-            <Text style={s.final}>
-              {st.setsWon.A} – {st.setsWon.B}
-            </Text>
-            <Text style={{ textAlign: 'center', color: colors.muted, fontWeight: '700', marginBottom: 8 }}>
-              {st.sets.map((x) => `${x.a}-${x.b}`).join(' · ')}
-            </Text>
-            {/* Player of the Match: auto-picked, the scorer may change it, then confirms (core/potm.ts) */}
-            <PotmPicker match={{ ...match, events: ev, status: 'finished', finishedAt: match.finishedAt ?? Date.now() }} uid={me.id} />
-            <Button
-              title={tr('score.shareResult')}
-              icon="share-social"
-              onPress={() => void shareOrCopy(shareText(match.teamA.name, match.teamB.name, match.rules, ev, match.firstServe, { location: match.location?.name }))}
-            />
-            <Button title={tr('score.summaryPhotos')} variant="dark" icon="images" onPress={() => router.replace(`/match/${match.id}`)} />
-            {/* 1.4.2 (V141-8): no "Undo last rally" here any more – the result is final once the match is won */}
-          </View>
-          </ScrollView>
+        {/* 1.4.22 (spec v2 *-07): full-screen reward. The invisible backdrop keeps the old "tap outside closes" hook for tests. */}
+        <View style={{ flex: 1 }} testID="match-over">
+          <Pressable style={{ width: 0, height: 0 }} onPress={() => setOverClosed(true)} focusable={false} tabIndex={-1} accessible={false} importantForAccessibility="no" testID="match-over-backdrop" />
+          {(() => {
+            const winTeam = st.winner === 'A' ? match.teamA : match.teamB;
+            const loseTeam = st.winner === 'A' ? match.teamB : match.teamA;
+            const mine = sideOfPlayer(match, me.id);
+            const weWon = !!mine && mine === st.winner;
+            const title = weWon ? (DAY() ? tr('dn.weWon') : tr('dn.victory')) : tr('score.teamWins', { team: winTeam.name });
+            return (
+              <RewardScreen
+                title={title}
+                overline={`${tr('dn.fullTime')}${match.title ? ` · ${dataLabel(match.title, tr)}` : ''}`}
+                line={tr('dn.beat', { win: winTeam.name, lose: loseTeam.name })}
+                setsA={st.setsWon.A}
+                setsB={st.setsWon.B}
+                setLines={st.sets.map((x) => `${x.a}–${x.b}`).join(' · ')}
+                onClose={() => setOverClosed(true)}
+                onShare={() => void shareOrCopy(shareText(match.teamA.name, match.teamB.name, match.rules, ev, match.firstServe, { location: match.location?.name }))}
+                onSummary={() => router.replace(`/match/${match.id}`)}
+              >
+                {/* Player of the Match: auto-picked, the scorer may change it, then confirms (core/potm.ts) */}
+                <PotmPicker match={{ ...match, events: ev, status: 'finished', finishedAt: match.finishedAt ?? Date.now() }} uid={me.id} />
+              </RewardScreen>
+            );
+          })()}
         </View>
       </Modal>
 
@@ -709,6 +712,14 @@ export default function ScoreScreen() {
             <Button title={tr('score.pointByPoint')} icon="list" variant="secondary" onPress={() => { setMenu(false); router.replace(`/match/${match.id}`); }} />
             {/* 1.4.3 (QA V142-7): once the winning rally is in, nothing in this menu may change the match – no
                 lineup, no abandon (every backend refuses them too: match_finished). Share and point-by-point stay. */}
+            {/* 1.4.22 (Tester extra): a theme control on Live – the swap is soft (no remount, score kept) */}
+            <Button
+              title={tr(themeCtl.name === 'day' ? 'dn.toNight' : 'dn.toDay')}
+              icon={themeCtl.name === 'day' ? 'moon-outline' : 'sunny-outline'}
+              variant="secondary"
+              onPress={() => { setMenu(false); themeCtl.setSetting(themeCtl.name === 'day' ? 'night' : 'day'); themeCtl.rallyEnded(); }}
+              testID="menu-theme"
+            />
             {hasPlayers && !over && (
               <Button
                 title={tr('rotation.lineup')}
@@ -809,53 +820,56 @@ export function syncLabel(v: SyncView, t: TFunction) {
   return t('score.syncSynced');
 }
 
-const s = StyleSheet.create({
-  header: { backgroundColor: colors.ink, paddingBottom: 10, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
-  top: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: 4 },
-  iconBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+const s = themed(() => StyleSheet.create({
+  // 1.4.22 (spec v2 *-02-live-scoring): light/dark page header (no navy bar), 48 icon buttons, display title
+  header: { backgroundColor: T().bg, paddingBottom: 10, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
+  top: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 6 },
+  iconBtn: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', borderRadius: DAY() ? 24 : 16, backgroundColor: T().surface, borderWidth: DAY() ? 2 : 1, borderColor: DAY() ? T().outline : T().surface2 },
   creditedText: { color: colors.text, fontWeight: '700', fontSize: 13, marginTop: 10 },
-  topTitle: { color: colors.white, fontWeight: '800', fontSize: 16 },
-  topSub: { color: colors.onInkMuted, fontWeight: '600', fontSize: 12 },
+  topTitle: { color: T().text, fontFamily: T().font.display, fontSize: DAY() ? 22 : 28, lineHeight: DAY() ? 28 : 30, textTransform: DAY() ? 'none' : 'uppercase', letterSpacing: DAY() ? 0 : 0.5 },
+  topSub: { color: T().textMuted, fontFamily: T().font.semibold, fontSize: 12 },
   setStrip: { gap: 8, paddingHorizontal: 14, paddingTop: 8 },
   setPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.ink2, borderRadius: 999, paddingHorizontal: 12, height: 30 },
   setPillNow: { backgroundColor: colors.primary },
   setPillText: { color: colors.white, fontWeight: '800', fontSize: 13, fontVariant: ['tabular-nums'] },
-  pointBanner: { alignSelf: 'center', backgroundColor: colors.gold, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 4, marginTop: 8 },
-  pointBannerText: { color: colors.ink, fontWeight: '900', fontSize: 13 },
+  pointBanner: { alignSelf: 'center', backgroundColor: DAY() ? T().accent : T().primary, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 4, marginTop: 8, borderWidth: DAY() ? 2 : 0, borderColor: T().outline },
+  pointBannerText: { color: DAY() ? T().text : T().onPrimary, fontWeight: '900', fontSize: 13 },
   oppHint: { color: colors.muted, fontWeight: '600', fontSize: 12, textAlign: 'center', marginTop: 8, marginHorizontal: 16 },
   error: { backgroundColor: colors.danger, color: colors.white, textAlign: 'center', padding: 6, fontWeight: '800' },
   halves: { flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingTop: 12 },
   lineupBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', alignSelf: 'center', backgroundColor: colors.primary, borderRadius: 999, paddingHorizontal: 14, minHeight: 36, marginTop: 10, maxWidth: '92%' },
   lineupBarText: { color: colors.onPrimary, fontWeight: '800', marginLeft: 6, flexShrink: 1 },
-  bottom: { flexDirection: 'row', paddingHorizontal: 12, paddingTop: 12, paddingBottom: 12, gap: 10, backgroundColor: colors.white, ...elevation.barTop },
+  bottom: { flexDirection: 'row', paddingHorizontal: 12, paddingTop: 12, paddingBottom: 12, gap: 10, backgroundColor: T().bg, borderTopWidth: DAY() ? 0 : 1, borderTopColor: T().surface2 },
   // 1.3.4: 2-line subtitle (Hindi "Aarav −1 · वापस 1–0" was cut off), a little less padding
-  undo: { flex: 1, minHeight: 56, borderRadius: 14, backgroundColor: colors.primary, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, gap: 10 },
+  undo: { flex: 1, minHeight: 60, borderRadius: T().radius.btn, backgroundColor: T().primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 6, gap: 10, borderWidth: DAY() ? 2 : 0, borderColor: T().outline,
+    ...(DAY() ? { shadowColor: T().outline, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 3, height: 3 } } : { shadowColor: T().primary, shadowOpacity: 0.35, shadowRadius: 24, shadowOffset: { width: 0, height: 0 } }) },
   // Tester 1.2.0: the disabled Undo must look disabled (solid grey, grey text, no glow).
   pausedBanner: { backgroundColor: colors.warnBg, borderRadius: 12, padding: 10, marginHorizontal: 8, marginTop: 6, gap: 8 },
   pausedText: { color: colors.ink, fontWeight: '800', textAlign: 'center' },
-  undoDisabled: { backgroundColor: colors.disabledBg },
-  undoText: { fontWeight: '900', fontSize: 16 },
+  undoDisabled: { backgroundColor: colors.disabledBg, shadowOpacity: 0 },
+  undoText: { fontFamily: T().font.display, fontSize: DAY() ? 18 : 24, lineHeight: DAY() ? 22 : 24, textTransform: DAY() ? 'none' : 'uppercase' },
   undoSub: { fontWeight: '600', fontSize: 12, marginTop: 1 },
-  tile: { width: 64, minHeight: 56, borderRadius: 14, backgroundColor: colors.white, borderWidth: 1.5, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', gap: 2 },
-  tileText: { color: colors.ink, fontWeight: '700', fontSize: 11 },
+  tile: { width: 64, minHeight: 60, borderRadius: T().radius.btn, backgroundColor: T().surface, borderWidth: DAY() ? 2 : 1, borderColor: DAY() ? T().outline : T().surface2, alignItems: 'center', justifyContent: 'center', gap: 2,
+    ...(DAY() ? { shadowColor: T().outline, shadowOpacity: 1, shadowRadius: 0, shadowOffset: { width: 3, height: 3 } } : null) },
+  tileText: { color: T().text, fontWeight: '700', fontSize: 11 },
   toast: { position: 'absolute', top: '40%', alignSelf: 'center', backgroundColor: colors.toast, paddingHorizontal: 22, paddingVertical: 14, borderRadius: 16 },
   toastText: { color: colors.white, fontWeight: '900', fontSize: 18 },
-  sheet: { backgroundColor: colors.white, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12, ...elevation.e3 },
+  sheet: { backgroundColor: colors.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12, ...elevation.e3 },
   attribTitle: { color: colors.text, fontWeight: '800', flex: 1, fontSize: 16 },
   skip: { color: colors.primaryText, fontWeight: '800', fontSize: 15 },
   playerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  player: { width: '31.5%', minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 6, padding: 6, borderRadius: 12, borderWidth: 1.5, borderColor: colors.hairline, backgroundColor: colors.white },
+  player: { width: '31.5%', minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 6, padding: 6, borderRadius: 12, borderWidth: 1.5, borderColor: colors.hairline, backgroundColor: colors.card },
   playerOn: { borderColor: colors.primaryText, backgroundColor: colors.tint },
   playerName: { color: colors.text, fontWeight: '700', fontSize: 13, lineHeight: 16, flex: 1, flexShrink: 1 },
-  playerTick: { position: 'absolute', right: -5, bottom: -4, backgroundColor: colors.white, borderRadius: 9, width: 18, height: 18, alignItems: 'center', justifyContent: 'center' },
+  playerTick: { position: 'absolute', right: -5, bottom: -4, backgroundColor: colors.card, borderRadius: 9, width: 18, height: 18, alignItems: 'center', justifyContent: 'center' },
   kind: { backgroundColor: colors.tint, borderRadius: 999, paddingHorizontal: 14, minHeight: 36, justifyContent: 'center', borderWidth: 1.5, borderColor: colors.border },
   kindText: { color: colors.text, fontWeight: '700', fontSize: 14 },
   modalBg: { flex: 1, backgroundColor: colors.scrim, justifyContent: 'center', padding: 20 },
-  modal: { backgroundColor: colors.white, borderRadius: 22, padding: 20 },
+  modal: { backgroundColor: colors.card, borderRadius: 22, padding: 20 },
   modalClose: { position: 'absolute', top: 8, right: 8, width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', zIndex: 1 },
   winner: { fontSize: 26, fontWeight: '900', textAlign: 'center', color: colors.text },
   final: { fontSize: 48, fontWeight: '900', textAlign: 'center', color: colors.text },
-});
+}));
 
 /** Shown instead of the scoreboard while a team has fewer than MIN_PLAYERS players. */
 function NeedPlayers({ match, onUpdated }: { match: Match; onUpdated: (m: Match) => void }) {
@@ -885,7 +899,7 @@ function NeedPlayers({ match, onUpdated }: { match: Match; onUpdated: (m: Match)
   };
   return (
     <SafeAreaView style={{ flex: 1, padding: 24, justifyContent: 'center', backgroundColor: colors.bg }} testID="need-players">
-      <Ionicons name="people" size={48} color={colors.ink} style={{ alignSelf: 'center', marginBottom: 8 }} />
+      <Ionicons name="people" size={48} color={colors.text} style={{ alignSelf: 'center', marginBottom: 8 }} />
       <Text style={{ fontSize: 22, fontWeight: '900', textAlign: 'center', color: colors.text, marginBottom: 8 }}>{tr('score.needPlayersTitle')}</Text>
       <P style={{ textAlign: 'center', marginBottom: 12 }}>{tr('score.needPlayers', { min: MIN_PLAYERS })}</P>
       {[match.teamA, match.teamB].map((t, i) => (

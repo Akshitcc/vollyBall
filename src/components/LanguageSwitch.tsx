@@ -4,12 +4,14 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { LANGUAGES, currentLanguage, setLanguage, type Language } from '../i18n';
-import { colors, radius } from '../theme';
+import { colors, radius, currentTheme } from '../theme';
 
 export function LanguageSwitch({ dark, style, showLabel = true }: { dark?: boolean; style?: StyleProp<ViewStyle>; showLabel?: boolean }) {
   const { t, i18n } = useTranslation();
   const active: Language = currentLanguage();
   void i18n.language; // re-render on change
+  // 1.4.23 (V1422-4): in Night the switch always uses its on-dark colours (ink on navy was 1.07:1).
+  dark = dark || currentTheme() === 'night';
   const fg = dark ? colors.white : colors.ink;
   return (
     <View style={[{ flexDirection: 'row', alignItems: 'center' }, style]} testID="language-switch">

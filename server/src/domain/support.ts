@@ -23,9 +23,14 @@ const fromRow = (s: Services, r: Row): SupportTicket => ({
   screenshotUrl: r.screenshot_key ? s.storage.url(r.screenshot_key) : null, createdAt: toMs(r.created_at) ?? 0, updatedAt: toMs(r.updated_at) ?? 0,
 });
 
-export async function createTicket(s: Services, id: Identity, body: Record<string, unknown>) {
+/**
+ * 1.4.20 (QA Help Center Lows): `gate` (the rate limit) runs only after the ticket is valid, so a refused attempt
+ * never uses up the user's allowance.
+ */
+export async function createTicket(s: Services, id: Identity, body: Record<string, unknown>, gate?: () => Promise<void>) {
   let c: ReturnType<typeof checkSupportTicket>;
   try { c = checkSupportTicket(body); } catch (e) { asHttp(e); }
+  if (gate) await gate();
   const now = nowDate();
   const row = { id: newId(), user_id: id.uid, topic: c.topic, message: c.message, app_version: c.appVersion, status: 'open', screenshot_key: null, created_at: now, updated_at: now };
   await s.db('support_tickets').insert(row);

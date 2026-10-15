@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, useWindowDimensions, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { Modal } from './AppModal'; // 1.4.0 (V139-7): holds the review prompt while open
 import type { MatchPhoto } from '../core/types';
-import { colors } from '../theme';
+import { colors, themed } from '../theme';
 import { bottomPadding, useInsets } from './SafeFooter';
 
 /** An image that shows a broken-photo placeholder in its place when it can't be loaded. */
@@ -250,19 +250,19 @@ export function PhotoViewer({
   );
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   broken: { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed' },
   brokenDark: { backgroundColor: '#111', borderColor: '#444' },
   brokenText: { color: colors.onInkMuted, marginTop: 10, fontWeight: '700' },
   thumbDelete: { position: 'absolute', top: 4, right: 4, width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(0,0,0,0.65)', alignItems: 'center', justifyContent: 'center' },
   dlgBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  dlg: { backgroundColor: colors.white, borderRadius: 16, padding: 20, width: '100%', maxWidth: 380, gap: 10 },
-  dlgTitle: { fontSize: 18, fontWeight: '900', color: colors.ink },
+  dlg: { backgroundColor: colors.card, borderRadius: 16, padding: 20, width: '100%', maxWidth: 380, gap: 10 },
+  dlgTitle: { fontSize: 18, fontWeight: '900', color: colors.text },
   dlgText: { fontSize: 15, color: colors.text, lineHeight: 21 },
   dlgBtn: { flex: 1, minHeight: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   dlgCancel: { borderWidth: 1, borderColor: colors.border },
-  dlgCancelText: { color: colors.ink, fontWeight: '800', fontSize: 16 },
-  dlgDelete: { backgroundColor: colors.danger },
+  dlgCancelText: { color: colors.text, fontWeight: '800', fontSize: 16 },
+  dlgDelete: { backgroundColor: colors.live /* 1.4.23 V1422-6: white on Night danger was 2.5:1 */ },
   dlgDeleteText: { color: colors.white, fontWeight: '800', fontSize: 16 },
   root: { flex: 1, backgroundColor: '#000' },
   top: { position: 'absolute', top: 0, left: 0, right: 0, paddingTop: 36, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -272,4 +272,4 @@ const s = StyleSheet.create({
   bottom: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 16, paddingBottom: 28, backgroundColor: 'rgba(0,0,0,0.6)' },
   caption: { color: colors.white, fontWeight: '700', fontSize: 15, textAlign: 'center' },
   hint: { color: colors.onInkMuted, fontSize: 12, textAlign: 'center', marginTop: 4 },
-});
+}));

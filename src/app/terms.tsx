@@ -13,7 +13,7 @@ import { TERMS_IS_DRAFT, TERMS_VERSION } from '../core/terms';
 import { translateError } from '../i18n/format';
 import { signOut } from '../services/session';
 import { useAuth } from '../state/AuthContext';
-import { colors, radius, type } from '../theme';
+import { colors, radius, type, themed } from '../theme';
 
 /** Sections of the draft text, in order (keys under terms.* in both locales). */
 export const TERMS_SECTIONS = ['points', 'fairPlay', 'data', 'conduct', 'changes'] as const;
@@ -76,11 +76,11 @@ export default function TermsScreen() {
   );
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   draft: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.danger, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
   draftText: { color: colors.white, fontWeight: '900', fontSize: 12, letterSpacing: 1 },
   draftNote: { color: colors.text, backgroundColor: colors.tint, borderRadius: radius.sm, padding: 10, marginTop: 10 },
-  section: { backgroundColor: colors.white, borderRadius: radius.md, padding: 14, marginTop: 12, borderWidth: 1, borderColor: colors.hairline },
+  section: { backgroundColor: colors.card, borderRadius: radius.md, padding: 14, marginTop: 12, borderWidth: 1, borderColor: colors.hairline },
   check: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, minHeight: 48, marginTop: 8 },
-  box: { width: 26, height: 26, borderRadius: 6, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.white },
-});
+  box: { width: 26, height: 26, borderRadius: 6, borderWidth: 2, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card },
+}));

@@ -15,7 +15,9 @@ import { hasCameraButton } from '../services/camera';
 import { backend } from '../services/backend';
 import { haptic } from '../services/haptics';
 import { useWatch } from '../state/hooks';
-import { colors, elevation } from '../theme';
+import { colors, currentTheme, elevation, themed, tokens } from '../theme';
+const T = () => tokens[currentTheme()];
+const DAY = () => currentTheme() === 'day';
 import { UploadChip, useAddPhoto } from './MatchCamera';
 import { useInsets } from './SafeFooter';
 import { Button } from './ui';
@@ -55,7 +57,7 @@ export function PhotoSheet({ matchId, uid, visible, onClose, onOpenPhotos }: { m
       testID={`photo-sheet-${kind}`}
     >
       <View style={[s.icon, kind === 'camera' ? { backgroundColor: colors.primary } : { backgroundColor: colors.tint }]}>
-        <Ionicons name={kind === 'camera' ? 'camera' : 'images'} size={30} color={colors.ink} />
+        <Ionicons name={kind === 'camera' ? 'camera' : 'images'} size={30} color={colors.text} />
       </View>
       <Text style={s.tileTitle}>{kind === 'camera' ? t('match.camera') : t('liveV2.gallery')}</Text>
       <Text style={s.tileSub} numberOfLines={2}>
@@ -73,7 +75,7 @@ export function PhotoSheet({ matchId, uid, visible, onClose, onOpenPhotos }: { m
             {t('match.addPhoto')}
           </Text>
           <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel={t('common.close')} style={s.close} testID="photo-sheet-close">
-            <Ionicons name="close" size={24} color={colors.ink} />
+            <Ionicons name="close" size={24} color={colors.text} />
           </Pressable>
         </View>
         <Text style={s.note}>{t('liveV2.photoSheetNote')}</Text>
@@ -84,7 +86,7 @@ export function PhotoSheet({ matchId, uid, visible, onClose, onOpenPhotos }: { m
           <>
             <Pressable onPress={onOpenPhotos} accessibilityRole="button" style={s.stripHead} testID="photo-sheet-all">
               <Text style={s.stripTitle}>{`${t('photos.matchPhotos')} (${photos.length})`}</Text>
-              <Ionicons name="chevron-forward" size={18} color={colors.ink} />
+              <Ionicons name="chevron-forward" size={18} color={colors.text} />
             </Pressable>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
               {photos.slice(0, 10).map((p) => (
@@ -113,7 +115,7 @@ export function PhotoHeaderButton({ matchId, uid, onOpenPhotos }: { matchId: str
         style={({ pressed }) => [s.headerBtn, pressed && { opacity: 0.8 }]}
         testID="photo-button"
       >
-        <Ionicons name="camera" size={24} color={colors.white} />
+        <Ionicons name="camera" size={22} color={T().text} />
         {photos.length > 0 && (
           <View style={s.badge}>
             <Text style={s.badgeText}>{photos.length > 99 ? '99+' : photos.length}</Text>
@@ -125,9 +127,9 @@ export function PhotoHeaderButton({ matchId, uid, onOpenPhotos }: { matchId: str
   );
 }
 
-const s = StyleSheet.create({
-  scrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,31,77,0.55)' },
-  sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.white, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, ...elevation.e3 },
+const s = themed(() => StyleSheet.create({
+  scrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: colors.scrim /* 1.4.21: per-theme sheet scrim (spec v2) */ },
+  sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: colors.card, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 10, ...elevation.e3 },
   grab: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: 10 },
   title: { flex: 1, color: colors.text, fontWeight: '800', fontSize: 20 },
   close: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', marginRight: -12 },
@@ -140,7 +142,7 @@ const s = StyleSheet.create({
   stripHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 48, marginTop: 8 },
   stripTitle: { color: colors.text, fontWeight: '800', fontSize: 15 },
   thumb: { width: 64, height: 64, borderRadius: 12, backgroundColor: colors.bg },
-  headerBtn: { width: 48, height: 48, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center' },
+  headerBtn: { width: 48, height: 48, borderRadius: DAY() ? 24 : 16, backgroundColor: T().surface, borderWidth: DAY() ? 2 : 1, borderColor: DAY() ? T().outline : T().surface2, alignItems: 'center', justifyContent: 'center' }, // 1.4.22 icon button (spec §3)
   badge: { position: 'absolute', top: -4, right: -4, minWidth: 20, height: 20, borderRadius: 10, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, borderWidth: 1.5, borderColor: colors.ink },
   badgeText: { color: colors.onPrimary, fontWeight: '900', fontSize: 11 },
-});
+}));

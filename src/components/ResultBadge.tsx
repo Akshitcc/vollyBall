@@ -13,7 +13,7 @@ import type { Match } from '../core/types';
 import { translateError } from '../i18n/format';
 import { backend } from '../services/backend';
 import { confirmAsk } from '../services/dialogs';
-import { colors, radius, type } from '../theme';
+import { colors, radius, type, themed } from '../theme';
 import { Button } from './ui';
 
 export function flagText(flags: readonly FraudFlag[], t: TFunction): string {
@@ -182,12 +182,12 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
   );
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   notice: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
   badge: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderRadius: radius.md, padding: 12 },
-  panel: { backgroundColor: colors.white, borderRadius: radius.md, padding: 14, marginTop: 10, borderWidth: 1, borderColor: colors.border },
-  input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, minHeight: 72, padding: 10, color: colors.text, backgroundColor: colors.white, textAlignVertical: 'top', marginTop: 4 },
-});
+  panel: { backgroundColor: colors.card, borderRadius: radius.md, padding: 14, marginTop: 10, borderWidth: 1, borderColor: colors.border },
+  input: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, minHeight: 72, padding: 10, color: colors.text, backgroundColor: colors.card, textAlignVertical: 'top', marginTop: 4 },
+}));
 
 /**
  * 1.3.9 (V138-14): the admin's Approve / Void pair. Short button text ("Approve" / "मंज़ूर करें") with what it

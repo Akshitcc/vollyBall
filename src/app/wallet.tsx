@@ -16,7 +16,7 @@ import { RANKING_POINTS_PER_POTM, RANKING_POINTS_PER_WIN } from '../core/ranking
 import { formatWhenT } from '../i18n/format';
 import { backend, type WalletResult } from '../services/backend';
 import { useMe } from '../state/AuthContext';
-import { colors, gradients, radius, type } from '../theme';
+import { colors, gradients, radius, type, themed } from '../theme';
 
 export default function WalletScreen() {
   const { t } = useTranslation();
@@ -96,7 +96,7 @@ function HistoryRow({ h, first }: { h: WalletHistoryItem; first: boolean }) {
   return (
     <View style={[s.hRow, !first && s.hDivider]} accessible accessibilityLabel={`${title}. ${tags}. ${formatWhenT(h.at)}. ${pts}${breakdown ? ` (${breakdown})` : ''}`} testID={`wallet-history-${h.kind}-${h.matchId}`}>
       <View style={[s.hIcon, h.kind === 'bonus' && { backgroundColor: colors.warnBg }]}>
-        <Ionicons name={h.kind === 'bonus' ? 'gift-outline' : h.won ? 'trophy-outline' : 'tennisball-outline'} size={16} color={colors.ink} />
+        <Ionicons name={h.kind === 'bonus' ? 'gift-outline' : h.won ? 'trophy-outline' : 'tennisball-outline'} size={16} color={colors.text} />
       </View>
       <View style={{ flex: 1 }}>
         <Text style={[type.body, { color: colors.text, fontWeight: '700' }]} numberOfLines={2}>
@@ -125,14 +125,14 @@ function Line({ label, value, testID }: { label: string; value: string; testID?:
   );
 }
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   hero: { borderRadius: radius.lg, padding: 20, gap: 6 },
   label: { color: colors.onInkMuted, fontSize: 13, fontWeight: '700' },
   balance: { color: colors.white, fontSize: 40, fontWeight: '900' },
   note: { color: colors.onInkMuted, fontSize: 13, fontWeight: '600', flex: 1 },
-  card: { backgroundColor: colors.white, borderRadius: radius.md, padding: 14, marginTop: 12, borderWidth: 1, borderColor: colors.hairline },
+  card: { backgroundColor: colors.card, borderRadius: radius.md, padding: 14, marginTop: 12, borderWidth: 1, borderColor: colors.hairline },
   hRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, minHeight: 48 },
   hDivider: { borderTopWidth: 1, borderTopColor: colors.hairline },
   hIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.tint, alignItems: 'center', justifyContent: 'center' },
   line: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, minHeight: 40 },
-});
+}));

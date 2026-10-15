@@ -9,7 +9,8 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-na
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useReduceMotion } from '../hooks/useReduceMotion';
-import { colors, elevation, gradients, palette, radius, type } from '../theme';
+import { useHiFont } from '../theme/useHiFont';
+import { colors, elevation, gradients, palette, radius, type, themed } from '../theme';
 import { PressableScale } from './PressableScale';
 
 export function HeroHeader({ children, overlap = 0, testID, style, safeTop = true }: { children: React.ReactNode; overlap?: number; testID?: string; style?: StyleProp<ViewStyle>; safeTop?: boolean }) {
@@ -49,9 +50,10 @@ export function GlassTag({ icon, text }: { icon?: keyof typeof Ionicons.glyphMap
 }
 
 export function SectionHeader({ title, action, onAction, right, testID }: { title: string; action?: string; onAction?: () => void; right?: React.ReactNode; testID?: string }) {
+  const hf = useHiFont(); // 1.4.21: Night + Hindi headings in Mukta 800
   return (
     <View style={s.section} testID={testID}>
-      <Text style={[type.h2, { color: colors.text, flexShrink: 1 }]} accessibilityRole="header">
+      <Text style={[type.h2, { color: colors.text, flexShrink: 1 }, hf.display]} accessibilityRole="header">
         {title}
       </Text>
       <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>{right}</View>
@@ -90,7 +92,7 @@ export function EmptyCard({ icon, title, text, cta, onCta, testID }: { icon: key
   return (
     <View style={s.empty} testID={testID}>
       <View style={s.emptyIcon}>
-        <Ionicons name={icon} size={36} color={colors.ink} />
+        <Ionicons name={icon} size={36} color={colors.text} />
       </View>
       <Text style={[type.h3, { color: colors.text, textAlign: 'center', marginTop: 10 }]}>{title}</Text>
       {text ? <Text style={[type.body, { color: colors.muted, textAlign: 'center', marginTop: 4 }]}>{text}</Text> : null}
@@ -104,9 +106,9 @@ export function EmptyCard({ icon, title, text, cta, onCta, testID }: { icon: key
   );
 }
 
-export const card = { backgroundColor: colors.white, borderRadius: radius.md, padding: 14, ...elevation.e2 } as const;
+export const card = themed(() => ({ backgroundColor: colors.card, borderRadius: radius.md, padding: 14, ...elevation.e2 }));
 
-const s = StyleSheet.create({
+const s = themed(() => StyleSheet.create({
   glass: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
   glassDot: { position: 'absolute', top: 8, right: 9, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary, borderWidth: 1.5, borderColor: colors.ink },
   tag: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 28, paddingHorizontal: 10, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.14)', alignSelf: 'flex-start' },
@@ -116,8 +118,8 @@ const s = StyleSheet.create({
   sectionLinkText: { color: colors.primaryText, fontWeight: '700', fontSize: 14 },
   track: { height: 6, borderRadius: 3, backgroundColor: palette.grey200, overflow: 'visible', justifyContent: 'center' },
   fill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 3 },
-  thumb: { position: 'absolute', width: 14, height: 14, borderRadius: 7, marginLeft: -7, backgroundColor: colors.white, borderWidth: 3, borderColor: colors.primary },
+  thumb: { position: 'absolute', width: 14, height: 14, borderRadius: 7, marginLeft: -7, backgroundColor: colors.card, borderWidth: 3, borderColor: colors.primary },
   empty: { ...card, alignItems: 'center', paddingVertical: 22 },
   emptyIcon: { width: 76, height: 76, borderRadius: 38, backgroundColor: colors.tint, alignItems: 'center', justifyContent: 'center' },
   emptyCta: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14, height: 48, paddingHorizontal: 20, borderRadius: 14, backgroundColor: colors.primary, ...elevation.glowPrimary },
-});
+}));

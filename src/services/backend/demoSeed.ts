@@ -220,6 +220,33 @@ export function makeSeed(now = Date.now()): DemoDB {
     // Explicit starting lineup for set 1 (later sets reuse it until the scorer changes it).
     lineups: { '1': { A: defaultLineup(pA.map((p) => p.id)), B: defaultLineup(pB.map((p) => p.id)) } },
   });
+  // 1.4.22 (screenshots of Live scoring in both themes): a scripted live match mid set 3 – 25–21, 22–25, 19–17, sets
+  // 1–1, set 3 to 25 (the spec mockup state). The demo user (seed1, Aarav Sharma) is its scorer.
+  const scripted = (rules: typeof INDOOR_RULES, sets: [number, number][], pA: MatchPlayer[], pB: MatchPlayer[]) => {
+    let ev: MatchEvent[] = [];
+    const total = sets.reduce((n, [a, b]) => n + a + b, 0);
+    let i = 0;
+    for (const [a, b] of sets) {
+      let ra = a, rb = b;
+      while (ra + rb > 0) {
+        // alternate so the set is never won early; the leader takes the last point(s)
+        const side: Side = ra > 0 && (rb === 0 || (ra + rb) % 2 === 0 || ra - rb > 1) ? 'A' : 'B';
+        if (side === 'A') ra--; else rb--;
+        const roster = side === 'A' ? pA : pB;
+        ev = addPoint(rules, ev, side, { at: now - (total - i) * 25000, playerId: roster[i % Math.min(6, roster.length)].id, kind: kinds[i % kinds.length] });
+        i++;
+      }
+    }
+    return ev;
+  };
+  const liveSet3 = mk('match_live_set3', INDOOR_RULES, scripted(INDOOR_RULES, [[25, 21], [22, 25], [19, 17]], pA, pB), {
+    status: 'live',
+    startedAt: now - 5400000,
+    startedServerAt: now - 5400000,
+    updatedAt: now,
+    title: 'Monsoon friendly',
+    lineups: { '1': { A: defaultLineup(pA.map((p) => p.id)), B: defaultLineup(pB.map((p) => p.id)) } },
+  });
   const old1 = mk('match_old1', INDOOR_RULES, genEvents(INDOOR_RULES, 3, 400, pA, pB), {
     finishedAt: now - 3 * DAY,
     updatedAt: now - 3 * DAY,
@@ -345,7 +372,7 @@ export function makeSeed(now = Date.now()): DemoDB {
   return {
     users,
     teams,
-    matches: { [live.id]: live, [old1.id]: old1, [old2.id]: old2, [old3.id]: old3, [beach.id]: beach, [awaiting.id]: awaiting, [flagged.id]: flagged, [upcoming.id]: upcoming, [legacyGu11.id]: legacyGu11, [legacyCaptain.id]: legacyCaptain, [legacyCaptainDone.id]: legacyCaptainDone },
+    matches: { [live.id]: live, [liveSet3.id]: liveSet3, [old1.id]: old1, [old2.id]: old2, [old3.id]: old3, [beach.id]: beach, [awaiting.id]: awaiting, [flagged.id]: flagged, [upcoming.id]: upcoming, [legacyGu11.id]: legacyGu11, [legacyCaptain.id]: legacyCaptain, [legacyCaptainDone.id]: legacyCaptainDone },
     photos: demoPhotos(now, [
       [old1.id, 'seed1', 0],
       [old1.id, 'seed3', 1],

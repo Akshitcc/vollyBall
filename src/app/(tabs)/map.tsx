@@ -185,11 +185,11 @@ export default function MapScreen() {
         {near.map((i) => (
           <Card key={i.kind + i.id} onPress={() => open(`${i.kind}:${i.id}`)}>
             <Row>
-              {i.kind === 'match' && i.m.status === 'live' ? <LiveBadge /> : <Text style={{ fontSize: 18 }}>{i.kind === 'match' ? '🏐' : i.kind === 'tournament' ? '🏆' : '📍'}</Text>}
+              {i.kind === 'match' && i.m.status === 'live' ? <LiveBadge /> : <Text style={{ fontSize: 18, color: colors.text }}>{i.kind === 'match' ? '🏐' : i.kind === 'tournament' ? '🏆' : '📍'}</Text>}
               <Text style={[font.h3, { marginLeft: 8, flex: 1 }]} numberOfLines={1}>
                 {i.kind === 'match' ? `${i.m.teamA.name} ${t('common.vs')} ${i.m.teamB.name}` : i.kind === 'tournament' ? i.t.name : i.c.name}
               </Text>
-              <Text style={{ fontWeight: '900', color: colors.ink }}>{formatDistance(i.distanceKm)}</Text>
+              <Text style={{ fontWeight: '900', color: colors.text }}>{formatDistance(i.distanceKm)}</Text>
             </Row>
             <Text style={{ color: colors.muted, fontWeight: '600', marginTop: 4 }} numberOfLines={1}>
               {i.location.name}
