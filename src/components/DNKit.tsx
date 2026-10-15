@@ -31,7 +31,7 @@ export function Sticker({ children, style, fill, shadow, radius, tilt, highlight
     <View style={[{ backgroundColor: bg, borderRadius: r, borderWidth: day ? t.border.card : highlight ? 2 : 1, borderColor: bc, overflow: 'hidden' }, inner]}>{children}</View>
   );
   const wrap: ViewStyle = { marginRight: off, marginBottom: off, ...(tilt ? { transform: [{ rotate: `${tilt}deg` }] } : null) };
-  const shadowView = off ? <View pointerEvents="none" style={{ position: 'absolute', left: off, top: off, right: -off, bottom: -off, borderRadius: r, backgroundColor: t.outline }} /> : null;
+  const shadowView = off ? <View pointerEvents="none" style={{ position: 'absolute', left: off, top: off, right: -off, bottom: -off, borderRadius: r, backgroundColor: t.shadowColor }} /> : null;
   if (onPress)
     return (
       <Pressable onPress={onPress} testID={testID} accessibilityRole="button" accessibilityLabel={accessibilityLabel} style={({ pressed }) => [wrap, style, pressed && { transform: [{ scale: 0.98 }, ...(tilt ? [{ rotate: `${tilt}deg` }] : [])] }]}>
@@ -86,7 +86,7 @@ export function KButton({ title, icon, onPress, variant = 'p', testID, disabled,
       style={({ pressed }) => [{ marginRight: off, marginBottom: off, opacity: 1 }, style, pressed && { transform: [{ scale: 0.97 }] }]}>
       {({ pressed }) => (
         <>
-          {off && !pressed ? <View style={{ position: 'absolute', left: off, top: off, right: -off, bottom: -off, borderRadius: t.radius.btn, backgroundColor: t.outline }} /> : null}
+          {off && !pressed ? <View style={{ position: 'absolute', left: off, top: off, right: -off, bottom: -off, borderRadius: t.radius.btn, backgroundColor: t.shadowColor }} /> : null}
           <View style={[{ minHeight: 52, borderRadius: t.radius.btn, backgroundColor: bg, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 14 },
             day ? { borderWidth: 2, borderColor: t.outline } : p ? null : { borderWidth: 1, borderColor: t.outline },
             !day && p && t.shadow.glow ? { shadowColor: t.primary, shadowOpacity: 0.35, shadowRadius: 24, shadowOffset: { width: 0, height: 0 } } : null,

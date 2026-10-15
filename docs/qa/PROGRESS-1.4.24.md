@@ -7,5 +7,6 @@ Scope: V1423-3 (Night contrast + scan.js), V1423-2 (Hindi Ask), V1423-1 (docs). 
 - [x] V1423-1 docs: RELEASE-1.4.22 corrected (413ad3c7…, 542); RELEASE-1.4.23 present with 90e4fdfd… / a591669c… (it was written after the 1.4.23 zip, so not inside it)
 - [x] version 1.4.24 / 40; screenshots 424-* (36: timeline, player points/team-B stats, tournament/new teams, DOB picker, New match Next, map 25 km + preview, 2 Ask, abandon dialog × Day/Night × EN/HI; want-to-play skipped: no demo interest data)
 - [x] first suites run: tsc app 2 / tsc server 2 (DobPicker dataSet type, warmAskIndex logger type) → fixed (type-only), run stopped during server (our pids, verified)
-- [~] re-export web (/tmp/web424final2) → full suites (s1424) → re-scan on that final build: running in that order
-- [ ] zip (after ALL suites), APK, RELEASE-1.4.24.md
+- [x] re-export /tmp/web424final2; suites all 0 (tsc app, tsc server, jest, tz, server 361/361, rules, policy); scan on that build: checked=268 failures=0 skipped=0
+- [x] finish1424.sh DONE: zip 52ef7a22… (551 files), gradle BUILD SUCCESSFUL, APK 28d0ce0c… vc40/1.4.24, cert fac61745…, ABIs arm64-v8a + x86_64
+- [x] RELEASE-1.4.24.md written after the final zip

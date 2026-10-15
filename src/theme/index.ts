@@ -263,8 +263,8 @@ export function teamRing(teamColor: string): string | null {
  */
 export function swatchRing(teamColor: string, width = 2): { borderWidth: number; borderColor: string } | null {
   if (!/^#[0-9a-f]{6}$/i.test(teamColor)) return null;
-  // 1.4.24 (V1423-3): in Night a dot too dark for the card (#151B2E, under 3:1, e.g. navy #001F4D) gets a light ring
-  if (currentTheme() === 'night') return contrast(teamColor, '#151B2E') < 3 ? { borderWidth: width, borderColor: colors.text } : null;
+  // 1.4.24 (V1423-3): in Night a dot too dark for the card (card colour, under 3:1, e.g. navy #001F4D) gets a light ring
+  if (currentTheme() === 'night') return contrast(teamColor, colors.card) < 3 ? { borderWidth: width, borderColor: colors.text } : null;
   // near-navy (within 1.5:1 of the navy chrome/text, e.g. #001F4D at 1.24:1) -> light-blue ring
   if (contrast(teamColor, colors.ink) < 1.5) return { borderWidth: width, borderColor: palette.blueLine };
   if (contrast(teamColor, colors.white) < 3) return { borderWidth: width, borderColor: colors.muted };
@@ -317,7 +317,7 @@ export function teamGradient(teamColor: string): [string, string] {
 export function teamText(color: string, bg?: string, min = 4.5): string {
   // 1.4.23 (V1422-4): the default background follows the theme (Night card #151B2E), and on a dark background a
   // too-dark team colour is lightened (mixed toward white) instead of darkened.
-  if (bg === undefined) bg = currentTheme() === 'night' ? '#151B2E' : colors.white;
+  if (bg === undefined) bg = currentTheme() === 'night' ? colors.card : colors.white;
   if (!/^#[0-9a-f]{6}$/i.test(color)) return colors.text;
   if (contrast(color, bg) >= min) return color;
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));

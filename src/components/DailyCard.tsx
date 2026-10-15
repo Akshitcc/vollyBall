@@ -89,7 +89,7 @@ function DailyBody({ item, lang, title, onNext }: { item: DailyItem; lang: strin
         ) : null}
         <Body bold size={15} style={{ marginTop: k.day ? 8 : 10 }} testID="daily-text">{dailyText(item, lang)}</Body>
         {item.attribution ? (
-          <Body size={12} muted style={{ marginTop: 6 }} testID="daily-attribution">
+          <Body size={12} muted={!k.day} style={{ marginTop: 6 }} testID="daily-attribution">{/* 1.4.25: muted ink is 4.26:1 on the Day Ball card */}
             {item.type === 'quote' ? `— ${dailyAttribution(item, lang)}` : t('daily.source', { source: dailyAttribution(item, lang) })}
           </Body>
         ) : null}

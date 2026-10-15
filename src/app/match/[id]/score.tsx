@@ -502,7 +502,7 @@ export default function ScoreScreen() {
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
               <Ionicons name={sv.kind === 'synced' ? 'cloud-done' : sv.kind === 'syncing' ? 'cloud-upload-outline' : 'cloud-offline'} size={14} color={sv.kind === 'synced' ? (DAY() ? T().teamB : T().primary) : sv.kind === 'offline' ? T().live : T().textMuted} />
-              <Text style={[s.topSub, sv.kind === 'offline' && { color: T().live }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} testID="sync-label" accessibilityLiveRegion="polite">
+              <Text style={[s.topSub, sv.kind === 'offline' && { color: T().liveText }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8} testID="sync-label" accessibilityLiveRegion="polite">
                 {syncLabel(sv, tr)}
               </Text>
             </View>

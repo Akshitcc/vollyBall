@@ -92,8 +92,8 @@ describe('WCAG AA in both themes', () => {
     expect(SPEC_TEXT_PAIRS.some(([f]) => f === 'accent')).toBe(false);
   });
   it('applyTheme swaps the live colours', () => {
-    applyTheme('night'); expect(colors.bg).toBe('#0A0E1A'); expect(currentTheme()).toBe('night');
-    applyTheme('day'); expect(colors.bg).toBe('#FFF4E2');
+    applyTheme('night'); expect(colors.bg).toBe(THEMES.night.bg); expect(currentTheme()).toBe('night');
+    applyTheme('day'); expect(colors.bg).toBe(THEMES.day.bg);
   });
 });
 

@@ -96,8 +96,8 @@ export default function TeamPage() {
     return (
       <View testID={`team-member-${uid}`}>
         <Row style={{ paddingVertical: 10, paddingHorizontal: 14, minHeight: 64 }}>
-          <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: k.day ? k.t.teamA : k.t.surface2, borderWidth: k.day ? 2 : 0, borderColor: k.t.outline, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={[{ color: k.day ? k.t.onPrimary : k.t.teamA, fontSize: 17 }, k.f.display]}>{n}</Text>
+          <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: k.day ? k.t.teamA : k.t.surface, borderWidth: k.day ? 2 : 1.5, borderColor: k.day ? k.t.outline : k.t.teamAText, /* 1.4.25: bright Night tokens */ alignItems: 'center', justifyContent: 'center' }}>
+            <Text style={[{ color: k.day ? k.t.onPrimary : k.t.teamAText, fontSize: 17 }, k.f.display]}>{n}</Text>
           </View>
           <View style={{ flex: 1, marginLeft: 12 }}>
             <Row style={{ gap: 6 }}>

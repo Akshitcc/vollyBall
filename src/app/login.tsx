@@ -213,8 +213,8 @@ export default function Login() {
 function ErrorLine({ text }: { text: string }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 }} accessibilityLiveRegion="polite">
-      <Ionicons name="alert-circle" size={16} color={T().live} />
-      <Text style={{ color: T().live, fontWeight: '600', fontSize: 13, flex: 1 }}>{text}</Text>
+      <Ionicons name="alert-circle" size={16} color={T().liveText} />
+      <Text style={{ color: T().liveText, fontWeight: '600', fontSize: 13, flex: 1 }}>{text}</Text>
     </View>
   );
 }

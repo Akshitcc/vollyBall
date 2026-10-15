@@ -45,6 +45,6 @@ describe.each(['day', 'night'] as const)('%s', (name) => {
   });
   it('sheet scrim per theme', async () => {
     const r = await wrap(<SheetScrim testID="scrim" />);
-    expect(flat(r.getByTestId('scrim', { includeHiddenElements: true }).props.style).backgroundColor).toBe(name === 'day' ? 'rgba(27,19,64,0.55)' : 'rgba(3,5,12,0.72)');
+    expect(flat(r.getByTestId('scrim', { includeHiddenElements: true }).props.style).backgroundColor).toBe(tokens[name].scrim);
   });
 });

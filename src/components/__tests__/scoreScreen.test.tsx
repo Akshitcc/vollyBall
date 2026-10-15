@@ -323,7 +323,7 @@ test('text on the team colours uses onColor; the SERVING pill stays distinct on 
   // A serves first: the pill is light blue with a ring in the team's onColor (navy on orange), so it is ≥3:1 from the team colour
   const pill = flat(screen.getByTestId('serving-A').props.style);
   expect(pill.backgroundColor).toBe(require('../../theme/tokens').tokens.day.accent); // 1.4.22 spec: Day SERVING pill = Ball
-  expect(pill.borderColor).toBe(require('../../theme').colors.ink); // 1.4.21 theme token
+  expect(pill.borderColor).toBe(require('../../theme/tokens').tokens.day.outline); // 1.4.25: bright tokens split outline from ink
 });
 
 // 1.4.3 (QA V142-7): once the winning rally is in, the ⋮ menu offers nothing that changes the match
