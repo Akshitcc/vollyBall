@@ -1,4 +1,5 @@
 import { HomeGreeting } from '../../components/HomeGreeting';
+import { placeLabel } from '../../core/geo';
 import { Ionicons } from '@expo/vector-icons';
 import { toPassText } from '../../components/rankText';
 import { router } from 'expo-router';
@@ -164,7 +165,7 @@ export default function Home() {
             </Text>
           </Row>
           <P muted style={{ marginTop: 4 }}>
-            {formatWhen(c.when)} · {c.location.name}
+            {formatWhen(c.when)} · {placeLabel(c.location)}
           </P>
           {c.message ? <P style={{ marginTop: 4, fontStyle: 'italic' }}>“{c.message}”</P> : null}
           <Row style={{ gap: 10, marginTop: 8 }}>
@@ -260,7 +261,7 @@ function UpcomingRow({ m }: { m: Match }) {
       </View>
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Body bold size={15} numberOfLines={1}>{m.teamA.name} {t('common.vs')} {m.teamB.name}</Body>
-        <Body muted size={12} numberOfLines={1}>{formatWhen(m.scheduledAt)}{m.location ? ` · ${m.location.name}` : ''}</Body>
+        <Body muted size={12} numberOfLines={1}>{formatWhen(m.scheduledAt)}{placeLabel(m.location) ? ` · ${placeLabel(m.location)}` : ''}</Body>
       </View>
       <Ionicons name="chevron-forward" size={18} color={k.t.text} />
     </Sticker>

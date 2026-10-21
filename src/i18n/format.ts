@@ -148,6 +148,8 @@ export function dataLabel(s: string | null | undefined, t: TFunction = tr): stri
   const key = DATA_LABELS[s];
   if (key) return t(key);
   // Tournament fixtures are titled "<tournament> · <round>" (core roundName, English).
+  const g = s.match(/^(.*) · Group ([A-H])$/); // 1.4.27 groups format
+  if (g) return `${g[1]} · ${t('tournament.group', { group: g[2] })}`;
   const m = s.match(/^(.*) · (?:(Final)|(Semi-finals)|(Quarter-finals)|Round (\d+))$/);
   if (m) {
     const round = m[2] ? t('rounds.final') : m[3] ? t('rounds.semi') : m[4] ? t('rounds.quarter') : t('rounds.round', { n: Number(m[5]) });
@@ -159,6 +161,9 @@ export function dataLabel(s: string | null | undefined, t: TFunction = tr): stri
 /** Map known (English) backend / Firebase errors to the current language. Unknown messages pass through. */
 /** Error codes from src/core/validate.ts, the API server (`error` in the JSON body) and the app. */
 const CODED = new Set([
+  // 1.4.26 fixtures / saves, 1.4.27 groups format
+  'fixture_locked', 'fixture_unknown', 'fixture_taken', 'fixture_not_ready', 'fixture_teams', 'fixture_match_mismatch', 'progress_stale', 'progress_seq_required', 'idempotency_mismatch',
+  'groups_only', 'groups_advance', 'groups_team', 'groups_count', 'groups_fixture', 'groups_seed', 'groups_too_few', 'groups_too_small',
   'text_empty', 'text_too_short', 'text_too_long', 'text_control', 'text_bidi', 'time_in_past', 'time_invalid', 'end_before_start',
   'photo_type', 'photo_empty', 'photo_truncated', 'color_invalid', 'photo_too_large', 'photo_url', 'photo_upload_failed', 'rules_invalid', 'team_name_mismatch',
   'need_two_teams', 'duplicate_teams', 'too_many_teams', 'place_invalid', 'events_invalid',

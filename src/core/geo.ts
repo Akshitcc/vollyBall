@@ -51,3 +51,14 @@ export function fitRadiusKm(center: GeoPoint, points: readonly GeoPoint[], minKm
   const deg = points.reduce((m, p) => Math.max(m, Math.abs(p.lat - center.lat), Math.abs(p.lng - center.lng)), 0);
   return Math.min(10000, Math.max(minKm, Math.ceil(deg * 111 * pad)));
 }
+
+/**
+ * 1.4.26 (Tester E2E-7): the label of a stored place – its name, or (a legacy / blank name) the coordinates, so a
+ * card never shows an empty "· " or a blank location row.
+ */
+export function placeLabel(p: { name?: string | null; lat?: number | null; lng?: number | null } | null | undefined): string {
+  if (!p) return '';
+  const n = (p.name ?? '').trim();
+  if (n) return n;
+  return typeof p.lat === 'number' && typeof p.lng === 'number' && Number.isFinite(p.lat) && Number.isFinite(p.lng) ? `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}` : '';
+}

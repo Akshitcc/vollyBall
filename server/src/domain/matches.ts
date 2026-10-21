@@ -22,7 +22,7 @@ import { maxEventsOf } from '../../../src/core/lifecycle';
 import { abandonPatch, ABANDON_MESSAGES, answerAbandon, needsAdminAction, planAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../../src/core/abandon';
 import { CodedError } from '../../../src/core/codedError';
 import { NOT_TOURNAMENT_ADMIN_MESSAGE, tournamentLinkProblem } from '../../../src/core/tournamentAdmin';
-import { tournamentOwner } from './tournaments';
+import { FIXTURE_NOT_READY, FIXTURE_TEAMS, fixtureTeamsNow, tournamentOwner } from './tournaments';
 import { REPAIR_INVALID, REPAIR_MESSAGES, repairPatch, type RepairFix } from '../../../src/core/verdictRepair';
 import { eligibleHandoffAdmins, HANDOVER_MESSAGES, handoverProblem, reassignProblem, reassignRecord } from '../../../src/core/scorerHandoff';
 import { reportAbandon } from '../../../src/core/abandon';
@@ -47,6 +47,7 @@ import {
 } from '../../../src/core/antifraud';
 import type { MatchCaptains, MatchVerification, VerificationStatus } from '../../../src/core/types';
 import { isAdmin } from '../context';
+import { createHash } from 'node:crypto';
 import { canonical, changedKeys, insertRuleSet, loadRuleSets, minus, newId, nowDate, txRetry, placeCols, placeFromRow, toDate, toMs, type Trx } from './util';
 
 export const MATCH_NO_WINNER = 'match_no_winner';
@@ -521,6 +522,8 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Stored | nu
     was_won: before?.wasWon || after.status === 'finished' || state.winner ? 1 : 0,
     summary: JSON.stringify(summary),
     updated_at: now,
+    // 1.4.27 (V1426-2): a new scorer starts a new save sequence (their device and clock are not the old scorer's)
+    ...(before && before.scorerId !== after.scorerId ? { progress_seq: null } : {}),
   };
   if (!before) {
     await trx('matches').insert({ id, ...row, rule_set_id: ruleSetId, version: 1, created_at: now });
@@ -645,7 +648,30 @@ function notifyLive(s: Services, m: Match) {
 }
 
 /** matches create: createdBy == uid() && scorerId is string && uid() in participantIds */
-export async function createMatch(s: Services, viewer: Identity, input: Doc, fixedId?: string): Promise<string> {
+/** 1.4.26 (DB-1): Idempotency-Key of a match create (same format as the photo queue's). */
+export const MATCH_IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{8,64}$/;
+export const FIXTURE_UNKNOWN = 'fixture_unknown';
+export const FIXTURE_TAKEN = 'fixture_taken';
+export const PROGRESS_STALE = 'progress_stale';
+export const PROGRESS_SEQ_REQUIRED = 'progress_seq_required';
+export const IDEMPOTENCY_MISMATCH = 'idempotency_mismatch';
+export const IDEMPOTENCY_CONFLICT = 'idempotency_conflict';
+
+/** 1.4.26 (DB-2): locks the tournament, checks the fixture exists and has no match that still counts. */
+async function claimFixture(trx: Trx, tournamentId: string, fixtureKey: string, teams?: { A?: string | null; B?: string | null }) {
+  await trx('tournaments').where({ id: tournamentId }).forUpdate().first('id');
+  const f = await trx('fixtures').where({ tournament_id: tournamentId, fixture_key: fixtureKey }).first('match_id');
+  if (!f) throw new HttpError(400, FIXTURE_UNKNOWN, 'This fixture is not part of the tournament');
+  const active = await trx('matches').where({ tournament_id: tournamentId, fixture_key: fixtureKey }).whereNot('status', 'abandoned').first('id');
+  if (active) throw new HttpError(409, FIXTURE_TAKEN, 'This fixture already has a match', { matchId: active.id });
+  // 1.4.26 (E2E-3): only a ready fixture (both sides decided), played by exactly its teams (home = A, away = B)
+  const now = (await fixtureTeamsNow(trx, tournamentId)).get(fixtureKey);
+  if (!now?.home || !now.away) throw new HttpError(409, FIXTURE_NOT_READY, 'This fixture is not ready yet: a team is still to be decided');
+  if (teams && (teams.A !== now.home || teams.B !== now.away))
+    throw new HttpError(400, FIXTURE_TEAMS, 'A fixture match must be played by the fixture\'s two teams', { home: now.home, away: now.away });
+}
+
+export async function createMatch(s: Services, viewer: Identity, input: Doc, fixedId?: string, idempotencyKey?: string): Promise<string> {
   const rule = 'matches.create';
   if (input.createdBy !== viewer.uid) throw forbidden(rule, 'createdBy must be you');
   if (!input.participantIds.includes(viewer.uid)) throw forbidden(rule, 'You must be a participant of a match you create');
@@ -662,12 +688,47 @@ export async function createMatch(s: Services, viewer: Identity, input: Doc, fix
     const lp = tournamentLinkProblem(null, input, viewer.uid, () => owner);
     if (lp) throw new HttpError(403, lp, NOT_TOURNAMENT_ADMIN_MESSAGE);
   }
+  // 1.4.26 (DB-1): a retried / double-tapped create with the same Idempotency-Key returns the first match
+  if (idempotencyKey != null && !MATCH_IDEMPOTENCY_KEY_RE.test(idempotencyKey)) throw badRequest('Idempotency-Key must be 8-64 letters, digits, _ or -');
+  // 1.4.27 (V1426-1): the key is decided before the fixture lock and atomically – see 0025_match_create_claims.sql.
+  // (V1426-5) the same key with a different body is refused instead of answering with the first match.
+  const bodyHash = idempotencyKey ? createHash('sha256').update(canonical(input)).digest('hex') : '';
+  const known = async () => {
+    if (!idempotencyKey) return undefined;
+    const k = await s.db('match_create_keys').where({ user_id: viewer.uid, idem_key: idempotencyKey }).first('match_id');
+    if (!k) return undefined;
+    const c = await s.db('match_create_claims').where({ user_id: viewer.uid, idem_key: idempotencyKey }).first('body_hash');
+    if (c && c.body_hash !== bodyHash) throw new HttpError(422, IDEMPOTENCY_MISMATCH, 'This Idempotency-Key was already used with a different request body', { matchId: k.match_id as string });
+    return k.match_id as string;
+  };
+  const existing = await known();
+  if (existing) return existing;
   const id = fixedId ?? newId(); // fixedId: seeds only
   const doc: Doc = { ...input, interestedIds: input.interestedIds ?? [], lineups: input.lineups ?? null, captains: input.captains ?? null };
   delete (doc as Partial<Match>).playerOfMatchId; // set only through PUT /player-of-match
   // The server stamps finishedAt (seeds keep their historical times).
   if (!fixedId) doc.finishedAt = serverFinishedAt(null, doc.status);
-  await txRetry(s.db, (trx) => writeMatch(s, trx, id, null, doc, 'create', { seed: !!fixedId }));
+  try {
+    await txRetry(s.db, async (trx) => {
+      // 1.4.27 (V1426-1): first write – a concurrent request with the same key waits here on the primary key
+      if (idempotencyKey) await trx('match_create_claims').insert({ user_id: viewer.uid, idem_key: idempotencyKey, body_hash: bodyHash, created_at: nowDate() });
+      // 1.4.26 (DB-2): a fixture is played once – it must exist, and a second start (double tap, two devices) is refused
+      // while its match isn't abandoned; the fixture is claimed in the same transaction (the app's PATCH then changes nothing)
+      if (!fixedId && doc.fixtureId) await claimFixture(trx, doc.tournamentId as string, doc.fixtureId, { A: doc.teamA.teamId ?? null, B: doc.teamB.teamId ?? null });
+      await writeMatch(s, trx, id, null, doc, 'create', { seed: !!fixedId });
+      if (!fixedId && doc.fixtureId) await trx('fixtures').where({ tournament_id: doc.tournamentId, fixture_key: doc.fixtureId }).update({ match_id: id });
+      if (idempotencyKey) await trx('match_create_keys').insert({ user_id: viewer.uid, idem_key: idempotencyKey, match_id: id, created_at: nowDate() });
+    });
+  } catch (e) {
+    // the same key at once: the waiters get the first request's match (or 422 for another body)
+    if ((e as { code?: string }).code === 'ER_DUP_ENTRY' && idempotencyKey) {
+      const raced = await known();
+      if (raced) return raced;
+      // the claim outlived its match (the match was deleted): the key can't be reused
+      throw new HttpError(409, IDEMPOTENCY_CONFLICT, 'This Idempotency-Key was already used for a match that no longer exists');
+    }
+    throw e;
+  }
   const m = await getMatch(s, id, viewer);
   publishMatch(s, m, id);
   if (m && m.status === 'live') notifyLive(s, m);
@@ -711,10 +772,19 @@ export async function patchMatch(s: Services, viewer: Identity, id: string, patc
 }
 
 /** Scorer saving the score (old saveMatchProgress). Summary and status are derived on the server. */
-export async function saveProgress(s: Services, viewer: Identity, id: string, p: { events: MatchEvent[]; startedAt?: number | null; finishedAt?: number | null }) {
+export async function saveProgress(s: Services, viewer: Identity, id: string, p: { events: MatchEvent[]; startedAt?: number | null; finishedAt?: number | null; seq?: number }) {
   let wentLive = false;
   await txRetry(s.db, async (trx) => {
-    if (!(await trx('matches').where({ id }).forUpdate().first('id'))) throw notFound('Match not found');
+    const locked = await trx('matches').where({ id }).forUpdate().first('id', 'progress_seq', 'scorer_id');
+    if (!locked) throw notFound('Match not found');
+    // 1.4.26 (DB-4): an older state delivered after a newer one (same or another device of the scorer) never
+    // overwrites it; saves without a sequence (older apps) keep the last-writer-wins behaviour
+    if (p.seq != null && locked.scorer_id === viewer.uid && locked.progress_seq != null && p.seq < Number(locked.progress_seq))
+      throw new HttpError(409, PROGRESS_STALE, 'A newer score is already saved', { seq: Number(locked.progress_seq) });
+    // 1.4.27 (V1426-5): once a sequenced client has saved, an unsequenced save could overwrite newer rallies – refused
+    // (an older app that never sends one keeps last-writer-wins on its own matches, where progress_seq stays NULL)
+    if (p.seq == null && locked.scorer_id === viewer.uid && locked.progress_seq != null)
+      throw new HttpError(409, PROGRESS_SEQ_REQUIRED, 'Update the app to keep scoring this match', { seq: Number(locked.progress_seq) });
     const [current] = await loadMatches(s, trx, [id], { uid: '\u0000internal', phone: null });
     const full = await withPrivateStream(trx, current);
     const before = storedOf(full);
@@ -732,6 +802,7 @@ export async function saveProgress(s: Services, viewer: Identity, id: string, p:
     };
     const b = decideMatchUpdate(before, after, viewer);
     await writeMatch(s, trx, id, before, after, b);
+    if (p.seq != null) await trx('matches').where({ id }).update({ progress_seq: p.seq });
     // QA NB-R3: a confirmed Player of the Match is locked. Undoing the winning rally re-opens the
     // match but keeps the POTM (it can't be cleared, re-picked or moved to someone else), so the
     // 24 h window can't be restarted by undo + re-finish.
@@ -921,7 +992,10 @@ async function writeAction(trx: Trx, id: string, _m: Match, patch: Partial<Match
   if (patch.abandonRequest !== undefined) row.abandon_request = patch.abandonRequest == null ? null : JSON.stringify(patch.abandonRequest);
   if (patch.resolution !== undefined) row.resolution = patch.resolution == null ? null : JSON.stringify(patch.resolution);
   if (patch.scorerReassign !== undefined) row.scorer_reassign = patch.scorerReassign == null ? null : JSON.stringify(patch.scorerReassign);
-  if (patch.scorerId !== undefined) row.scorer_id = patch.scorerId;
+  if (patch.scorerId !== undefined) {
+    row.scorer_id = patch.scorerId;
+    row.progress_seq = null; // 1.4.27 (V1426-2): handoff / reassign -> the new scorer starts a new save sequence
+  }
   // 1.4.6 (QA V145-2/5/12): re-open epoch (+ the cleared verdict / review), append-only history, request rate limit
   if (patch.reopenEpoch !== undefined) row.reopen_epoch = patch.reopenEpoch ?? 0;
   if (patch.verification === null)

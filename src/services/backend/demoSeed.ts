@@ -63,23 +63,37 @@ export const DEMO_SCENES = [
  * QA B121-4: the caption is centred and kept inside the middle 480 px, so a square (cover) crop of the
  * 640×480 picture never cuts its first letters; Hindi captions when the app is in Hindi.
  * QA C130-6 (1.3.1): the caption sits on a dark scrim band (white text, ≥ 4.5:1 on every scene, see
- * contrast.test.ts) and starts lower, so tall Devanagari marks ("स्पाइक!") have room above them.
+ * contrast.test.ts).
+ * 1.4.27 (V1425-4): at 360 px the photo tiles cut the tops of Devanagari ("स्पाइक!", "ट्रॉफ़ी"): the band now has a
+ * line box of 1.4 × the font size plus padding, sits inside the vertical safe zone of any crop up to 16:9 (y 60–420),
+ * the baseline leaves 1.1 em above it for matras, and the ball is drawn below the band. English is bigger (56 vs 44).
  */
-export const DEMO_CAPTION = { scrim: '#000000', scrimOpacity: 0.62, fg: '#FFFFFF', bandY: 20, bandH: 96, baseline: 84 } as const;
+export const DEMO_CAPTION = { scrim: '#000000', scrimOpacity: 0.62, fg: '#FFFFFF', bandY: 64, pad: 12, lineHeight: 1.4, fontSize: { en: 56, hi: 44 }, maxWidth: 480 } as const;
+export function demoCaptionBox(lang: string = 'en'): { font: number; bandH: number; baseline: number } {
+  const C = DEMO_CAPTION;
+  const font = lang.startsWith('hi') ? C.fontSize.hi : C.fontSize.en;
+  const line = Math.round(font * C.lineHeight);
+  return { font, bandH: line + 2 * C.pad, baseline: C.bandY + C.pad + Math.round(font * 1.1) };
+}
 export function demoPhotoUrl(i: number, lang: string = 'en'): string {
   const [bg, fg, en, hi] = DEMO_SCENES[i % DEMO_SCENES.length];
   const label = lang.startsWith('hi') ? hi : en;
   const C = DEMO_CAPTION;
+  const box = demoCaptionBox(lang);
+  // squeeze only a label that would be wider than the safe width (about 0.62 em per character)
+  const fit = label.length * box.font * 0.62 > C.maxWidth ? ` textLength="${C.maxWidth}" lengthAdjust="spacingAndGlyphs"` : '';
+  const bx = 200 + (i % 3) * 120;
+  const by = C.bandY + box.bandH + 54 + (i % 2) * 16; // ball below the band
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">` +
     `<rect width="640" height="480" fill="${bg}"/>` +
     `<rect x="40" y="300" width="560" height="140" fill="none" stroke="${fg}" stroke-width="6"/>` +
     `<line x1="320" y1="220" x2="320" y2="440" stroke="${fg}" stroke-width="6"/>` +
     `<line x1="120" y1="230" x2="520" y2="230" stroke="${fg}" stroke-width="4" stroke-dasharray="12 8"/>` +
-    `<circle cx="${200 + (i % 3) * 120}" cy="${130 + (i % 2) * 30}" r="42" fill="#FFFFFF" stroke="#111111" stroke-width="5"/>` +
-    `<path d="M${200 + (i % 3) * 120 - 42} ${130 + (i % 2) * 30} q42 -28 84 0 M${200 + (i % 3) * 120} ${88 + (i % 2) * 30} q-28 42 0 84" fill="none" stroke="#111111" stroke-width="4"/>` +
-    `<rect x="0" y="${C.bandY}" width="640" height="${C.bandH}" fill="${C.scrim}" fill-opacity="${C.scrimOpacity}"/>` +
-    `<text x="320" y="${C.baseline}" text-anchor="middle" textLength="${Math.min(400, label.length * 30)}" lengthAdjust="spacingAndGlyphs" font-family="sans-serif" font-size="44" font-weight="900" fill="${C.fg}">${label}</text></svg>`;
+    `<circle cx="${bx}" cy="${by}" r="42" fill="#FFFFFF" stroke="#111111" stroke-width="5"/>` +
+    `<path d="M${bx - 42} ${by} q42 -28 84 0 M${bx} ${by - 42} q-28 42 0 84" fill="none" stroke="#111111" stroke-width="4"/>` +
+    `<rect x="0" y="${C.bandY}" width="640" height="${box.bandH}" fill="${C.scrim}" fill-opacity="${C.scrimOpacity}"/>` +
+    `<text x="320" y="${box.baseline}" text-anchor="middle"${fit} font-family="sans-serif" font-size="${box.font}" font-weight="900" fill="${C.fg}">${label}</text></svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 /** Seed photo id -> its scene, so demo mode can re-draw the caption in the current language. */

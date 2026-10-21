@@ -1,4 +1,6 @@
 /** Match page: real-time scoreboard for followers, stats, timeline, photos. */
+import { placeLabel } from '../../../core/geo';
+import { statusKey } from '../../../core/matchTiming';
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -231,7 +233,7 @@ export default function MatchPage() {
         >
           <Row style={{ marginBottom: 8 }}>
             <Ionicons name="location" size={18} color={colors.primaryText} />
-            <Text style={[font.body, { marginLeft: 6, flex: 1, fontWeight: '700' }]}>{m.location.name}</Text>
+            <Text style={[font.body, { marginLeft: 6, flex: 1, fontWeight: '700' }]}>{placeLabel(m.location)}</Text>
             <Text style={{ color: colors.primaryText, fontWeight: '800' }}>{tr('match.directions')}</Text>
           </Row>
         </Pressable>
@@ -488,7 +490,7 @@ function Timeline({ m, nameOf }: { m: Match; nameOf: (s: Side) => string }) {
 }
 
 function statusLabel(m: Match, t: TFunction) {
-  return matchStatusLabel(m.status, t);
+  return m.status === 'scheduled' ? t(statusKey(m)) : matchStatusLabel(m.status, t); // 1.4.26 (E2E-8)
 }
 
 const hs = themed(() => StyleSheet.create({

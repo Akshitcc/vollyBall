@@ -1487,17 +1487,19 @@ service cloud.firestore {
 
     // ---------- tournaments ----------
     // Tournament teams must be registered teams with minPlayers() members. Rules have no loops and
-    // may read 10 documents per request, so a tournament has at most 10 teams (src/core/limits.ts
-    // MAX_TOURNAMENT_TEAMS, same cap in the app and the API, QA G8 retest 217) and EVERY team is
-    // checked here (1 read each) on create and whenever teams[] changes. Every fixture match is
-    // then created through the matches rules above, which check the team exists and that every
-    // player is one of its members.
+    // may read 10 documents per request. 1.4.27 (Akshit, E2E-4): a tournament has up to 32 teams
+    // (src/core/limits.ts MAX_TOURNAMENT_TEAMS, same cap in the app and the API). The first 10 teams
+    // are read here (1 read each) on create and whenever teams[] changes; ALL 32 ids are format-checked
+    // and checked for duplicates. Every fixture match is created through the matches rules above,
+    // which check the team exists and that every player is one of its members, so a team beyond the
+    // 10th that is not a real team can never get a match. The API server checks every team.
+    // 1.4.27: the ids are format-checked once for the whole list (tournamentTeamIdsUnique / listIdsOk) instead of
+    // per team, which keeps a 10-team write inside the 1000-expression budget.
     function tTeamOk(t) {
-      return t is map && idOk(t.id)
-        && get(/databases/$(database)/documents/teams/$(t.id)).data.memberIds.size() >= minPlayers();
+      return get(/databases/$(database)/documents/teams/$(t.id)).data.memberIds.size() >= minPlayers();
     }
     function tournamentTeamsOk(ts) {
-      return ts is list && ts.size() >= 2 && ts.size() <= 10
+      return ts is list && ts.size() >= 2 && ts.size() <= 32
         && tTeamOk(ts[0]) && tTeamOk(ts[1])
         && (ts.size() <= 2 || tTeamOk(ts[2]))
         && (ts.size() <= 3 || tTeamOk(ts[3]))
@@ -1508,17 +1510,24 @@ service cloud.firestore {
         && (ts.size() <= 8 || tTeamOk(ts[8]))
         && (ts.size() <= 9 || tTeamOk(ts[9]));
     }
-    // QA G8: 2 to 10 teams, no team twice (all ids compared), end on or after start, a new start
-    // date not in the past.
+    // QA G8: 2 to 32 teams (1.4.27), no team twice (all ids compared), end on or after start, a new start
+    // date not in the past. The ids are taken 12 at a time (playerIds handles up to 12; list slices).
+    function teamIds32(ts) {
+      let n = ts.size();
+      return n <= 12 ? playerIds(ts)
+        : (n <= 24 ? playerIds(ts[0:12]).concat(playerIds(ts[12:n]))
+          : playerIds(ts[0:12]).concat(playerIds(ts[12:24])).concat(playerIds(ts[24:n])));
+    }
     function tournamentTeamIdsUnique(ts) {
-      let ids = playerIds(ts);
-      return ts.size() <= 10 && ids.toSet().size() == ids.size();
+      let ids = teamIds32(ts);
+      return ts.size() <= 32 && ids.toSet().size() == ids.size() && listIdsOk(ids);
     }
     function tournamentOk(d, ks) {
       return d.keys().hasOnly(['name', 'organizerId', 'format', 'rules', 'startDate', 'endDate', 'location', 'teams',
-            'fixtures', 'status', 'createdAt', 'updatedAt'])
+            'fixtures', 'status', 'createdAt', 'updatedAt', 'advance'])
         && (!ks.hasAny(['name']) || nameOk(d.name, 3, 80))
-        && (!ks.hasAny(['format']) || d.format in ['knockout', 'league'])
+        && (!ks.hasAny(['format']) || d.format in ['knockout', 'league', 'groups'])
+        && (!ks.hasAny(['advance']) || d.advance in [1, 2])
         && (!ks.hasAny(['status']) || d.status in ['registration', 'running', 'finished'])
         && (!ks.hasAny(['rules']) || rulesOk(d.rules))
         && (!ks.hasAny(['location']) || placeOk(d.location))

@@ -49,11 +49,15 @@ export const MAX_PHOTOS_PER_MATCH = 50;
 /** Photos picked at once from the gallery (services/camera MAX_GALLERY_PICK). */
 export const MAX_PHOTOS_PER_BATCH = 10;
 /**
- * Max teams in a tournament (QA G8, retest 217): the Firestore rules can read 10 documents per
- * request, so they check registration (1 read per team) and duplicates for every team only up to
- * 10. The app, the API server (schemas.ts tournamentSchema) and the rules all use this cap.
+ * Max teams in a tournament. 1.4.27 (Akshit, E2E-4): raised from 10 to 32 in the app, the API server
+ * (schemas.ts tournamentSchema), the demo and the Firestore rules. The rules can read only 10 documents per request,
+ * so they check registration (1 read per team) for the first 10 teams; every team id is format-checked and
+ * duplicates are refused for all 32, and every fixture match is created through the match rules, which check its
+ * team and members. The API server checks every team.
  */
-export const MAX_TOURNAMENT_TEAMS = 10;
+export const MAX_TOURNAMENT_TEAMS = 32;
+/** 1.4.27: the Firestore rules read (get) the team documents of this many tournament teams. */
+export const RULES_TEAM_READS = 10;
 /**
  * Team / side colours: exactly #RRGGBB (QA retest 217 #5). The same pattern in the app
  * (validate.ts), the API (schemas.ts hexColor) and firestore.rules (colorOk, sideOk).

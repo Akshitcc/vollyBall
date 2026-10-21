@@ -144,6 +144,8 @@ export const progressSchema = z.object({
   status: z.enum(['scheduled', 'live', 'finished', 'abandoned']).optional(),
   startedAt: ms.nullable().optional(),
   finishedAt: ms.nullable().optional(),
+  /** 1.4.26 (DB-4): the app's save sequence for this match (monotonic per device; a lower one than stored is stale). */
+  seq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
 });
 
 /** POST /me/terms/accept – exactly the current version (checked in domain/terms.ts). */
@@ -229,7 +231,8 @@ export const challengePatchSchema = z
   .object({ status: z.enum(['pending', 'accepted', 'declined', 'cancelled']), matchId: z.string().max(64).nullable() })
   .partial();
 
-export const tournamentTeamSchema = z.object({ id: z.string().min(1).max(64), name: text('sideName'), color: hexColor });
+const groupLetter = z.string().regex(/^[A-H]$/); // 1.4.27 groups format
+export const tournamentTeamSchema = z.object({ id: z.string().min(1).max(64), name: text('sideName'), color: hexColor, group: groupLetter.optional() });
 export const fixtureSchema = z.object({
   id: z.string().min(1).max(64),
   round: z.number().int().min(1).max(999),
@@ -239,11 +242,15 @@ export const fixtureSchema = z.object({
   homeFrom: z.string().max(64).optional(),
   awayFrom: z.string().max(64).optional(),
   matchId: z.string().max(64).optional(),
+  group: groupLetter.optional(),
+  homeSeed: z.string().regex(/^[A-H][1-4]$/).optional(),
+  awaySeed: z.string().regex(/^[A-H][1-4]$/).optional(),
 });
 const tournamentFields = {
   name: text('tournamentName'),
   organizerId: id,
-  format: z.enum(['knockout', 'league']),
+  format: z.enum(['knockout', 'league', 'groups']),
+  advance: z.number().int().min(1).max(2).optional(),
   rules: ruleSetSchema,
   startDate: ms,
   endDate: ms,

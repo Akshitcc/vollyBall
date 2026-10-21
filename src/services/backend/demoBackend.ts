@@ -1,3 +1,7 @@
+import { FIXTURE_LOCKED, FIXTURE_UNKNOWN, fixtureStartProblem, lockedFixtureChange } from '../../core/fixtureLock';
+import { groupsProblem } from '../../core/groups';
+import { fixtureResultFromMatch } from '../../core/results';
+import type { FixtureResult } from '../../core/tournament';
 import { askLocally } from '../askLocal';
 import { assertSupportImage, checkSupportStatus, checkSupportTicket, SUPPORT_IMAGE_TYPES, supportRateWait, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
 import { checkFeedback, REVIEW_LAST_ASKED_PREFIX } from '../../core/reviewPrompt';
@@ -13,7 +17,7 @@ import { repairPatch, type RepairFix } from '../../core/verdictRepair';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DEMO_ADMIN_UIDS, DEMO_MODE, DEMO_OTP } from '../config';
 import { addPoint, computeState, summarize, type Side } from '../../core/scoring';
-import { assertTournamentAdmin, guardTournamentEdit, NOT_TOURNAMENT_ADMIN, NOT_TOURNAMENT_ADMIN_MESSAGE, TOURNAMENT_LINK_KEYS, tournamentLinkProblem } from '../../core/tournamentAdmin';
+import { assertTournamentAdmin, claimedTournamentMatches, guardTournamentEdit, NOT_TOURNAMENT_ADMIN, NOT_TOURNAMENT_ADMIN_MESSAGE, TOURNAMENT_LINK_KEYS, tournamentLinkProblem } from '../../core/tournamentAdmin';
 import { assertRoster, TEAM_SIZE_MODES, canonicalParticipants, challengeProblem, isAbandonOnly, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, teamCanPlay, TEAM_TOO_SMALL_MESSAGE, tournamentTeamsProblem } from '../../core/roster';
 import type { Challenge, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
 import { DEMO_QA_ADMIN, DemoDB, demoPhotoUrl, demoQaAdminProfile, makeSeed, refreshSeedColours, SEED_PHOTO_SCENES } from './demoSeed';
@@ -83,6 +87,15 @@ function toDataUrl(b: Blob): Promise<string> {
     r.readAsDataURL(b);
   });
 }
+
+/** 1.4.26 (E2E-2/3): plain messages for the fixture codes (translated by code in i18n/format). */
+const FIXTURE_MESSAGES: Record<string, string> = {
+  fixture_locked: 'This fixture has a result and can no longer be changed',
+  fixture_unknown: 'This fixture is not part of the tournament',
+  fixture_taken: 'This fixture already has a match',
+  fixture_not_ready: 'This fixture is not ready yet: a team is still to be decided',
+  fixture_teams: "A fixture match must be played by the fixture's two teams",
+};
 
 export class DemoBackend implements Backend {
   readonly mode = 'demo' as const;
@@ -448,6 +461,13 @@ export class DemoBackend implements Backend {
     // 1.4.19: only the tournament's owner links a match to it (the link feeds the standings)
     const lp = tournamentLinkProblem(null, m0, this.authUser?.uid, (tid) => this.db.tournaments[tid]);
     if (lp) throw new CodedError(lp, NOT_TOURNAMENT_ADMIN_MESSAGE);
+    // 1.4.26 (E2E-3): a ready fixture only, once, by exactly its two teams (core/fixtureLock, like the API)
+    if (m0.tournamentId && m0.fixtureId) {
+      const t = this.db.tournaments[m0.tournamentId];
+      const active = Object.values(this.db.matches).some((x) => x.tournamentId === m0.tournamentId && x.fixtureId === m0.fixtureId && x.status !== 'abandoned');
+      const fp = t ? fixtureStartProblem(t, this.fixtureResults(t), m0.fixtureId, { A: m0.teamA.teamId ?? null, B: m0.teamB.teamId ?? null }, active) : FIXTURE_UNKNOWN;
+      if (fp) throw new CodedError(fp, FIXTURE_MESSAGES[fp]);
+    }
     // Same canonical participantIds order as the API server and firestore.rules.
     const m = checkMatchFields({ ...rest, participantIds: canonicalParticipants(m0) }, { scheduleChanged: true });
     this.checkRoster(m);
@@ -944,6 +964,9 @@ export class DemoBackend implements Backend {
     // 1.4.20 (QA V1419-1): the caller is always the owner – a passed organizerId for someone else is refused
     const me = this.authUser?.uid;
     if (!me || (t0.organizerId != null && t0.organizerId !== me)) throw new CodedError(NOT_TOURNAMENT_ADMIN, NOT_TOURNAMENT_ADMIN_MESSAGE);
+    // 1.4.27: groups format consistency, same check as the API (core/groups groupsProblem)
+    const gp = groupsProblem(t);
+    if (gp) throw new CodedError(gp, `Invalid groups tournament: ${gp}`);
     const id = 'tour_' + uid();
     this.db.tournaments[id] = { ...t, organizerId: me, id, createdAt: Date.now() };
     this.changed();
@@ -960,8 +983,25 @@ export class DemoBackend implements Backend {
       const problem = tournamentTeamsProblem(patch.teams, (tid) => this.db.teams[tid]);
       if (problem) throw new Error(problem);
     }
+    // 1.4.26 (E2E-2): a fixture whose match has a result keeps its teams, feeders and match
+    if (patch.fixtures) {
+      // 1.4.27 (V1426-5): same as the API (1.4.26 DB-6) – a fixture sent without matchId keeps its claim, so an
+      // unlink of a played fixture is ignored, not refused
+      const claimed = new Map(t.fixtures.filter((f) => f.matchId).map((f) => [f.id, f.matchId as string]));
+      const kept = patch.fixtures.map((f) => (!f.matchId && claimed.has(f.id) ? { ...f, matchId: claimed.get(f.id) } : f));
+      patch = { ...patch, fixtures: kept };
+      const locked = lockedFixtureChange(t.fixtures, kept, new Set(this.fixtureResults(t).map((r) => r.fixtureId)));
+      if (locked) throw new CodedError(FIXTURE_LOCKED, FIXTURE_MESSAGES[FIXTURE_LOCKED]);
+    }
+    const gp = groupsProblem({ ...t, ...patch });
+    if (gp) throw new CodedError(gp, `Invalid groups tournament: ${gp}`);
     this.db.tournaments[id] = { ...this.db.tournaments[id], ...patch, id };
     this.changed();
+  }
+  /** 1.4.26: results of the matches this tournament's fixtures claim (core claimedTournamentMatches). */
+  private fixtureResults(t: Tournament): FixtureResult[] {
+    const tagged = Object.values(this.db.matches).filter((m) => m.tournamentId === t.id);
+    return claimedTournamentMatches(t, tagged).map(fixtureResultFromMatch).filter((r): r is FixtureResult => !!r);
   }
   /** 1.4.19: the owner deletes the tournament (its matches stay, unlinked from nothing – they keep their result). */
   async deleteTournament(id: string) {

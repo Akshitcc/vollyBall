@@ -237,7 +237,7 @@ export function apiRouter(s: Services): Router {
     if (req.body && typeof req.body === 'object' && 'playerOfMatchId' in req.body && req.body.playerOfMatchId != null)
       throw new HttpError(400, 'potm_use_endpoint', 'Set the Player of the Match with PUT /matches/:id/player-of-match');
     const m = parse(newMatchSchema, req.body);
-    res.status(201).json({ id: await matches.createMatch(s, me(req), m) });
+    res.status(201).json({ id: await matches.createMatch(s, me(req), m, undefined, req.header('idempotency-key') ?? undefined) });
   }));
   r.get('/matches/:id', h(async (req, res) => {
     const m = await matches.getMatch(s, req.params.id, me(req));

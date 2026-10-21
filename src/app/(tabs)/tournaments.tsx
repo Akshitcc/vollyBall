@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { placeLabel } from '../../core/geo';
 import { router } from 'expo-router';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
@@ -33,13 +34,13 @@ export default function Tournaments() {
           <Row style={{ marginTop: 6 }}>
             <Ionicons name="calendar" size={14} color={colors.muted} />
             <Text style={{ color: colors.muted, fontWeight: '600', marginLeft: 4 }}>
-              {formatDateRangeT(t.startDate, t.endDate)} · {tr(t.format === 'knockout' ? 'formats.knockout' : 'formats.league')} · {tr('tournaments.teams', { count: t.teams.length })}
+              {formatDateRangeT(t.startDate, t.endDate)} · {tr(`formats.${t.format}`)} · {tr('tournaments.teams', { count: t.teams.length })}
             </Text>
           </Row>
           <Row style={{ marginTop: 4 }}>
             <Ionicons name="location" size={14} color={colors.muted} />
             <Text style={{ color: colors.muted, fontWeight: '600', marginLeft: 4 }} numberOfLines={1}>
-              {t.location.name}
+              {placeLabel(t.location)}
             </Text>
           </Row>
         </Card>

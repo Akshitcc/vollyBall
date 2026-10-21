@@ -41,7 +41,7 @@ describe('G15/G17 one table of limits', () => {
     expect(LIMITS.teamName).toEqual({ min: 2, max: 40 });
     expect(LIMITS.tournamentName).toEqual({ min: 3, max: 80 });
     expect(LIMITS.placeName.max).toBe(160);
-    expect([MAX_EVENTS, MAX_SCORE, MAX_IMAGE_BYTES, MAX_TOURNAMENT_TEAMS]).toEqual([3000 /* 1.4.4 (QA Info): raised from 2000 */, 199, 10 * 1024 * 1024, 10]);
+    expect([MAX_EVENTS, MAX_SCORE, MAX_IMAGE_BYTES, MAX_TOURNAMENT_TEAMS]).toEqual([3000 /* 1.4.4 (QA Info): raised from 2000 */, 199, 10 * 1024 * 1024, 32 /* 1.4.27: raised from 10 */]);
   });
   test('firestore.rules use the same numbers', () => {
     const rules = fs.readFileSync(path.resolve(__dirname, '../../../firestore.rules'), 'utf8');

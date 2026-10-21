@@ -1,6 +1,7 @@
 /** Tournament fixtures, knockout brackets and league tables. Pure TypeScript. */
 
-export type TournamentFormat = 'knockout' | 'league';
+/** 1.4.27: 'groups' = groups (round robin) + knockout fed from the group tables (core/groups.ts). */
+export type TournamentFormat = 'knockout' | 'league' | 'groups';
 
 export interface Fixture {
   id: string;
@@ -13,6 +14,11 @@ export interface Fixture {
   awayFrom?: string;
   /** Linked live match id once started. */
   matchId?: string;
+  /** 1.4.27 groups format: the group (A, B, …) of a group-stage fixture. */
+  group?: string;
+  /** 1.4.27 groups format: first knockout round – the slot is filled by this group place (e.g. "A1", "B2"). */
+  homeSeed?: string;
+  awaySeed?: string;
 }
 
 export interface FixtureResult {
@@ -83,7 +89,11 @@ export function matchTablePoints(setsFor: number, setsAgainst: number): number {
 const ratio = (a: number, b: number) => (b === 0 ? (a === 0 ? 0 : Infinity) : a / b);
 
 /** League table sorted by points, wins, set ratio, point ratio, then name/id. */
-export function standings(teamIds: readonly string[], fixtures: readonly Fixture[], results: readonly FixtureResult[]): StandingRow[] {
+/** 1.4.26 (E2E-1): team id → display name, for the last tie-break (TOUR-03 AC3: "…then name"). */
+export type TeamNames = ReadonlyMap<string, string> | Readonly<Record<string, string>>;
+const nameOf = (names: TeamNames | undefined, id: string) => (names ? (names instanceof Map ? names.get(id) : (names as Record<string, string>)[id]) : undefined) ?? id;
+
+export function standings(teamIds: readonly string[], fixtures: readonly Fixture[], results: readonly FixtureResult[], names?: TeamNames): StandingRow[] {
   const rows = new Map<string, StandingRow>();
   for (const id of teamIds) {
     rows.set(id, { teamId: id, played: 0, won: 0, lost: 0, setsWon: 0, setsLost: 0, pointsFor: 0, pointsAgainst: 0, tablePoints: 0 });
@@ -122,6 +132,8 @@ export function standings(teamIds: readonly string[], fixtures: readonly Fixture
       y.won - x.won ||
       ratio(y.setsWon, y.setsLost) - ratio(x.setsWon, x.setsLost) ||
       ratio(y.pointsFor, y.pointsAgainst) - ratio(x.pointsFor, x.pointsAgainst) ||
+      // 1.4.26 (E2E-1): then name (PRD TOUR-03 AC3), case-insensitive; the id only if two names are the same
+      nameOf(names, x.teamId).localeCompare(nameOf(names, y.teamId), 'en', { sensitivity: 'base' }) ||
       x.teamId.localeCompare(y.teamId),
   );
 }
@@ -221,15 +233,24 @@ export function roundName(round: number, totalRounds: number): string {
  * in English (never the creator's UI language) and translated for display by i18n/format dataLabel,
  * so every viewer reads it in their own language (QA bug K).
  */
-export function fixtureTitle(tournamentName: string, format: 'league' | 'knockout', round: number, totalRounds: number): string {
-  return `${tournamentName} · ${format === 'knockout' ? roundName(round, totalRounds) : `Round ${round}`}`;
+export function fixtureTitle(tournamentName: string, format: TournamentFormat, round: number, totalRounds: number, group?: string): string {
+  if (group) return `${tournamentName} · Group ${group}`; // 1.4.27
+  return `${tournamentName} · ${format !== 'league' ? roundName(round, totalRounds) : `Round ${round}`}`;
 }
 
 /** League champion once every fixture has a result. */
-export function leagueChampion(teamIds: readonly string[], fixtures: readonly Fixture[], results: readonly FixtureResult[]): string | null {
+/** 1.4.26 (E2E-5): league teams that have no fixture (added after the fixtures were generated). */
+export function teamsWithoutFixtures(teamIds: readonly string[], fixtures: readonly Fixture[]): string[] {
+  const inFixtures = new Set(fixtures.flatMap((f) => [f.homeId, f.awayId]).filter((x): x is string => !!x));
+  return teamIds.filter((id) => !inFixtures.has(id));
+}
+
+export function leagueChampion(teamIds: readonly string[], fixtures: readonly Fixture[], results: readonly FixtureResult[], names?: TeamNames): string | null {
   const done = new Set(results.filter((r) => r.homeSets !== r.awaySets).map((r) => r.fixtureId));
-  if (!fixtures.every((f) => done.has(f.id))) return null;
-  return standings(teamIds, fixtures, results)[0]?.teamId ?? null;
+  if (!fixtures.length || !fixtures.every((f) => done.has(f.id))) return null;
+  // 1.4.26 (E2E-5): no champion while a team has never been given a fixture
+  if (teamsWithoutFixtures(teamIds, fixtures).length) return null;
+  return standings(teamIds, fixtures, results, names)[0]?.teamId ?? null;
 }
 
 /** What a tournament list shows (QA build-217 browser pass #1). */

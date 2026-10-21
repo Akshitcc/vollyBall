@@ -13,6 +13,8 @@ export { tokens, type Tokens } from './tokens';
  */
 export const palette = {
   navy: '#002E6E',
+  /** 1.4.26 Spiker icon: adaptive icon background + notification accent. */
+  brandBlue: '#0055A4',
   navyDeep: '#001F4D',
   navy2: '#083777',
   navySelected: '#1A4F96',
@@ -261,10 +263,14 @@ export function teamRing(teamColor: string): string | null {
  * navy chrome/text (e.g. Team B #001F4D) gets the light-blue ring so it reads as a team colour
  * and not as a navy bullet; a colour that is faint on the light page (< 3:1 on white) gets a muted ring.
  */
+/** 1.4.26: every surface a dot / avatar can sit on in Night. */
+export const NIGHT_SURFACES = () => [colors.bg, colors.card, colors.surface];
+
 export function swatchRing(teamColor: string, width = 2): { borderWidth: number; borderColor: string } | null {
   if (!/^#[0-9a-f]{6}$/i.test(teamColor)) return null;
   // 1.4.24 (V1423-3): in Night a dot too dark for the card (card colour, under 3:1, e.g. navy #001F4D) gets a light ring
-  if (currentTheme() === 'night') return contrast(teamColor, colors.card) < 3 ? { borderWidth: width, borderColor: colors.text } : null;
+  // 1.4.26 (E2E-9 / V1425-3): on ANY Night surface (bg, card, surface), not only the card
+  if (currentTheme() === 'night') return NIGHT_SURFACES().some((bg) => contrast(teamColor, bg) < 3) ? { borderWidth: width, borderColor: colors.text } : null;
   // near-navy (within 1.5:1 of the navy chrome/text, e.g. #001F4D at 1.24:1) -> light-blue ring
   if (contrast(teamColor, colors.ink) < 1.5) return { borderWidth: width, borderColor: palette.blueLine };
   if (contrast(teamColor, colors.white) < 3) return { borderWidth: width, borderColor: colors.muted };

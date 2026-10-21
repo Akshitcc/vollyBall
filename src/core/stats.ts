@@ -1,6 +1,6 @@
 /** Player / team statistics derived from match event logs. Pure TypeScript. */
 import { RuleSet, describeRules } from './rules';
-import { MatchEvent, MatchState, PointKind, Side, computeState } from './scoring';
+import { MatchEvent, MatchState, PointEvent, PointKind, Side, computeState } from './scoring';
 
 export interface PlayerLine {
   playerId: string;
@@ -233,3 +233,10 @@ export function shareText(
   lines.push('Scored with VolleyLive');
   return lines.join('\n');
 }
+
+/**
+ * 1.4.27 (E2E-10, Tester's 1.4.26 browser pass): whether a match recorded detailed stats at all – decided from the data
+ * (any rally with a point kind), so old tap-a-player matches (a player credited, no spike / block / ace / tip) show a
+ * dash instead of a misleading 0, with no flag needed on stored matches.
+ */
+export const hasDetailedStats = (events: readonly MatchEvent[] | null | undefined) => !!events?.some((e) => e.type === 'point' && !!(e as PointEvent).kind);

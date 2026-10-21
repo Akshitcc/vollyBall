@@ -44,6 +44,9 @@ const tick = async (ms: number) => {
 };
 
 describe('V141-9: the review prompt on the scoring screen, once the result sheet is closed', () => {
+  // 1.4.26: the demo no longer asks (Tester Info); these tests drive the mock sheet on purpose
+  beforeAll(() => { require('../../state/useReviewPrompt').demoReviewPrompt.on = true; });
+  afterAll(() => { require('../../state/useReviewPrompt').demoReviewPrompt.on = false; });
   const { useReviewPrompt } = require('../../state/useReviewPrompt');
   const { Modal } = require('../AppModal');
   /** The scoring screen's wiring (score.tsx): the hook sees the match only when it is over and the sheet is closed. */

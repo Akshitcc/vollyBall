@@ -80,8 +80,10 @@ describe('theme contrast (WCAG AA)', () => {
     const root = path.resolve(__dirname, '../../..');
     const cfg = fs.readFileSync(path.join(root, 'app.config.ts'), 'utf8');
     expect(cfg).not.toMatch(OLD);
-    expect(cfg).toContain(`backgroundColor: '${palette.navy}'`);
-    expect(cfg).toContain(`color: '${palette.blue}'`);
+    expect(cfg).toContain(`backgroundColor: '${palette.brandBlue}'`); // 1.4.26 Spiker icon
+    expect(cfg).toContain(`color: '${palette.brandBlue}'`);
+    expect(cfg).toContain("icon: './assets/notification-icon.png'");
+    expect(cfg).toContain("'expo-splash-screen'");
     expect(cfg).toContain(`primaryColor: '${palette.navy}'`);
     expect(JSON.stringify(colors)).not.toMatch(/#FF6B00|#C2410C|#FFF3E0/i);
     const walk = (d: string): string[] =>
@@ -237,13 +239,20 @@ describe('QA C130-6 (1.3.1): demo photo captions are readable on every scene', (
   test.each(DEMO_SCENES.map((x) => [x[2], x[0]]))('%s: caption on its scrim ≥ 4.5 (scene %s)', (_name, bg) => {
     expect(contrast(DEMO_CAPTION.fg, mix(bg, DEMO_CAPTION.scrim, DEMO_CAPTION.scrimOpacity))).toBeGreaterThanOrEqual(AA);
   });
-  test('the caption sits inside the scrim band with room above tall Devanagari marks', () => {
-    const svg = decodeURIComponent(demoPhotoUrl(2, 'hi').split(',')[1]);
-    expect(svg).toContain(`fill-opacity="${DEMO_CAPTION.scrimOpacity}"`);
-    expect(svg).toContain('टीम मीटिंग');
-    expect(svg).toMatch(new RegExp(`<text x="320" y="${DEMO_CAPTION.baseline}"[^>]*fill="${DEMO_CAPTION.fg}"`));
-    const ascent = 44; // font-size: matras and "!" reach about one em above the baseline
-    expect(DEMO_CAPTION.baseline - ascent - DEMO_CAPTION.bandY).toBeGreaterThanOrEqual(16); // top padding
-    expect(DEMO_CAPTION.baseline + 14).toBeLessThanOrEqual(DEMO_CAPTION.bandY + DEMO_CAPTION.bandH); // descenders inside
+  test('the caption sits inside the scrim band with room above tall Devanagari marks (1.4.27 V1425-4: line box 1.4 em)', () => {
+    const { demoCaptionBox } = require('../../services/backend/demoSeed') as typeof import('../../services/backend/demoSeed');
+    for (const lang of ['hi', 'en']) {
+      const svg = decodeURIComponent(demoPhotoUrl(2, lang).split(',')[1]);
+      const box = demoCaptionBox(lang);
+      expect(svg).toContain(`fill-opacity="${DEMO_CAPTION.scrimOpacity}"`);
+      expect(svg).toContain(lang === 'hi' ? 'टीम मीटिंग' : 'Team huddle');
+      expect(svg).toMatch(new RegExp(`<text x="320" y="${box.baseline}"[^>]*font-size="${box.font}"[^>]*fill="${DEMO_CAPTION.fg}"`));
+      expect(box.bandH).toBeGreaterThanOrEqual(Math.round(box.font * 1.4)); // line height ≥ 1.4 × font
+      expect(box.baseline - box.font * 1.05 - DEMO_CAPTION.bandY).toBeGreaterThanOrEqual(DEMO_CAPTION.pad); // matras + padding
+      expect(box.baseline + box.font * 0.3).toBeLessThanOrEqual(DEMO_CAPTION.bandY + box.bandH); // descenders inside
+      expect(DEMO_CAPTION.bandY).toBeGreaterThanOrEqual(60); // inside a 16:9 crop of the 640×480 picture
+      expect(DEMO_CAPTION.bandY + box.bandH).toBeLessThanOrEqual(420);
+    }
+    expect(demoCaptionBox('en').font).toBeGreaterThan(demoCaptionBox('hi').font); // English labels bigger
   });
 });

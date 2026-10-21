@@ -1,3 +1,4 @@
+import { statusKey } from '../core/matchTiming';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React from 'react';
@@ -43,7 +44,7 @@ export function MatchCard({ m, extra }: { m: Match; extra?: string }) {
   return (
     <Card onPress={() => router.push(`/match/${m.id}`)}>
       <Row style={{ marginBottom: 6 }}>
-        {live ? <LiveBadge /> : <Text style={[font.small, { color: colors.muted }]}>{sched ? t('matchStatus.scheduled') : m.status === 'finished' ? t('matchStatus.final') : matchStatusLabel(m.status, t)}</Text>}
+        {live ? <LiveBadge /> : <Text style={[font.small, { color: colors.muted }]}>{sched ? t(statusKey(m)) : m.status === 'finished' ? t('matchStatus.final') : matchStatusLabel(m.status, t)}</Text>}
         <Text style={[font.small, { color: colors.muted, marginLeft: 8, flex: 1 }]} numberOfLines={1} testID={`match-card-when-${m.id}`}>
           {sched
             ? formatWhen(m.scheduledAt)

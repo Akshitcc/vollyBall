@@ -25,6 +25,8 @@ const body = () => ({
   teams: [{ id: t1, name: 'One', color: '#111111' }, { id: t2, name: 'Two', color: '#222222' }],
   fixtures: [{ id: 'f1', round: 1, index: 0, homeId: t1, awayId: t2 }],
 });
+// 1.4.26 (E2E-3): a fixture match is played by the fixture's two registered teams
+const fixtureSides = (a: string, b: string) => { const m = newMatchBody(); return { teamA: { ...m.teamA, teamId: a }, teamB: { ...m.teamB, teamId: b }, captains: { A: 'cap', B: 'dan' } }; };
 const create = async () => {
   const r = await h.as('cap').post('/api/tournaments').send(body());
   assert.equal(r.status, 201, JSON.stringify(r.body));
@@ -75,12 +77,12 @@ describe('1.4.19 tournament admin permissions', () => {
   });
   it('match link: owner only at create; fixed afterwards; scoring unchanged', async () => {
     const id = await create();
-    const dan = await h.as('dan').post('/api/matches').send(newMatchBody({ createdBy: 'dan', scorerId: 'dan', tournamentId: id, fixtureId: 'f1' }));
+    const dan = await h.as('dan').post('/api/matches').send(newMatchBody({ ...fixtureSides(t1, t2), createdBy: 'dan', scorerId: 'dan', tournamentId: id, fixtureId: 'f1' }));
     assert.equal(dan.status, 403, JSON.stringify(dan.body));
     assert.equal(dan.body.error, 'not_tournament_admin');
     const orphan = await h.as('cap').post('/api/matches').send(newMatchBody({ fixtureId: 'f1' }));
     assert.equal(orphan.body.error, 'not_tournament_admin');
-    const m = await createMatch(h, { tournamentId: id, fixtureId: 'f1' });
+    const m = await createMatch(h, { ...fixtureSides(t1, t2), tournamentId: id, fixtureId: 'f1' });
     const re = await h.as('cap').patch(`/api/matches/${m}`).send({ fixtureId: 'f2' });
     assert.equal(re.status, 403);
     assert.equal(re.body.error, 'not_tournament_admin');

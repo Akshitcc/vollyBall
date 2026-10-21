@@ -894,14 +894,28 @@ describe('build-217 retest follow-ups', () => {
     });
     return ids;
   };
-  test('G8: at most 10 teams; duplicates and registration checked for every one of them', async () => {
-    const ids = await bigTeams(11);
-    await assertFails(setDoc(doc(ctx('cap').firestore(), 'tournaments/eleven'), tour(ids)));
-    await assertFails(setDoc(doc(ctx('cap').firestore(), 'tournaments/dup'), tour([...ids.slice(0, 9), 'big0'])));
-    await assertFails(setDoc(doc(ctx('cap').firestore(), 'tournaments/solo10'), tour([...ids.slice(0, 9), 'tsolo'])));
-    await assertFails(setDoc(doc(ctx('cap').firestore(), 'tournaments/ext10'), tour([...ids.slice(0, 9), 'ext_10'])));
+  // 1.4.27 (E2E-4): up to 32 teams. The first 10 are read (registered, enough players); all 32 are id-checked and
+  // duplicate-checked (also across the 12-id chunks); 33 is refused.
+  test('G8 / 1.4.27: at most 32 teams; duplicates for all, registration for the first 10', async () => {
+    const ids = await bigTeams(33);
+    await assertFails(setDoc(doc(ctx('cap').firestore(), 'tournaments/t33'), tour(ids)));
+    await assertSucceeds(setDoc(doc(ctx('cap').firestore(), 'tournaments/t32'), tour(ids.slice(0, 32))));
+    await assertSucceeds(setDoc(doc(ctx('cap').firestore(), 'tournaments/t11'), tour(ids.slice(0, 11))));
+    await assertSucceeds(setDoc(doc(ctx('cap').firestore(), 'tournaments/t15'), { ...tour(ids.slice(0, 15)), format: 'groups', advance: 2 }));
+    await assertFails(setDoc(doc(ctx('cap').firestore(), 'tournaments/adv3'), { ...tour(ids.slice(0, 15)), format: 'groups', advance: 3 }));
+    await assertFails(setDoc(doc(ctx('cap').firestore(), 'tournaments/fmt'), { ...tour(ids.slice(0, 4)), format: 'swiss' }));
+    for (const [name, list] of [
+      ['dup', [...ids.slice(0, 9), 'big0']],
+      ['dup13', [...ids.slice(0, 12), 'big0']], // across chunks 1 and 2
+      ['dup30', [...ids.slice(0, 29), 'big13']], // across chunks 2 and 3
+      ['solo10', [...ids.slice(0, 9), 'tsolo']],
+      ['ext10', [...ids.slice(0, 9), 'ext_10']],
+      ['badid', [...ids.slice(0, 20), 'bad id!']],
+    ]) await assertFails(setDoc(doc(ctx('cap').firestore(), `tournaments/${name}`), tour(list)));
     await assertSucceeds(setDoc(doc(ctx('cap').firestore(), 'tournaments/ten'), tour(ids.slice(0, 10))));
+    await assertSucceeds(updateDoc(doc(ctx('cap').firestore(), 'tournaments/ten'), { teams: tour(ids.slice(0, 32)).teams }));
     await assertFails(updateDoc(doc(ctx('cap').firestore(), 'tournaments/ten'), { teams: tour(ids).teams }));
+    await assertFails(updateDoc(doc(ctx('eve').firestore(), 'tournaments/t32'), { status: 'running' })); // owner only
   });
 
   const team = () => doc(ctx('cap').firestore(), 'teams/t1');

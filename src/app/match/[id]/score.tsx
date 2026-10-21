@@ -205,6 +205,12 @@ export default function ScoreScreen() {
           // 1.3.4 D133-5: the backend refused a credit for a player who isn't on court – not retried.
           setSync('error');
           setError(translateError(e));
+        } else if ((e as { code?: string } | null)?.code === 'progress_stale') {
+          // 1.4.27 (V1426-2): the server refused this save as older than what it holds – say so and retry with the
+          // latest log (the backend rebases its sequence); the rallies stay cached on the device meanwhile
+          setSync('error');
+          setError(i18n.t('score.saveRefused'));
+          retryTimer.current = setTimeout(() => push(m, ev, false), 5000);
         } else if (/permission|scorer/i.test(msg)) {
           setSync('error');
           setError(i18n.t('score.onlyScorerError'));

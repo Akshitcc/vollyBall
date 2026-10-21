@@ -1,0 +1,9 @@
+# 1.4.28 progress (vc44) – Tester's 1.4.27 E2E (fixes-retest.md 'E2E scenario 1.4.27')
+Backups: volleylive-latest.apk.bak44, volleylive.zip.bak58, backups/volleylive-1.4.27.{apk,zip}, backups/volleylive-src.pre1428.tar.gz.
+- [x] V1427-1 (High): one shared tiebreak – core/groups `tiebreakNames` (names passed in, else the tournament's own team names) used by groupTables / resolveGroupsKnockout / resolveFixtures, so the API (fixtureTeamsNow → claimFixture fixture_teams), the demo (fixtureLock.fixtureStartProblem) and the app screen all break a full tie by name. Tests: core tiebreak1428.test.ts (4; Tester's repro, ids opposite to names, A2 = Goregaon on both paths, fixture_teams Goregaon ok / Thane refused); server fixes1428.test.ts (15-team API run: A2 = Goregaon, Thane start 400 fixture_teams, Goregaon start 201, bracket after the QF is played still Goregaon). Verified the server test fails on the old id behaviour (2 of 3 failed).
+- [x] V1427-2 (Low): groupsProblem refuses < 4 teams (400 groups_too_few) and a group not bigger than `advance` (400 groups_too_small, the generator's 'Group too small'); EN/HI messages. Tests: core + server (3-team 2/1 top-1 → 400; 4/2 top-2 → 400; 3/3 top-2 → 201).
+- [x] V1427-3 (Info): rules-tests package-lock resynced (`npm ci` exit 0). 0024 down step server/src/db/rollback/rollback0024.ts: refuses with a clear message while groups data exists (nothing changed), else reverts guarded and re-runnably; migrations stay additive; docs/DEPLOY.md "Migrations 0024 / 0025 … rolling back 0024". Test in fixes1428 (refuse → clean → revert → re-run → roll forward).
+- [x] V1426-3 Firestore gap: still documented as is.
+- [x] version 1.4.28 / vc44; scripts/finish1428.sh
+- [x] Suites + contrast scan (see RELEASE-1.4.28.md)
+- [x] RELEASE before the zip; shas in /workspace/volleylive-1.4.28-shas.txt afterwards

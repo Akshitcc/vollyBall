@@ -157,7 +157,7 @@ export function Card({ children, style, onPress, accessibilityLabel, testID }: {
         {children}
       </PressableScale>
     );
-  return <View style={[styles.card, style]}>{children}</View>;
+  return <View style={[styles.card, style]} testID={testID} accessibilityLabel={accessibilityLabel}>{children}</View>;
 }
 
 /**
@@ -284,7 +284,8 @@ export function Avatar({ name, uri, size = 40, color = colors.ink2, ring = false
   // Initials are small text: the fill is adjusted until black or white reaches 4.5:1 (QA contrast pass).
   const fill = readableFill(color);
   return (
-    <View style={[{ width: size, height: size, borderRadius: size / 2, backgroundColor: fill, alignItems: 'center', justifyContent: 'center' }, ring ? swatchRing(fill) : null]} testID="avatar-initials">
+  // 1.4.26 (E2E-9): in Night the initials disc always gets the contrast ring when it is under 3:1 on a surface
+    <View style={[{ width: size, height: size, borderRadius: size / 2, backgroundColor: fill, alignItems: 'center', justifyContent: 'center' }, ring || currentTheme() === 'night' ? swatchRing(fill) : null]} testID="avatar-initials">
       <Text style={{ color: onColor(fill), fontWeight: '900', fontSize: size * 0.38 }}>{initials || '?'}</Text>
     </View>
   );

@@ -30,6 +30,15 @@ import { readPhoto } from '../photoFile';
 const DEV_AUTH_KEY = 'volleylive-api-dev-auth-v1';
 const OTP_SESSION_KEY = 'volleylive-api-otp-session-v1';
 
+/** 1.4.26 (DB-1): how long the same create document reuses its Idempotency-Key. */
+export const CREATE_KEY_MS = 2 * 60_000;
+/** 32-bit FNV-1a, hex (an idempotency key, not security). */
+export function docHash(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0;
+  return h.toString(16).padStart(8, '0');
+}
+
 export class ApiError extends Error {
   /** Server error code (JSON `error`), e.g. "text_too_long" or "invalid_phone"; translated by i18n/format. */
   readonly code?: string;
@@ -40,7 +49,9 @@ export class ApiError extends Error {
   readonly retryAfter?: number;
   /** otp_invalid (launch prep): wrong codes left before the code is burnt. */
   readonly attemptsLeft?: number;
-  constructor(readonly status: number, message: string, body?: { error?: string; field?: string; min?: number; max?: number; retryAfter?: number; attemptsLeft?: number }) {
+  /** progress_stale (1.4.27 V1426-2): the sequence the server already holds. */
+  readonly seq?: number;
+  constructor(readonly status: number, message: string, body?: { error?: string; field?: string; min?: number; max?: number; retryAfter?: number; attemptsLeft?: number; seq?: number }) {
     super(message);
     this.name = 'ApiError';
     this.code = body?.error;
@@ -49,6 +60,7 @@ export class ApiError extends Error {
     this.max = body?.max;
     this.retryAfter = typeof body?.retryAfter === 'number' ? body.retryAfter : undefined;
     this.attemptsLeft = typeof body?.attemptsLeft === 'number' ? body.attemptsLeft : undefined;
+    this.seq = typeof body?.seq === 'number' ? body.seq : undefined;
   }
 }
 
@@ -352,13 +364,14 @@ export class ApiBackend implements Backend {
   }
 
   // ---------- HTTP ----------
-  private async request<T>(method: string, path: string, body?: unknown, tokenOverride?: string, raw?: { blob: Blob; type: string; headers?: Record<string, string> }): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, tokenOverride?: string, raw?: { blob: Blob; type: string; headers?: Record<string, string> }, extraHeaders?: Record<string, string>): Promise<T> {
     const send = async (force: boolean) => {
       const token = tokenOverride ?? (await this.auth.token(force));
       const headers: Record<string, string> = {};
       if (token) headers.Authorization = `Bearer ${token}`;
       if (raw) Object.assign(headers, raw.headers ?? {}, { 'Content-Type': raw.type });
       else if (body !== undefined) headers['Content-Type'] = 'application/json';
+      if (extraHeaders) Object.assign(headers, extraHeaders);
       return fetch(`${this.base}/api${path}`, { method, headers, body: raw ? raw.blob : body !== undefined ? JSON.stringify(clean(body)) : undefined });
     };
     let res = await send(false);
@@ -494,8 +507,33 @@ export class ApiBackend implements Backend {
   }
 
   // ---------- matches ----------
+  /**
+   * 1.4.26 (DB-1): the same match document sent again within CREATE_KEY_MS (a double tap, or a retry after a lost
+   * response) carries the same Idempotency-Key, so the server returns the match it already created.
+   */
   async createMatch(m: NewMatch) {
-    return (await this.request<{ id: string }>('POST', '/matches', m)).id;
+    const key = this.createKeyFor(m);
+    return (await this.request<{ id: string }>('POST', '/matches', m, undefined, undefined, { 'Idempotency-Key': key })).id;
+  }
+  private createKeys = new Map<string, { key: string; at: number }>();
+  private createKeyFor(m: NewMatch): string {
+    const now = Date.now();
+    for (const [h, v] of this.createKeys) if (now - v.at > CREATE_KEY_MS) this.createKeys.delete(h);
+    const h = docHash(`${this.currentUid ?? ''}|${JSON.stringify(m)}`);
+    const known = this.createKeys.get(h);
+    if (known) return known.key;
+    const key = `mc-${h}-${now.toString(36)}`;
+    this.createKeys.set(h, { key, at: now });
+    return key;
+  }
+  /** 1.4.26 (DB-4): a save sequence per match that only grows (an older state the server sees late is refused as stale). */
+  private progressSeq = new Map<string, number>();
+  /** 1.4.27 (V1426-2): a plain per-match counter – never the device clock (a scorer handoff to a device whose
+   * clock is behind lost rallies). It is rebased on the server's sequence when a save comes back stale. */
+  private nextProgressSeq(id: string): number {
+    const n = (this.progressSeq.get(id) ?? 0) + 1;
+    this.progressSeq.set(id, n);
+    return n;
   }
   watchMatch(id: string, cb: (m: Match | null) => void) {
     let last: Match | null = null;
@@ -529,11 +567,13 @@ export class ApiBackend implements Backend {
   private async drainProgress(id: string, q: ProgressQueue) {
     q.running = true;
     let attempt = 0;
+    let rebased = 0;
     while (q.pending) {
       const next: MatchProgress = q.pending;
       try {
-        await this.request('PUT', `/matches/${encodeURIComponent(id)}/progress`, { events: next.events, status: next.status, startedAt: next.startedAt, finishedAt: next.finishedAt });
+        await this.request('PUT', `/matches/${encodeURIComponent(id)}/progress`, { events: next.events, status: next.status, startedAt: next.startedAt, finishedAt: next.finishedAt, seq: this.nextProgressSeq(id) });
         attempt = 0;
+        rebased = 0;
         if (q.pending === next) {
           q.pending = null;
           q.waiters.splice(0).forEach((w) => w.resolve());
@@ -542,6 +582,19 @@ export class ApiBackend implements Backend {
         if (e instanceof ApiError && e.status === 429) {
           // QA C130-2: rate limited -> wait as the server asks and send the newest state (no lost rallies)
           await sleep(Math.min(60_000, Math.max(1, e.retryAfter ?? 1) * 1000));
+        } else if (e instanceof ApiError && e.code === 'progress_stale') {
+          // 1.4.27 (V1426-2): never dropped silently. The newest local state is re-sent once above the server's
+          // sequence (e.g. after a handoff or an app restart); refused again -> the scorer sees an error (score.tsx
+          // keeps the log cached and retries).
+          if (rebased < 2) {
+            rebased++;
+            this.progressSeq.set(id, Math.max(this.progressSeq.get(id) ?? 0, e.seq ?? 0));
+            continue;
+          }
+          rebased = 0;
+          if (q.pending !== next) continue;
+          q.pending = null;
+          q.waiters.splice(0).forEach((w) => w.reject(e));
         } else if (e instanceof ApiError) {
           if (q.pending !== next) continue; // a newer state is queued: try that one
           q.pending = null;

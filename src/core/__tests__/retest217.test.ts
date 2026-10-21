@@ -68,12 +68,12 @@ describe('#1 G1: one scorer step per Firestore write (src/core/eventSteps.ts = f
 });
 
 describe('#2 G8: tournament team cap = what the rules can check', () => {
-  test('10 teams everywhere, duplicates refused', () => {
-    expect(MAX_TOURNAMENT_TEAMS).toBe(10);
+  test('32 teams everywhere (1.4.27, was 10), duplicates refused', () => {
+    expect(MAX_TOURNAMENT_TEAMS).toBe(32);
     const teams = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `t${i}`, name: `T${i}` }));
     const base = { name: 'Monsoon Cup', startDate: 2e12, endDate: 2e12 + 1 };
-    expect(codeOf(() => checkTournamentFields({ ...base, teams: teams(10) }))).toBeNull();
-    expect(codeOf(() => checkTournamentFields({ ...base, teams: teams(11) }))).toBe('too_many_teams');
+    expect(codeOf(() => checkTournamentFields({ ...base, teams: teams(32) }))).toBeNull();
+    expect(codeOf(() => checkTournamentFields({ ...base, teams: teams(33) }))).toBe('too_many_teams');
     expect(codeOf(() => checkTournamentFields({ ...base, teams: [...teams(9), { id: 't0', name: 'again' }] }))).toBe('duplicate_teams');
   });
 });

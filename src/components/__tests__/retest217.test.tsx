@@ -14,7 +14,7 @@ jest.mock('expo-router', () => ({ router: { replace: jest.fn(), back: jest.fn(),
 jest.mock('../../state/AuthContext', () => ({ useAuth: () => ({ isAdmin: false, termsOk: true }), useMe: () => ({ id: 'cap', name: 'Cap' }) }));
 jest.mock('../LocationPicker', () => ({ LocationPicker: () => null, placeReady: () => true }));
 jest.mock('../RulesEditor', () => ({ RulesEditor: () => null }));
-const mockTeams = Array.from({ length: 12 }, (_, i) => ({
+const mockTeams = Array.from({ length: 34 }, (_, i) => ({
   id: `t${i}`, name: `Team ${i}`, color: '#D93636', captainId: `c${i}`, memberIds: Array.from({ length: 6 }, (_, j) => `u${i}-${j}`), subIds: [], pendingPhones: [],
 }));
 jest.mock('../../services/backend', () => ({ backend: { searchTeams: async () => mockTeams, createTournament: jest.fn() } }));
@@ -42,10 +42,10 @@ describe('#2 tournament create screen stops at the team cap', () => {
     await render(<NewTournament />);
     for (let i = 0; i < MAX_TOURNAMENT_TEAMS; i++) await fireEvent.press(await screen.findByTestId(`add-team-t${i}`, {}, { timeout: 2000 }));
     expect(screen.getByTestId('tournament-full')).toBeTruthy();
-    expect(screen.queryByTestId('add-team-t10')).toBeNull();
+    expect(screen.queryByTestId(`add-team-t${MAX_TOURNAMENT_TEAMS}`)).toBeNull();
     expect(screen.getByText(`Teams (${MAX_TOURNAMENT_TEAMS}/${MAX_TOURNAMENT_TEAMS})`)).toBeTruthy();
     await i18n.changeLanguage('hi');
-    expect(await screen.findByText(/ज़्यादा से ज़्यादा 10 टीमें/)).toBeTruthy();
+    expect(await screen.findByText(new RegExp(`ज़्यादा से ज़्यादा ${MAX_TOURNAMENT_TEAMS} टीमें`))).toBeTruthy();
   });
 });
 

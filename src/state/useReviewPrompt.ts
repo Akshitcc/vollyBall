@@ -16,6 +16,14 @@ import type { Match } from '../core/types';
 import { backend } from '../services/backend';
 import { maybeAskForReview } from '../services/review';
 import { uiBusy, whenUiIdle } from './uiBusy';
+import { DEMO_MODE } from '../services/config';
+
+/**
+ * 1.4.26 (Tester Info): the demo has no Play listing, and its labelled mock review sheet kept popping up over the
+ * demo flow, so the demo never asks. `demoReviewPrompt.on` re-enables it (tests of the mock sheet).
+ */
+export const demoReviewPrompt = { on: false };
+export const reviewPromptEnabled = () => !DEMO_MODE || demoReviewPrompt.on;
 
 /** Server time when the backend has it (API: from the responses' Date header), else the phone clock. */
 export function reviewNow(): number {
@@ -52,6 +60,7 @@ export function useReviewPrompt(m: Match | null | undefined, uid: string): { onC
           if (asked.current) return;
           asked.current = true;
           const completed = mine.filter((x) => x.status === 'finished').length;
+          if (!reviewPromptEnabled()) return; // 1.4.26 (Tester Info): never in the demo
           void maybeAskForReview({ uid, moment: mo, completedMatches: completed, liveScoring: false, now: reviewNow(), serverClock: serverClockFor(uid) });
         });
         if (asked.current) u(); // answered synchronously (demo)

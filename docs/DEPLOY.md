@@ -332,3 +332,21 @@ Rows for 0021 / 0022 can stay when rolling back: their tables/columns are additi
   API `writeMatch`, rules `setupVerdictOk`, demo and Firebase via `guardCreate` / `guardUpdate`).
 - Admin repair: lifecycle action `repairVerdict` (docs/LIFECYCLE.md), walked on core, demo, API and rules.
 - `scripts/run-policy-suites.sh`: the rules step fails when its `-t` filter runs 0 tests.
+
+### Migrations 0024 / 0025 (1.4.27) and rolling back 0024 (1.4.28, QA V1427-3)
+Both are additive and re-runnable (0024: ENUM value 'groups' + five nullable columns; 0025: table
+`match_create_claims`). They need production approval before they are applied; the runner applies them in order.
+
+The runner is forward-only. To undo 0024, use the guarded down step (take a backup first):
+
+    DATABASE_URL=… npx tsx src/db/rollback/rollback0024.ts
+
+- While groups data exists (any tournament with format 'groups', or any value in tournaments.advance,
+  tournament_teams.group_key, fixtures.group_key / home_seed / away_seed) it **refuses** with
+  "Refusing to roll back 0024_tournament_groups: groups data exists (…). Nothing was changed." and exit code 1.
+  It never deletes data. In that case roll back the **server only**: the 0024 columns are nullable and the
+  older server ignores them (it can't edit groups tournaments, but nothing is lost). To remove the schema as
+  well, delete those tournaments deliberately first.
+- With no groups data it drops the five columns, sets the ENUM back to ('knockout','league') and removes the
+  0024 record, so a later deploy re-applies 0024. Each step is guarded, so it can be re-run after a partial run.
+- 0025 needs no down step for an older server (an unused table); drop `match_create_claims` only if required.

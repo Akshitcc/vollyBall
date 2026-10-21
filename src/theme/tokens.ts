@@ -42,8 +42,8 @@ export const tokens: Record<ThemeName, Tokens> = {
   },
   night: {
     bg: '#1E2A44', surface: '#283654', surface2: '#33446A', outline: '#7A8BB8', text: '#F4F7FF', textMuted: '#C3CDE3',
-    primary: '#C6FF1A', onPrimary: '#141C30', accent: '#8B6CFF', teamA: '#FF6B70', teamAText: '#FF8A8E', teamB: '#2DD4F0', onTeamB: '#141C30',
-    live: '#FF4D6A', onLive: '#141C30', liveText: '#FF8A9C', shadowColor: 'transparent', tabBarBg: 'rgba(30,42,68,0.94)', success: '#C6FF1A', tabActive: '#C6FF1A', scrim: 'rgba(10,16,32,0.60)',
+    primary: '#C6FF1A', onPrimary: '#141C30', accent: '#8B6CFF', teamA: '#FF6B70', teamAText: '#FF9A9E', teamB: '#2DD4F0', onTeamB: '#141C30',
+    live: '#FF4D6A', onLive: '#141C30', liveText: '#FFA3B1', shadowColor: 'transparent', tabBarBg: 'rgba(30,42,68,0.94)', success: '#C6FF1A', tabActive: '#C6FF1A', scrim: 'rgba(10,16,32,0.60)',
     pink: '#33446A', track: '#3A4A70', hero: ['#3A3478', '#283654', '#1F4A5A'],
     radius: { card: 20, btn: 14, chip: 18 }, border: { card: 1 },
     font: { bodyHi: 'Mukta-Regular', boldHi: 'Mukta-Bold', displayHi: 'Mukta-ExtraBold', score: 'Teko-SemiBold', // v2 §4.2: score numerals stay Teko, also in Hindi
@@ -59,5 +59,5 @@ export const SPEC_TEXT_PAIRS: [keyof Tokens, keyof Tokens][] = [
   // 1.4.22 mockup fills carrying text
   ['text', 'pink'], ['onPrimary', 'success'],
   // 1.4.25
-  ['liveText', 'bg'], ['liveText', 'surface'],
+  ['liveText', 'bg'], ['liveText', 'surface'], ['liveText', 'surface2'], ['teamAText', 'surface2'], // 1.4.26 (V1425-2)
 ];

@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { ScrollView, Text, View } from 'react-native';
 import { Banner, Button, Empty, Loading, P, Row, Screen, breakWords } from '../../components/ui';
 import { fixtureResultFromMatch } from '../../core/results';
-import { fixtureTitle, isBye, leagueChampion, resolveKnockout, standings, type Fixture, type FixtureResult } from '../../core/tournament';
+import { fixtureTitle, isBye, leagueChampion, resolveKnockout, standings, type Fixture, type FixtureResult, type StandingRow, teamsWithoutFixtures } from '../../core/tournament';
+import { resolveGroupsKnockout, tiebreakNames, type GroupTable } from '../../core/groups';
 import type { Match, MatchTeam, Team, Tournament } from '../../core/types';
 import { backend } from '../../services/backend';
 import { MIN_PLAYERS } from '../../core/roster';
@@ -29,7 +30,7 @@ export default function TournamentPage() {
   const matches = useMemo(() => claimedTournamentMatches(t, tagged ?? []), [t, tagged]);
   const [starting, setStarting] = useState<string | null>(null);
   const k = useKit();
-  const [tab, setTab] = useState<'table' | 'bracket' | 'fixtures' | null>(null);
+  const [tab, setTab] = useState<'table' | 'groups' | 'bracket' | 'fixtures' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const data = useMemo(() => {
@@ -37,11 +38,17 @@ export default function TournamentPage() {
     const results: FixtureResult[] = matches.map(fixtureResultFromMatch).filter((r): r is FixtureResult => !!r);
     const byFixture = new Map(matches.filter((m) => m.fixtureId).map((m) => [m.fixtureId!, m]));
     const teamIds = t.teams.map((x) => x.id);
+    const names = tiebreakNames(t); // 1.4.26 (E2E-1) / 1.4.28 (V1427-1): the one shared name tie-break (core/groups)
     if (t.format === 'knockout') {
       const ko = resolveKnockout(t.fixtures, results);
-      return { fixtures: ko.fixtures, champion: ko.championId, table: null, byFixture };
+      return { fixtures: ko.fixtures, champion: ko.championId, table: null, groups: null as GroupTable[] | null, byFixture, unscheduled: [] as string[] };
     }
-    return { fixtures: t.fixtures, champion: leagueChampion(teamIds, t.fixtures, results), table: standings(teamIds, t.fixtures, results), byFixture };
+    if (t.format === 'groups') {
+      // 1.4.27: group tables (league order + name) feed the seeded bracket automatically (core/groups)
+      const g = resolveGroupsKnockout(t, results, names);
+      return { fixtures: g.fixtures, champion: g.championId, table: null, groups: g.tables, byFixture, unscheduled: [] as string[] };
+    }
+    return { fixtures: t.fixtures, champion: leagueChampion(teamIds, t.fixtures, results, names), table: standings(teamIds, t.fixtures, results, names), groups: null as GroupTable[] | null, byFixture, unscheduled: teamsWithoutFixtures(teamIds, t.fixtures) };
   }, [t, matches]);
 
   // 1.4.19: the owner (organizerId) is the tournament's only admin (core/tournamentAdmin); everyone else views only
@@ -54,6 +61,14 @@ export default function TournamentPage() {
   if (t === undefined) return <Loading />;
   if (!t || !data) return <Empty title={tr('tournament.notFound')} />;
   const teamOf = (tid: string | null) => t.teams.find((x) => x.id === tid);
+  // 1.4.27 groups format: the knockout rounds come after the group rounds; R = the last group round
+  const groupRounds = [...new Set(data.fixtures.filter((f) => f.group).map((f) => f.round))];
+  const R = groupRounds.length ? Math.max(...groupRounds) : 0;
+  const koRounds = [...new Set(data.fixtures.filter((f) => !f.group).map((f) => f.round))].sort((a, b) => a - b);
+  const koTotal = koRounds.length;
+  const koName = (round: number) => roundNameT(round - R, koTotal, tr);
+  const byeOf = (f: Fixture) => (t.format === 'groups' ? !f.group && round1(f) && !!f.homeSeed !== !!f.awaySeed : isBye(f));
+  const round1 = (f: Fixture) => f.round === R + 1;
 
   const start = async (f: Fixture) => {
     if (!f.homeId || !f.awayId) return;
@@ -81,7 +96,7 @@ export default function TournamentPage() {
           location: t.location,
           startNow: true,
           scheduledAt: Date.now(),
-          title: fixtureTitle(t.name, t.format, f.round, Math.max(...t.fixtures.map((x) => x.round))),
+          title: f.group ? fixtureTitle(t.name, t.format, f.round, koTotal, f.group) : fixtureTitle(t.name, t.format, f.round - R, koTotal),
           tournamentId: t.id,
           fixtureId: f.id,
           captains: { A: sa.captainId, B: sb.captainId },
@@ -113,14 +128,17 @@ export default function TournamentPage() {
     const m = data.byFixture.get(f.id);
     const home = teamOf(f.homeId);
     const away = teamOf(f.awayId);
-    const bye = isBye(f);
+    const bye = byeOf(f);
+    // 1.4.27: an open seeded slot shows its group place ("Group A #1") until the group is complete
+    const seedOf = (side: 'home' | 'away') => (side === 'home' ? f.homeSeed : f.awaySeed);
+    const open = (side: 'home' | 'away') => { const sd = seedOf(side); return sd ? tr('tournament.seed', { group: sd[0], place: sd.slice(1) }) : null; };
     const ready = !!home && !!away && !m && !bye;
     const winnerSide = m?.summary.winner;
-    const line = (tt: typeof home, sets: number | undefined, win: boolean) => (
+    const line = (tt: typeof home, sets: number | undefined, win: boolean, side: 'home' | 'away') => (
       <Row style={{ marginVertical: 2 }}>
         <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: tt?.color ?? k.t.textMuted, marginRight: 6, borderWidth: k.day ? 1.5 : 0, borderColor: k.t.outline }} />
         <Body bold={win} size={14} color={tt ? k.t.text : k.t.textMuted} style={{ flex: 1 }} numberOfLines={1}>
-          {tt?.name ?? (bye ? tr('tournament.bye') : tr('tournament.tbd'))}
+          {tt?.name ?? open(side) ?? (bye ? tr('tournament.bye') : tr('tournament.tbd'))}
         </Body>
         {m && <Text style={[{ fontSize: 18, color: win ? (k.day ? k.t.text : k.t.primary) : k.t.text }, k.f.display]}>{sets}</Text>}
       </Row>
@@ -135,22 +153,59 @@ export default function TournamentPage() {
         inner={{ padding: 12 }}
       >
         {m?.status === 'live' && <View style={{ marginBottom: 4 }}><LivePill text={tr('common.live')} /></View>}
-        {line(home, m?.summary.setsA, winnerSide === 'A')}
-        {line(away, m?.summary.setsB, winnerSide === 'B')}
+        {f.group ? <Body muted bold size={11}>{tr('tournament.group', { group: f.group })}</Body> : null}
+        {line(home, m?.summary.setsA, winnerSide === 'A', 'home')}
+        {line(away, m?.summary.setsB, winnerSide === 'B', 'away')}
         {ready && isOrganizer && <Body bold size={12} style={{ marginTop: 4 }}>{starting === f.id ? tr('tournament.starting') : tr('tournament.tapToStart')}</Body>}
         {bye && <Body muted bold size={12}>{tr('tournament.advances')}</Body>}
       </Sticker>
     );
   };
 
+  // 1.4.27: one table renderer for the league table and every group table (the top `advance` rows are marked)
+  const renderTable = (rows: StandingRow[], testID: string, advance = 0) => (
+    <Sticker testID={testID} inner={{ padding: 10 }}>
+      <Row style={{ paddingVertical: 4 }}>
+        {['#', tr('tournament.colTeam'), tr('tournament.colPlayed'), tr('tournament.colWon'), tr('tournament.colLost'), tr('tournament.colSets'), tr('tournament.colPts')].map((h, i) => (
+          <Text key={i} numberOfLines={1} style={[{ color: k.t.textMuted, fontSize: 12 }, k.f.bold, i === 1 ? { flex: 1 } : { width: i === 5 ? 44 : 28, textAlign: 'center' }]}>
+            {h}
+          </Text>
+        ))}
+      </Row>
+      {rows.map((r, i) => {
+        const tt = teamOf(r.teamId);
+        const q = i < advance;
+        return (
+          <View key={r.teamId}>
+            {k.day ? <View style={{ height: 0, borderTopWidth: 1.5, borderStyle: 'dashed', borderColor: k.t.outline, opacity: 0.3 }} /> : <View style={{ height: 1, backgroundColor: k.t.surface2 }} />}
+            <Row style={{ paddingVertical: 10 }} testID={`table-row-${r.teamId}`}>
+              <Text style={[{ width: 28, textAlign: 'center', color: k.t.text }, k.f.bold]}>{i + 1}</Text>
+              <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: tt?.color ?? k.t.textMuted, marginRight: 6, borderWidth: k.day ? 1.5 : 0, borderColor: k.t.outline }} />
+              <Text style={[{ flex: 1, color: k.t.text, fontSize: 14 }, k.f.bold]} numberOfLines={1}>{tt?.name}</Text>
+              {q ? <Text testID={`qualifies-${r.teamId}`} accessibilityLabel={tr('tournament.qualifies')} style={[{ color: k.t.text, fontSize: 11, marginRight: 4 }, k.f.bold]}>{tr('tournament.qShort')}</Text> : null}
+              <Body style={{ width: 28, textAlign: 'center' }}>{r.played}</Body>
+              <Body style={{ width: 28, textAlign: 'center' }}>{r.won}</Body>
+              <Body style={{ width: 28, textAlign: 'center' }}>{r.lost}</Body>
+              <Body style={{ width: 44, textAlign: 'center' }}>{r.setsWon}–{r.setsLost}</Body>
+              <Text style={[{ width: 28, textAlign: 'center', fontSize: 20, color: k.day ? k.t.text : k.t.primary }, k.f.display]}>{r.tablePoints}</Text>
+            </Row>
+          </View>
+        );
+      })}
+    </Sticker>
+  );
+
   const rounds = [...new Set(data.fixtures.map((f) => f.round))].sort((a, b) => a - b);
   const total = rounds.length;
-  // Table only exists for a league, Bracket only for a knockout (spec shows all three on its league+playoff sample)
-  const tabs: ('table' | 'bracket' | 'fixtures')[] = t.format === 'knockout' ? ['bracket', 'fixtures'] : ['table', 'fixtures'];
+  // Table only exists for a league, Bracket only for a knockout (spec shows all three on its league+playoff sample);
+  // 1.4.27: groups + knockout has Groups (one table per group), Bracket (fed from the groups) and Fixtures
+  const tabs: ('table' | 'groups' | 'bracket' | 'fixtures')[] = t.format === 'knockout' ? ['bracket', 'fixtures'] : t.format === 'groups' ? ['groups', 'bracket', 'fixtures'] : ['table', 'fixtures'];
+  const roundLabel = (r: number) => (t.format === 'knockout' ? roundNameT(r, total, tr) : t.format === 'groups' ? (r <= R ? tr('tournament.groupRound', { n: r }) : koName(r)) : tr('tournament.round', { n: r }));
+  const fmtKey = t.format === 'knockout' ? 'formats.knockout' : t.format === 'groups' ? 'formats.groups' : 'formats.league';
   const current = tab && tabs.includes(tab) ? tab : tabs[0];
   const liveOrNext = data.fixtures.map((f) => ({ f, m: data.byFixture.get(f.id) })).find((x) => x.m && x.m.status === 'live');
   const next = liveOrNext && liveOrNext.m ? { f: liveOrNext.f, m: liveOrNext.m } : null;
-  const liveRound = next ? roundNameT(next.f.round, total, tr) : null;
+  const liveRound = next ? roundLabel(next.f.round) : null;
   const heroInner = (fg: string) => (
     <>
       {liveRound ? <View style={{ marginBottom: 8 }}><LivePill text={`${tr('common.live')} · ${liveRound}`} /></View> : null}
@@ -161,7 +216,7 @@ export default function TournamentPage() {
         <Ionicons name="location-outline" size={13} color={fg} />
         <Body size={12} color={fg} numberOfLines={1} style={{ flexShrink: 1 }}>{t.location.name}</Body>
       </Row>
-      <Body size={12} color={fg} style={{ marginTop: 2 }}>{tr(t.format === 'knockout' ? 'formats.knockout' : 'formats.league')} · {tr('tournaments.teams', { count: t.teams.length })}</Body>
+      <Body size={12} color={fg} style={{ marginTop: 2 }}>{tr(fmtKey)} · {tr('tournaments.teams', { count: t.teams.length })}</Body>
       <Body size={11} color={fg} style={{ marginTop: 4, opacity: 0.9 }}>{describeRulesT(t.rules, tr)}</Body>
       {!isOrganizer && (
         <View testID="tournament-view-only" accessibilityLabel={`${tr('tournament.viewOnly')}. ${tr('tournament.viewOnlyHint')}`} style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', marginTop: 10, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: k.day ? k.t.surface : k.t.surface2, borderWidth: k.day ? 2 : 0, borderColor: k.t.outline }}>
@@ -194,49 +249,35 @@ export default function TournamentPage() {
         </Sticker>
       )}
       {isOrganizer && !data.champion && <Banner text={tr('tournament.organiserBanner')} />}
+      {data.unscheduled.length > 0 && (
+        // 1.4.26 (E2E-5): a team added after the fixtures were made has none; no champion until it is resolved
+        <Banner tone="warn" testID="tournament-unscheduled" text={tr('tournament.noFixturesWarn', { teams: data.unscheduled.map((x) => teamOf(x)?.name ?? x).join(', ') })} />
+      )}
       {error && <Banner tone="warn" text={error} />}
 
       <View style={{ marginVertical: 10 }}>
         <SegmentedControl testID="tournament-tabs" items={tabs.map((key) => ({ key, label: tr(`dn.tab_${key}`) }))} value={current} onChange={setTab} />
       </View>
 
-      {current === 'table' && data.table && (
-        <Sticker testID="tournament-table" inner={{ padding: 10 }}>
-          <Row style={{ paddingVertical: 4 }}>
-            {['#', tr('tournament.colTeam'), tr('tournament.colPlayed'), tr('tournament.colWon'), tr('tournament.colLost'), tr('tournament.colSets'), tr('tournament.colPts')].map((h, i) => (
-              <Text key={i} numberOfLines={1} style={[{ color: k.t.textMuted, fontSize: 12 }, k.f.bold, i === 1 ? { flex: 1 } : { width: i === 5 ? 44 : 28, textAlign: 'center' }]}>
-                {h}
-              </Text>
-            ))}
-          </Row>
-          {data.table.map((r, i) => {
-            const tt = teamOf(r.teamId);
-            return (
-              <View key={r.teamId}>
-                {k.day ? <View style={{ height: 0, borderTopWidth: 1.5, borderStyle: 'dashed', borderColor: k.t.outline, opacity: 0.3 }} /> : <View style={{ height: 1, backgroundColor: k.t.surface2 }} />}
-                <Row style={{ paddingVertical: 10 }} testID={`table-row-${r.teamId}`}>
-                  <Text style={[{ width: 28, textAlign: 'center', color: k.t.text }, k.f.bold]}>{i + 1}</Text>
-                  <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: tt?.color ?? k.t.textMuted, marginRight: 6, borderWidth: k.day ? 1.5 : 0, borderColor: k.t.outline }} />
-                  <Text style={[{ flex: 1, color: k.t.text, fontSize: 14 }, k.f.bold]} numberOfLines={1}>{tt?.name}</Text>
-                  <Body style={{ width: 28, textAlign: 'center' }}>{r.played}</Body>
-                  <Body style={{ width: 28, textAlign: 'center' }}>{r.won}</Body>
-                  <Body style={{ width: 28, textAlign: 'center' }}>{r.lost}</Body>
-                  <Body style={{ width: 44, textAlign: 'center' }}>{r.setsWon}–{r.setsLost}</Body>
-                  <Text style={[{ width: 28, textAlign: 'center', fontSize: 20, color: k.day ? k.t.text : k.t.primary }, k.f.display]}>{r.tablePoints}</Text>
-                </Row>
-              </View>
-            );
-          })}
-        </Sticker>
+      {current === 'groups' && data.groups && (
+        <View testID="tournament-groups">
+          {data.groups.map((g) => (
+            <View key={g.group} style={{ marginBottom: 14 }} testID={`group-${g.group}`}>
+              <Over style={{ marginBottom: 6 }}>{tr('tournament.group', { group: g.group })}{g.complete ? ` · ${tr('tournament.groupDone')}` : ''}</Over>
+              {renderTable(g.rows, `group-table-${g.group}`, t.advance ?? 2)}
+            </View>
+          ))}
+          <Body muted size={12}>{tr('tournament.groupsHint', { count: t.advance ?? 2 })}</Body>
+        </View>
       )}
-
+      {current === 'table' && data.table && renderTable(data.table, 'tournament-table')}
       {current === 'table' && next ? (
         <>
           {!k.day ? <Display size={20} style={{ marginTop: 18, marginBottom: 8 }}>{tr('dn.nextFixture')}</Display> : null}
           <Sticker fill={k.day ? k.t.accent : k.t.surface} style={{ marginTop: k.day ? 16 : 0 }} onPress={() => router.push(`/match/${next.m.id}`)} testID="tournament-next" inner={{ padding: 14 }}>
             <Row style={{ gap: 8 }}>
               {next.m.status === 'live' ? <LivePill text={tr('common.live')} /> : null}
-              <Body bold size={12} numberOfLines={1} style={{ flex: 1 }}>{k.day ? `${tr('dn.nextFixture')} · ` : ''}{roundNameT(next.f.round, total, tr)}</Body>
+              <Body bold size={12} numberOfLines={1} style={{ flex: 1 }}>{k.day ? `${tr('dn.nextFixture')} · ` : ''}{roundLabel(next.f.round)}</Body>
             </Row>
             <Row style={{ marginTop: 8, gap: 8 }}>
               <Body bold size={14} numberOfLines={1} style={{ flex: 1 }}>{teamOf(next.f.homeId)?.name}</Body>
@@ -251,9 +292,9 @@ export default function TournamentPage() {
 
       {current === 'bracket' && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} testID="tournament-bracket">
-          {rounds.map((r) => (
+          {(t.format === 'groups' ? koRounds : rounds).map((r) => (
             <View key={r} style={{ marginRight: 4 }}>
-              <Over style={{ marginBottom: 6 }}>{roundNameT(r, total, tr)}</Over>
+              <Over style={{ marginBottom: 6 }}>{roundLabel(r)}</Over>
               <View style={{ flex: 1, justifyContent: 'space-around' }}>
                 {data.fixtures.filter((f) => f.round === r).map((f) => <FixtureCard key={f.id} f={f} compact />)}
               </View>
@@ -265,7 +306,7 @@ export default function TournamentPage() {
         <View testID="tournament-fixtures">
           {rounds.map((r) => (
             <View key={r}>
-              <Over style={{ marginBottom: 6, marginTop: 6 }}>{t.format === 'knockout' ? roundNameT(r, total, tr) : tr('tournament.round', { n: r })}</Over>
+              <Over style={{ marginBottom: 6, marginTop: 6 }}>{roundLabel(r)}</Over>
               {data.fixtures.filter((f) => f.round === r).map((f) => <FixtureCard key={f.id} f={f} />)}
             </View>
           ))}

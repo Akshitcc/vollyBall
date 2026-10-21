@@ -39,6 +39,9 @@ beforeEach(async () => {
 afterEach(() => jest.useRealTimers());
 
 describe('V139-7: the review prompt never opens over the POTM picker, a modal or a dialog', () => {
+  // 1.4.26: the demo no longer asks (Tester Info); these tests drive the mock sheet on purpose
+  beforeAll(() => { require('../../state/useReviewPrompt').demoReviewPrompt.on = true; });
+  afterAll(() => { require('../../state/useReviewPrompt').demoReviewPrompt.on = false; });
   const { useReviewPrompt } = require('../../state/useReviewPrompt');
   const { HoldUi } = require('../../state/uiBusy');
   const { Modal } = require('../AppModal');

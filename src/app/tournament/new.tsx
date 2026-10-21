@@ -3,7 +3,7 @@ import { tournamentDates } from '../../core/dates';
 import { cleanText } from '../../core/text';
 import { LIMITS, MAX_TOURNAMENT_TEAMS } from '../../core/limits';
 import { router } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pressable, Text } from 'react-native';
 import { LocationPicker, placeReady } from '../../components/LocationPicker';
@@ -13,6 +13,7 @@ import { Button, Card, Chip, Field, H2, P, Row, styles as ui, TeamDot } from '..
 import type { Place } from '../../core/geo';
 import { INDOOR_RULES, type RuleSet } from '../../core/rules';
 import { generateKnockout, generateRoundRobin, type TournamentFormat } from '../../core/tournament';
+import { assignGroups, generateGroupsKnockout, groupId, groupPlans, MIN_GROUPS_TEAMS, playIn, seededRandom, type GroupMode } from '../../core/groups';
 import { MIN_PLAYERS, teamCanPlay, tournamentCandidates } from '../../core/roster';
 import { distinctColor, type Team, type TournamentTeam } from '../../core/types';
 import { backend } from '../../services/backend';
@@ -34,6 +35,19 @@ export default function NewTournament() {
   const [results, setResults] = useState<Team[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 1.4.27 groups + knockout: plan (groups × advancing), seeded or random draw (a stable seed; "Draw again" changes it)
+  const [planIdx, setPlanIdx] = useState(0);
+  const [mode, setMode] = useState<GroupMode>('seeded');
+  const [drawSeed, setDrawSeed] = useState(() => Date.now() % 100000);
+  const plans = useMemo(() => groupPlans(teams.length).slice(0, 4), [teams.length]);
+  const plan = plans[Math.min(planIdx, plans.length - 1)] ?? null;
+  const groups = useMemo(
+    () => (format === 'groups' && plan ? assignGroups(teams.map((x) => x.id), plan.groups, mode, seededRandom(drawSeed)) : []),
+    [format, plan, teams, mode, drawSeed],
+  );
+  const pi = playIn(Math.max(2, teams.length));
+  const planLabel = (p: NonNullable<typeof plan>) =>
+    tr('newTournament.planLabel', { groups: p.groups, sizes: p.sizes.join('/'), advance: p.advance, round: tr(`newTournament.koFrom_${p.bracket}`), total: p.total });
   // 1.4.20 (QA V1419-8): a form error goes away by itself once its field is fixed
   const [errFor, setErrFor] = useState<'name' | 'location' | 'place' | 'teams' | null>(null);
   const fieldError = (k: NonNullable<typeof errFor>, text: string) => { setErrFor(k); setError(text); };
@@ -69,9 +83,12 @@ export default function NewTournament() {
     if (!location) return fieldError('location', tr('newTournament.pickLocation'));
     if (!placeReady(location)) return fieldError('place', tr('location.nameRequired'));
     if (teams.length < 2) return fieldError('teams', tr('newTournament.minTeams'));
+    if (format === 'groups' && (teams.length < MIN_GROUPS_TEAMS || !plan)) return fieldError('teams', tr('newTournament.groupsMinTeams', { min: MIN_GROUPS_TEAMS }));
     setBusy(true);
     try {
       const ids = teams.map((t) => t.id);
+      const grouped = format === 'groups' && plan ? { groups, advance: plan.advance } : null;
+      const teamsOut = grouped ? teams.map((x) => ({ ...x, group: groupId(grouped.groups.findIndex((g) => g.includes(x.id))) })) : teams;
       const { startDate, endDate } = tournamentDates(startIn, days);
       const id = await backend.createTournament({
         name: cleanText(name),
@@ -81,8 +98,9 @@ export default function NewTournament() {
         startDate,
         endDate,
         location,
-        teams,
-        fixtures: format === 'knockout' ? generateKnockout(ids) : generateRoundRobin(ids),
+        teams: teamsOut,
+        ...(grouped ? { advance: grouped.advance } : {}),
+        fixtures: grouped ? generateGroupsKnockout(grouped.groups, grouped.advance) : format === 'knockout' ? generateKnockout(ids) : generateRoundRobin(ids),
         status: 'running',
       });
       router.replace(`/tournament/${id}`);
@@ -99,10 +117,15 @@ export default function NewTournament() {
       <Row style={{ marginBottom: 6, flexWrap: 'wrap' }}>
         <Chip label={tr('newTournament.knockout')} active={format === 'knockout'} onPress={() => setFormat('knockout')} />
         <Chip label={tr('newTournament.league')} active={format === 'league'} onPress={() => setFormat('league')} />
+        <Chip label={tr('newTournament.groups')} active={format === 'groups'} onPress={() => setFormat('groups')} testID="format-groups" />
       </Row>
       <P muted style={{ marginBottom: 12 }}>
-        {format === 'knockout' ? tr('newTournament.knockoutHint') : tr('newTournament.leagueHint')}
+        {format === 'knockout' ? tr('newTournament.knockoutHint') : format === 'groups' ? tr('newTournament.groupsHint') : tr('newTournament.leagueHint')}
       </P>
+      {/* 1.4.27: knockout of a field that is not a power of two starts with a play-in round (top seeds get byes) */}
+      {format === 'knockout' && teams.length > 2 && pi.byes > 0 ? (
+        <P muted style={{ marginBottom: 12, fontSize: 12 }} testID="knockout-playin">{tr('newTournament.playInHint', { count: pi.playInMatches, teams: pi.playInMatches * 2, field: pi.field, total: pi.total })}</P>
+      ) : null}
       <Card>
         <RulesEditor value={rules} onChange={setRules} />
       </Card>
@@ -152,6 +175,48 @@ export default function NewTournament() {
           </Text>
         ) : null}
       </Card>
+      {format === 'groups' && (
+        <Card testID="groups-setup">
+          {!plan ? (
+            <P muted testID="groups-min">{tr('newTournament.groupsMinTeams', { min: MIN_GROUPS_TEAMS })}</P>
+          ) : (
+            <>
+              <Text style={ui.label}>{tr('newTournament.groupPlan')}</Text>
+              <Row style={{ flexWrap: 'wrap' }}>
+                {plans.map((p, i) => (
+                  <Chip key={`${p.groups}-${p.advance}`} label={planLabel(p)} active={plan === p} onPress={() => setPlanIdx(i)} testID={`group-plan-${p.groups}x${p.advance}`} />
+                ))}
+              </Row>
+              <Text style={ui.label}>{tr('newTournament.draw')}</Text>
+              <Row style={{ flexWrap: 'wrap' }}>
+                <Chip label={tr('newTournament.drawSeeded')} active={mode === 'seeded'} onPress={() => setMode('seeded')} testID="draw-seeded" />
+                <Chip label={tr('newTournament.drawRandom')} active={mode === 'random'} onPress={() => setMode('random')} testID="draw-random" />
+                {mode === 'random' ? <Chip label={tr('newTournament.drawAgain')} onPress={() => setDrawSeed((x) => x + 1)} testID="draw-again" /> : null}
+              </Row>
+              <P muted style={{ fontSize: 12, marginTop: 4 }}>{mode === 'seeded' ? tr('newTournament.drawSeededHint') : tr('newTournament.drawRandomHint')}</P>
+              <Text style={ui.label}>{tr('newTournament.groupsPreview')}</Text>
+              <Row style={{ flexWrap: 'wrap', gap: 8 }} testID="groups-preview">
+                {groups.map((g, gi) => (
+                  <Card key={gi} style={{ minWidth: 140, flexGrow: 1, marginBottom: 0 }} testID={`preview-group-${groupId(gi)}`}>
+                    <Text style={[ui.label, { marginTop: 0 }]}>{tr('tournament.group', { group: groupId(gi) })}</Text>
+                    {g.map((tid) => {
+                      const tm = teams.find((x) => x.id === tid);
+                      return (
+                        <Row key={tid} style={{ paddingVertical: 2 }}>
+                          <TeamDot color={tm?.color ?? colors.muted} size={10} style={{ marginRight: 6 }} />
+                          <Text style={{ color: colors.text, fontWeight: '700', flexShrink: 1 }} numberOfLines={1}>{tm?.name}</Text>
+                        </Row>
+                      );
+                    })}
+                  </Card>
+                ))}
+              </Row>
+              <P muted style={{ fontSize: 12, marginTop: 6 }} testID="groups-total">{tr('newTournament.groupsTotal', { group: plan.groupMatches, ko: plan.knockoutMatches, total: plan.total })}</P>
+              {plan.byes > 0 ? <P muted style={{ fontSize: 12 }} testID="groups-byes">{tr('newTournament.groupsByes', { byes: plan.byes })}</P> : null}
+            </>
+          )}
+        </Card>
+      )}
       <H2>{tr('newTournament.venue')}</H2>
       <LocationPicker value={location} onChange={setLocation} />
       {error && <Text style={{ color: colors.danger, fontWeight: '700' }}>{error}</Text>}

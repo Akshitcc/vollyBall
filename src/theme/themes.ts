@@ -34,12 +34,12 @@ export const FLOODLIGHT: ThemeTokens = {
   primary: '#C6FF1A', onPrimary: '#141C30', primaryText: '#C6FF1A',
   ink: '#1A2440', ink2: '#33446A', inkSelected: '#45578A', onInk: '#FFFFFF', onInkMuted: '#C9D2E8',
   bg: '#1E2A44', card: '#283654', surface: '#33446A',
-  text: '#F4F7FF', muted: '#C3CDE3', placeholder: '#97A3C0', border: '#7A8BB8', hairline: '#3A4A70', divider: '#304064',
+  text: '#F4F7FF', muted: '#C3CDE3', placeholder: '#AAB5CF', border: '#7A8BB8', hairline: '#3A4A70', divider: '#304064',
   tabInactive: '#C3CDE3',
   red: '#FF5A5F', gold: '#FFC727', goldText: '#FFD75E', goldTint: '#2B2512',
   lossText: '#FF9A9A', lossBg: '#3A1620', successStrong: '#86EFAC', successBg: '#10301F',
   court: '#2A3858', blueLine: '#2DD4F0',
-  danger: '#FF7A85', live: '#C81E3A', success: '#4ADE80', successFill: '#4ADE80',
+  danger: '#FF9AA2', live: '#C81E3A', success: '#4ADE80', successFill: '#4ADE80',
   warnBg: '#33446A', selectedBg: '#33446A', tint: '#33446A', white: '#FFFFFF',
   disabledBg: '#33446A', disabledText: '#C9D2E8', // 1.4.24 (V1423-3): ~9:1, clearly readable but muted
   teamA: '#D93636', teamB: '#001F4D',
@@ -61,10 +61,10 @@ export const THEME_LABEL: Record<ThemeName, string> = { day: 'Sunday Court', nig
 export const AA_TEXT_PAIRS: [keyof ThemeTokens, keyof ThemeTokens][] = [
   ['text', 'bg'], ['text', 'card'], ['text', 'surface'], ['text', 'tint'],
   ['muted', 'bg'], ['muted', 'card'], ['muted', 'surface'],
-  ['placeholder', 'card'], ['placeholder', 'bg'],
+  ['placeholder', 'card'], ['placeholder', 'bg'], ['placeholder', 'surface'], // 1.4.26 (V1425-1)
   ['primaryText', 'card'], ['primaryText', 'bg'],
   ['onPrimary', 'primary'], ['onInk', 'ink'], ['onInkMuted', 'ink'], ['onInk', 'ink2'], ['onInk', 'inkSelected'],
-  ['danger', 'card'], ['danger', 'bg'], ['success', 'card'], ['goldText', 'card'], ['goldText', 'goldTint'],
+  ['danger', 'card'], ['danger', 'bg'], ['danger', 'surface'], ['success', 'card'], ['goldText', 'card'], ['goldText', 'goldTint'],
   ['lossText', 'lossBg'], ['successStrong', 'successBg'], ['disabledText', 'disabledBg'],
   ['onInk', 'live'], ['onPrimary', 'successFill'], ['tabInactive', 'ink'], ['primary', 'ink'], ['onHeader', 'header'],
 ];

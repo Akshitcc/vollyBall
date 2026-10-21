@@ -33,10 +33,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   name: 'VolleyLive',
   slug: 'volleylive',
   scheme: 'volleylive',
-  version: '1.4.25',
+  version: '1.4.28',
   orientation: 'portrait',
   icon: './assets/icon.png',
-  userInterfaceStyle: 'light',
+  userInterfaceStyle: 'automatic', // 1.4.26: the Night splash follows the system theme
   primaryColor: '#002E6E', // theme palette.navy (Android colorPrimary)
   ios: {
     supportsTablet: false,
@@ -50,10 +50,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   android: {
     // EAS production builds use the remote versionCode (eas.json appVersionSource=remote + autoIncrement);
     // this value is only for local gradle builds. ANDROID_VERSION_CODE overrides it (e.g. for a local release AAB).
-    versionCode: Number(process.env.ANDROID_VERSION_CODE) || 41,
+    versionCode: Number(process.env.ANDROID_VERSION_CODE) || 44,
     package: process.env.ANDROID_PACKAGE ?? 'com.volleylive.app',
     adaptiveIcon: {
-      backgroundColor: '#002E6E', // theme palette.navy (checked in src/theme/__tests__/contrast.test.ts)
+      backgroundColor: '#0055A4', // theme palette.brandBlue, Spiker icon (checked in src/theme/__tests__/contrast.test.ts)
       foregroundImage: './assets/android-icon-foreground.png',
       backgroundImage: './assets/android-icon-background.png',
       monochromeImage: './assets/android-icon-monochrome.png',
@@ -87,7 +87,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         microphonePermission: false, // photos only (no video recording)
       },
     ],
-    ['expo-notifications', { color: '#00BAF2' }], // theme palette.blue
+    ['expo-notifications', { icon: './assets/notification-icon.png', color: '#0055A4' }], // theme palette.brandBlue
+    [
+      'expo-splash-screen',
+      {
+        image: './assets/splash-icon.png',
+        imageWidth: 200,
+        resizeMode: 'contain',
+        backgroundColor: '#FFFAF3', // Day bg
+        dark: { image: './assets/splash-icon.png', backgroundColor: '#1E2A44' }, // Night bg
+      },
+    ],
     [
       'react-native-maps',
       // Only needed for Android store/dev builds (Expo Go works without it).

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { EVERYONE, SQUAD_A, SQUAD_B, createMatch, makeTeam, register, startHarness, type Harness } from './helpers';
+import { EVERYONE, SQUAD_A, SQUAD_B, createMatch, makeTeam, register, startHarness, type Harness, newMatchBody } from './helpers';
 
 let h: Harness;
 before(async () => (h = await startHarness()));
@@ -14,6 +14,9 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
 const place = { name: 'Siri Fort', lat: 28.55, lng: 77.22 };
 const rules = { preset: 'indoor', bestOf: 3, pointsPerSet: 25, decidingSetPoints: 15, winBy: 2, pointCap: null, timeoutsPerSet: 2, sideSwitchEvery: null, decidingSideSwitchEvery: 8, decidingSwitchAt: null };
 const filePath = (url: string) => new URL(url).pathname + new URL(url).search;
+
+// 1.4.26 (E2E-3): a fixture match is played by the fixture's two registered teams
+const fixtureSides = (a: string, b: string) => { const m = newMatchBody(); return { teamA: { ...m.teamA, teamId: a }, teamB: { ...m.teamB, teamId: b }, captains: { A: 'cap', B: 'dan' } }; };
 
 describe('photos (rules: matches/{id}/photos + storage.rules)', () => {
   it('participants upload images < 10 MB; served through expiring signed URLs; uploader deletes', async () => {
@@ -123,7 +126,7 @@ describe('tournaments (rules: tournaments/{id})', () => {
     const id = (await h.as('cap').post('/api/tournaments').send(body())).body.id;
     assert.equal((await h.as('bob').patch(`/api/tournaments/${id}`).send({ status: 'running' })).status, 403);
     assert.equal((await h.as('cap').patch(`/api/tournaments/${id}`).send({ organizerId: 'bob' })).status, 403);
-    const m = await createMatch(h, { tournamentId: id, fixtureId: 'f1' });
+    const m = await createMatch(h, { ...fixtureSides(t1, t2), tournamentId: id, fixtureId: 'f1' });
     const fx = [{ id: 'f1', round: 1, index: 0, homeId: t1, awayId: t2, matchId: m }];
     const p = await h.as('cap').patch(`/api/tournaments/${id}`).send({ status: 'running', fixtures: fx });
     assert.equal(p.status, 200, JSON.stringify(p.body));

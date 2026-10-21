@@ -307,6 +307,8 @@ export interface TournamentTeam {
   id: string;
   name: string;
   color: string;
+  /** 1.4.27 groups format: the team's group letter (A–H). */
+  group?: string;
 }
 
 export interface Tournament {
@@ -320,6 +322,8 @@ export interface Tournament {
   location: Place;
   teams: TournamentTeam[];
   fixtures: Fixture[];
+  /** 1.4.27 groups format: teams per group that go to the knockout (1 or 2). */
+  advance?: number;
   status: 'registration' | 'running' | 'finished';
   createdAt: number;
 }

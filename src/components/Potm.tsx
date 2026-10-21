@@ -13,10 +13,12 @@ import { translateError } from '../i18n/format';
 import { backend } from '../services/backend';
 import { colors, themed } from '../theme';
 import { Avatar, Button } from './ui';
-import { playerStats } from '../core/stats';
+import { hasDetailedStats, playerStats } from '../core/stats';
 import { Body, Over, Sticker, useKit } from './DNKit';
 
 /** QA C130-3: 0-point players are disabled in the picker when anyone was credited a point. */
+/** 1.4.26 (E2E-10): shown instead of points when nobody was credited a rally. */
+export const POTM_NO_STATS = '–';
 export const potmZeroBlocked = (lines: readonly { points: number }[]) => lines.some((l) => l.points > 0);
 
 const playersOf = (m: Match) => [...m.teamA.players.map((p) => ({ ...p, color: m.teamA.color })), ...m.teamB.players.map((p) => ({ ...p, color: m.teamB.color }))];
@@ -26,6 +28,8 @@ export function PotmBadge({ match, compact }: { match: Match; compact?: boolean 
   const id = match.playerOfMatchId;
   const p = id ? playersOf(match).find((x) => x.id === id) : null;
   const pts = useMemo(() => (id ? potmLines(match).find((l) => l.playerId === id)?.points ?? 0 : 0), [match, id]);
+  // 1.4.26 (E2E-10): no rally credited to a player (tap-a-player not used) -> a dash, not a misleading "0 pts"
+  const credited = useMemo(() => potmZeroBlocked(potmLines(match)), [match]);
   // 1.3.9 (V138-10): say how this Player of the Match was decided (auto-pick rule, or the scorer's choice)
   const auto = useMemo(() => (id ? pickPlayerOfMatch(match) : null), [match, id]);
   if (!id || !p) return null;
@@ -33,20 +37,24 @@ export function PotmBadge({ match, compact }: { match: Match; compact?: boolean 
   const basis = auto === null ? null : auto === id ? t('potm.basisAuto') : t('potm.basisScorer');
   // 1.4.22 (spec v2 *-07 reward): POTM card – Day Ball sticker / Night surface with Volt border + glow; avatar, name,
   // team, four stat tiles (Points, Spikes, Blocks, Aces).
-  return <PotmCard p={p} pts={pts} basis={basis} compact={compact} team={match.teamA.players.some((x) => x.id === id) ? match.teamA.name : match.teamB.name} line={playerStats(match.rules, match.events, match.firstServe ?? 'A', match)[id]} />;
+  return <PotmCard p={p} pts={pts} credited={credited} detailed={hasDetailedStats(match.events)} basis={basis} compact={compact} team={match.teamA.players.some((x) => x.id === id) ? match.teamA.name : match.teamB.name} line={playerStats(match.rules, match.events, match.firstServe ?? 'A', match)[id]} />;
 }
 
-function PotmCard({ p, pts, basis, compact, team, line }: { p: { name: string; photoURL?: string | null; color: string }; pts: number; basis: string | null; compact?: boolean; team: string; line?: { kill?: number; block?: number; ace?: number } }) {
+function PotmCard({ p, pts, credited = true, detailed = true, basis, compact, team, line }: { p: { name: string; photoURL?: string | null; color: string }; pts: number; credited?: boolean; detailed?: boolean; basis: string | null; compact?: boolean; team: string; line?: { kill?: number; block?: number; ace?: number } }) {
   const { t } = useTranslation();
   const k = useKit();
-  const tile = (label: string, v: number | string) => (
+  const tile = (label: string, v0: number | string, skill = false) => {
+    // 1.4.26 (E2E-10): nobody credited -> dashes; 1.4.27: credited but no point kinds recorded -> dashes on the skills
+    const v = credited && (!skill || detailed) ? v0 : POTM_NO_STATS;
+    return (
     <View style={{ flex: 1 }} key={label}>
       <Sticker fill={k.day ? k.t.surface : k.t.surface2} radius={14} shadow={2} border={k.day ? undefined : k.t.surface2} inner={{ paddingVertical: 8, alignItems: 'center' }}>
         <Text style={[{ fontSize: k.day ? 22 : 28, lineHeight: k.day ? 26 : 28, color: k.t.text }, k.f.display]}>{v}</Text>
         <Body size={11} muted={!k.day}>{label}</Body>
       </Sticker>
     </View>
-  );
+    );
+  };
   return (
     <Sticker fill={k.day ? k.t.accent : k.t.surface} highlight={!k.day} style={{ marginVertical: compact ? 6 : 10 }}
       inner={[{ padding: 14 }, !k.day ? { shadowColor: k.t.primary, shadowOpacity: 0.3, shadowRadius: 20, shadowOffset: { width: 0, height: 0 } } : null]}>
@@ -55,7 +63,7 @@ function PotmCard({ p, pts, basis, compact, team, line }: { p: { name: string; p
           <Ionicons name="star" size={16} color={k.day ? k.t.text : k.t.primary} />
           <Over color={k.day ? k.t.text : k.t.primary} style={{ flex: 1 }} numberOfLines={2} testID="potm-label">{t('potm.title')}</Over>
           <View style={{ backgroundColor: k.day ? k.t.surface : k.t.primary, borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2, borderWidth: k.day ? 1.5 : 0, borderColor: k.t.outline }}>
-            <Text style={[{ fontSize: 12, color: k.day ? k.t.text : k.t.onPrimary }, k.f.bold]} numberOfLines={1}>{t('potm.points', { count: pts })}</Text>
+            <Text style={[{ fontSize: 12, color: k.day ? k.t.text : k.t.onPrimary }, k.f.bold]} numberOfLines={1}>{credited ? t('potm.points', { count: pts }) : POTM_NO_STATS}</Text>
           </View>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 12 }}>
@@ -71,9 +79,9 @@ function PotmCard({ p, pts, basis, compact, team, line }: { p: { name: string; p
         {!compact ? (
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
             {tile(t('profile.points'), pts)}
-            {tile(t('profile.spikes'), line?.kill ?? 0)}
-            {tile(t('profile.blocks'), line?.block ?? 0)}
-            {tile(t('profile.aces'), line?.ace ?? 0)}
+            {tile(t('profile.spikes'), line?.kill ?? 0, true)}
+            {tile(t('profile.blocks'), line?.block ?? 0, true)}
+            {tile(t('profile.aces'), line?.ace ?? 0, true)}
           </View>
         ) : null}
       </View>
@@ -88,6 +96,7 @@ function PotmCard({ p, pts, basis, compact, team, line }: { p: { name: string; p
 export function PotmPicker({ match, uid, onDark }: { match: Match; uid: string; onDark?: boolean }) {
   const { t } = useTranslation();
   const lines = useMemo(() => potmLines(match), [match]);
+  const anyCredited = potmZeroBlocked(lines); // 1.4.26 (E2E-10)
   const auto = useMemo(() => pickPlayerOfMatch(match), [match]);
   const [chosen, setChosen] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -154,7 +163,7 @@ export function PotmPicker({ match, uid, onDark }: { match: Match; uid: string; 
                 {p.name.split(' ')[0]}
               </Text>
               <Text style={s.playerPts} numberOfLines={1}>
-                {t('potm.points', { count: l.points })}
+                {anyCredited ? t('potm.points', { count: l.points }) : POTM_NO_STATS}
               </Text>
               {l.playerId === auto && <Text style={s.autoTag}>{t('potm.auto')}</Text>}
             </Pressable>
