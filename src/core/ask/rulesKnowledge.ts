@@ -18,6 +18,10 @@ export const RULE_NOTES: readonly RuleNote[] = [
   { id: 'rule-match-sets', tags: ['match', 'best of', 'five', 'deciding set', '15', 'tie-break', 'मैच', 'निर्णायक'],
     en: { title: 'How many sets are in a match?', text: 'A standard match is best of five sets: the first team to win three sets wins. If it reaches two sets each, the deciding fifth set is shorter – played to 15, still with a two-point lead.' },
     hi: { title: 'एक मैच में कितने सेट होते हैं?', text: 'स्टैंडर्ड मैच पाँच में से सबसे अच्छे तीन सेट का होता है: जो टीम पहले तीन सेट जीते वह मैच जीतती है। दो-दो सेट होने पर निर्णायक पाँचवाँ सेट छोटा होता है – 15 पॉइंट तक, फिर भी दो पॉइंट की बढ़त ज़रूरी।' } },
+  // 1.5.1 (Tester F150-5): the deciding set on its own, so "points in the deciding set" doesn't get the 25-point answer
+  { id: 'rule-deciding-set', tags: ['deciding set', 'deciding', 'decider', 'fifth set', '5th set', 'final set', 'last set', 'tie-break', 'tiebreak', '15', 'निर्णायक सेट', 'निर्णायक', 'पाँचवाँ सेट', 'आख़िरी सेट'],
+    en: { title: 'How many points in the deciding set?', text: 'The deciding set (the fifth set at two sets each, or the third in a best-of-three) is played to 15 points, still with a two-point lead (16–14, 17–15 …). The other sets go to 25.' },
+    hi: { title: 'निर्णायक (पाँचवाँ) सेट: 15 पॉइंट', text: 'निर्णायक सेट (दो-दो सेट होने पर पाँचवाँ सेट, या तीन सेट वाले मैच में तीसरा) 15 पॉइंट तक खेला जाता है, फिर भी दो पॉइंट की बढ़त ज़रूरी है (16–14, 17–15 …)। बाकी सेट 25 पॉइंट के होते हैं।' } },
   { id: 'rule-rally-scoring', tags: ['rally', 'point', 'serve', 'scoring', 'रैली', 'सर्व'],
     en: { title: 'Who gets the point in a rally?', text: 'Every rally scores a point (rally-point scoring). The team that wins the rally gets the point, and if it was receiving, it also wins the right to serve next.' },
     hi: { title: 'रैली का पॉइंट किसे मिलता है?', text: 'हर रैली पर एक पॉइंट मिलता है (रैली-पॉइंट स्कोरिंग)। रैली जीतने वाली टीम को पॉइंट मिलता है, और अगर वह सर्व रिसीव कर रही थी तो अगली सर्व भी उसी की होती है।' } },

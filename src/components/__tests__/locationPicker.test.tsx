@@ -76,13 +76,14 @@ test('tapping keeps the map still and uses the geocoded name', async () => {
   expect(screen.getByTestId('ready').props.children).toBe('true');
 });
 
-test('no geocoder: the name stays empty (never coordinates) with a hint, and the place is not ready', async () => {
+test('no geocoder (1.5.0 F1428-5): the pin is saved as "Pinned location" (never coordinates), with a hint, and is ready', async () => {
   await render(<Harness />);
   await tap({ lat: 28.57581, lng: 77.22683 });
   await lookup(0, null);
-  expect(last!.name).toBe('');
+  expect(last!.name).toBe('Pinned location');
+  expect(last!.lat).toBe(28.57581);
   expect(screen.getByTestId('place-name-hint').props.children).toContain('28.5758, 77.2268');
-  expect(screen.getByTestId('ready').props.children).toBe('false');
+  expect(screen.getByTestId('ready').props.children).toBe('true');
   await fireEvent.changeText(screen.getByTestId('place-name'), 'Sector 21 court');
   expect(last!.name).toBe('Sector 21 court');
   expect(screen.getByTestId('ready').props.children).toBe('true');

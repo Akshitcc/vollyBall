@@ -1,3 +1,4 @@
+import { maskPii } from '../pii';
 /**
  * 1.4.20 Ask VolleyLive (RAG phase 1): retrieval-augmented answers over the Help Center FAQs (core/helpFaq) and our
  * own volleyball rule notes (./rulesKnowledge, FIVB summarised + linked, never copied).
@@ -13,12 +14,23 @@
 import { CodedError } from '../codedError';
 import { FAQS, type Faq } from '../helpFaq';
 import { stripHidden } from '../text';
+import { GUIDES, screenUrl, type Guide } from './guides';
 import { FIVB_RULES_URL, RULE_NOTES, type RuleNote } from './rulesKnowledge';
 export { FIVB_RULES_URL } from './rulesKnowledge';
+export { GUIDES, screenUrl } from './guides';
 
 export type AskLang = 'en' | 'hi';
-export interface AskChunk { id: string; kind: 'faq' | 'rules'; lang: AskLang; title: string; text: string; url: string }
-export interface AskSource { id: string; kind: 'faq' | 'rules'; title: string; url: string }
+/** 1.5.0: + 'guide' (how-to per screen, ./guides) and 'custom' (admin-edited content, table ask_content). */
+export type AskKind = 'faq' | 'rules' | 'guide' | 'custom';
+export const ASK_KINDS: readonly AskKind[] = ['faq', 'rules', 'guide', 'custom'];
+export interface AskChunk { id: string; kind: AskKind; lang: AskLang; title: string; text: string; url: string }
+export interface AskSource { id: string; kind: AskKind; title: string; url: string }
+/** 1.5.0: one admin-edited knowledge entry (server table ask_content). */
+export interface AskContent { id: string; lang: AskLang; title: string; text: string; url?: string | null }
+export const ASK_CONTENT_TITLE_MAX = 120;
+export const ASK_CONTENT_TEXT_MAX = 4000;
+/** Chunk size for long texts (characters); short texts stay one chunk. */
+export const ASK_CHUNK_MAX = 480;
 export interface AskAnswer { answer: string; sources: AskSource[]; idk: boolean; provider: string }
 export interface AskProvider {
   readonly name: string;
@@ -41,10 +53,35 @@ export type AskProviderName = (typeof ASK_PROVIDERS)[number];
 /** In-app link to one FAQ (the Help screen opens it). */
 export const faqUrl = (id: string) => `volleylive://help?faq=${encodeURIComponent(id)}`;
 
-export function buildChunks(faqs: readonly Faq[] = FAQS, rules: readonly RuleNote[] = RULE_NOTES): AskChunk[] {
+/** 1.5.0: splits a long text on sentence ends into pieces of at most `max` characters (a single long sentence is cut). */
+export function chunkText(text: string, max = ASK_CHUNK_MAX): string[] {
+  const t = text.replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t ? [t] : [];
+  const sentences = t.match(/[^.!?।]+[.!?।]*\s*/g) ?? [t];
+  const out: string[] = [];
+  let cur = '';
+  for (const raw of sentences) {
+    for (let sx = raw; sx.length; sx = sx.slice(max)) {
+      const piece = sx.slice(0, max);
+      if ((cur + piece).length > max && cur) { out.push(cur.trim()); cur = ''; }
+      cur += piece;
+    }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+const pieces = (base: AskChunk): AskChunk[] => {
+  const parts = chunkText(base.text);
+  return parts.length <= 1 ? [base] : parts.map((text, i) => ({ ...base, id: `${base.id}#${i + 1}`, text }));
+};
+
+export function buildChunks(faqs: readonly Faq[] = FAQS, rules: readonly RuleNote[] = RULE_NOTES, guides: readonly Guide[] = GUIDES, custom: readonly AskContent[] = []): AskChunk[] {
   const out: AskChunk[] = [];
   for (const f of faqs) for (const lang of ['en', 'hi'] as const) out.push({ id: `faq:${f.id}:${lang}`, kind: 'faq', lang, title: f[lang].q, text: `${f[lang].a} (${f.tags.join(', ')})`, url: faqUrl(f.id) });
   for (const r of rules) for (const lang of ['en', 'hi'] as const) out.push({ id: `rules:${r.id}:${lang}`, kind: 'rules', lang, title: r[lang].title, text: `${r[lang].text} (${r.tags.join(', ')})`, url: r.faq ? faqUrl(r.faq) : FIVB_RULES_URL }); // 1.4.21: mapped to an FAQ → opens it in the app
+  for (const g of guides) for (const lang of ['en', 'hi'] as const) out.push(...pieces({ id: `guide:${g.id}:${lang}`, kind: 'guide', lang, title: g[lang].title, text: `${g[lang].text} (${g.tags.join(', ')})`, url: screenUrl(g.path) }));
+  // admin content is DATA: hidden characters stripped; instruction-like sentences are dropped at answer time (defang)
+  for (const c of custom) out.push(...pieces({ id: `custom:${c.id}:${c.lang}`, kind: 'custom', lang: c.lang, title: stripHidden(c.title, { multiline: false }).slice(0, ASK_CONTENT_TITLE_MAX), text: stripHidden(c.text, { multiline: true }).slice(0, ASK_CONTENT_TEXT_MAX), url: c.url && /^(https:\/\/|volleylive:\/\/)/.test(c.url) ? c.url : screenUrl('/help') }));
   return out;
 }
 
@@ -159,6 +196,10 @@ export function expandQuestion(question: string): string {
   return extra.length ? `${question} ${extra.join(' ')}` : question;
 }
 
+/** Chunk id without its language: 'guide:x:en#2' → 'guide:x#2'. */
+export const chunkKey = (id: string) => id.replace(/:(en|hi)(#\d+)?$/, '$2');
+export const GUIDE_PENALTY = 0.1;
+
 export function retrieve(index: AskIndex, question: string, lang: AskLang, k = ASK_TOP_K, minScore = ASK_MIN_SCORE): ScoredChunk[] {
   question = expandQuestion(question);
   const q = embed(question);
@@ -172,16 +213,21 @@ export function retrieve(index: AskIndex, question: string, lang: AskLang, k = A
     // 1.4.22 (QA V1421-1): rank by what the question is ABOUT – the share of its words in the source's title or
     // tags lifts the source ("how is a match scored" → scoring, "net height" → net height); a first-person question
     // ("how many points do I get") is about the app, so app FAQs get a small lift over general rule notes.
-    const score = base + TOPIC_BOOST * topicShare(qw, c) + (firstPerson && c.kind === 'faq' ? FIRST_PERSON_BOOST : 0);
-    const key = c.id.replace(/:(en|hi)$/, '');
+    const raw = base + TOPIC_BOOST * topicShare(qw, c) + (firstPerson && c.kind === 'faq' ? FIRST_PERSON_BOOST : 0);
+    // 1.5.0: the curated FAQ / rule note leads over a how-to guide or admin note on the same topic
+    const score = raw - (c.kind === 'guide' || c.kind === 'custom' ? GUIDE_PENALTY : 0);
+    const key = chunkKey(c.id);
     if (score > (best.get(key) ?? 0)) best.set(key, score);
   });
   const byId = new Map(index.chunks.map((c) => [c.id, c]));
+  const any = new Map<string, AskChunk>();
+  for (const c of index.chunks) if (!any.has(chunkKey(c.id))) any.set(chunkKey(c.id), c);
+  const withLang = (key: string, l: AskLang) => { const m = /^(.*?)(#\d+)?$/.exec(key)!; return `${m[1]}:${l}${m[2] ?? ''}`; };
   const seenUrl = new Set<string>();
   return [...best.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([key, score]) => {
-      const c = byId.get(`${key}:${lang}`) ?? byId.get(`${key}:${lang === 'en' ? 'hi' : 'en'}`)!;
+      const c = byId.get(withLang(key, lang)) ?? byId.get(withLang(key, lang === 'en' ? 'hi' : 'en')) ?? any.get(key)!;
       return { ...c, score };
     })
     .filter((c) => { if (seenUrl.has(c.url)) return false; seenUrl.add(c.url); return true; }) // one link per target
@@ -198,8 +244,23 @@ export function checkAskQuestion(body: { question?: unknown; lang?: unknown }): 
   const n = [...question].length;
   if (n < ASK_QUESTION_MIN) throw Object.assign(new CodedError('ask_question_short', 'Ask a longer question'), { field: 'question', min: ASK_QUESTION_MIN });
   if (n > ASK_QUESTION_MAX) throw Object.assign(new CodedError('ask_question_long', 'The question is too long'), { field: 'question', max: ASK_QUESTION_MAX });
+  // 1.5.1 (Tester nit): lang is 'en' or 'hi' (absent = 'en'); anything else is a 400, not a silent English answer
+  if (body.lang !== undefined && body.lang !== null && body.lang !== 'en' && body.lang !== 'hi') throw Object.assign(new CodedError('ask_lang', 'The language must be en or hi'), { field: 'lang' });
   return { question, lang: body.lang === 'hi' ? 'hi' : 'en' };
 }
+
+// ---------- 1.5.0 safety: content is data ----------
+/** Sentences in retrieved or tool content that try to instruct the assistant (prompt injection). */
+export const INJECTION_RE = /(ignore|disregard|forget|override)\b[^.!?।]{0,40}\b(instructions?|rules|prompt|above|previous)|system\s*prompt|you are now|act as|developer mode|jailbreak|#{2,}\s*(system|assistant|developer)\b|^\s*(system|developer)\s*:|\byou may now\b|reveal\b[^.!?।]{0,30}\b(phone|email|wallet|key|token|password|secret)|(निर्देश|नियम)[^.!?।]{0,20}(अनदेखा|भूल|नज़रअंदाज़)|अनदेखा\s*कर|पिछले\s*निर्देश|सारे\s*नंबर|फ़ोन\s*नंबर\s*(बताओ|दिखाओ)|ignore\s+karo|nirdesh\s+bhool/i;
+export const looksLikeInjection = (s: string) => INJECTION_RE.test(s);
+/** Drops instruction-like sentences from a piece of content (it stays data; nothing in it is obeyed). */
+export function defang(text: string): string {
+  if (!looksLikeInjection(text)) return text;
+  const parts = text.match(/[^.!?।\n]+[.!?।]*\s*/g) ?? [text];
+  return parts.filter((p) => !looksLikeInjection(p)).join('').replace(/\s+/g, ' ').trim();
+}
+/** Masks phone numbers (every format, 1.5.1 F150-4: core/pii) and e-mail addresses in any text the assistant shows or stores. */
+export const scrubPii = (s: string) => maskPii(s);
 
 // ---------- prompt + providers ----------
 export function buildPrompt(question: string, lang: AskLang, hits: ScoredChunk[]): { system: string; user: string } {
@@ -219,19 +280,22 @@ export const mockProvider: AskProvider = {
   name: 'mock',
   async complete(_p, { hits }) {
     const top = hits[0];
-    return top ? top.text.replace(/\s*\([^()]*\)\s*$/, '') : IDK_TOKEN;
+    return top ? defang(top.text.replace(/\s*\([^()]*\)\s*$/, '')) || IDK_TOKEN : IDK_TOKEN;
   },
 };
 
-export const sourceOf = (c: AskChunk): AskSource => ({ id: c.id.replace(/:(en|hi)$/, ''), kind: c.kind, title: c.title, url: c.url });
+export const sourceOf = (c: AskChunk): AskSource => ({ id: c.id.replace(/#\d+$/, '').replace(/:(en|hi)$/, ''), kind: c.kind, title: maskPii(c.title), url: c.url }); // 1.5.2 (F151-4): an admin-written title is display text (id / url untouched)
 const idk = (provider: string): AskAnswer => ({ answer: '', sources: [], idk: true, provider });
 
 /** The whole RAG step: retrieve → (no hits: I don't know) → provider → check the reply. */
 export async function answerQuestion(index: AskIndex, question: string, lang: AskLang, provider: AskProvider = mockProvider): Promise<AskAnswer> {
-  const hits = retrieve(index, question, lang);
+  const hits = retrieve(index, question, lang).map((h) => ({ ...h, text: defang(h.text) })).filter((h) => h.text);
   if (!hits.length) return idk(provider.name);
   const raw = String(await provider.complete(buildPrompt(question, lang, hits), { lang, hits }) ?? '');
-  const text = stripHidden(raw, { multiline: true }).trim().slice(0, 1500);
+  const text = scrubPii(defang(stripHidden(raw, { multiline: true }).trim().slice(0, 1500)));
   if (!text || text.includes(IDK_TOKEN)) return idk(provider.name);
-  return { answer: text, sources: hits.map(sourceOf), idk: false, provider: provider.name };
+  // dedupe sources split into several chunks
+  const seen = new Set<string>();
+  const sources = hits.map(sourceOf).filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true)));
+  return { answer: text, sources, idk: false, provider: provider.name };
 }

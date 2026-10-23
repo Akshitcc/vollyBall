@@ -230,8 +230,20 @@ export async function changeTeam(
   return result;
 }
 
-export function acceptInvite(s: Services, viewer: Identity, teamId: string) {
+/** 1.5.1 (Tester nit): a second Join tap by a player who is already in the team is an idempotent 200 (nothing changes). */
+class AlreadyMember extends Error {}
+export async function acceptInvite(s: Services, viewer: Identity, teamId: string): Promise<{ team: Team; branch: TeamBranch | 'unchanged' }> {
+  try {
+    return await acceptInviteOnce(s, viewer, teamId);
+  } catch (e) {
+    if (!(e instanceof AlreadyMember)) throw e;
+    const [team] = await loadTeams(s.db, [teamId]);
+    return { team, branch: 'unchanged' };
+  }
+}
+function acceptInviteOnce(s: Services, viewer: Identity, teamId: string) {
   return changeTeam(s, viewer, teamId, (t) => {
+    if (t.memberIds.includes(viewer.uid) && (!viewer.phone || !t.pendingPhones.includes(viewer.phone))) throw new AlreadyMember();
     if (!viewer.phone || !t.pendingPhones.includes(viewer.phone)) throw forbidden('teams.update.acceptingInvite', 'No pending invite for your number');
     const starters = t.memberIds.filter((m) => !t.subIds.includes(m)).length;
     return {

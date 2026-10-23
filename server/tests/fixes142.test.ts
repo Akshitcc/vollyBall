@@ -192,11 +192,14 @@ describe('V141-1: migration checksums', () => {
     assert.equal((await sums())['0023_match_create_keys_progress_seq.sql'], undefined); // nor 0023 (1.4.26)
     assert.equal((await sums())['0024_tournament_groups.sql'], undefined); // nor 0024 (1.4.27)
     assert.equal((await sums())['0025_match_create_claims.sql'], undefined); // nor 0025 (1.4.27)
+    assert.equal((await sums())['0026_ask_content.sql'], undefined); // nor 0026 (1.5.0)
+    assert.equal((await sums())['0027_ask_history_audit.sql'], undefined); // nor 0027 (1.5.0)
+    assert.equal((await sums())['0028_ask_audit_hmac.sql'], undefined); // nor 0028 (1.5.3)
     // CRLF line endings are the same file
     const crlf = migrationsBefore('9999', (_f, sql) => sql.replace(/\n/g, '\r\n'));
     // (1.4.5: 0016 is new too)
     // (1.4.6: and 0017)
-    assert.deepEqual(await migrate(db(), crlf), ['0015_daily_items_tombstones.sql', '0016_match_abandon.sql', '0017_match_lifecycle.sql', '0018_verdict_repair.sql', '0019_verdict_repair_type.sql', '0020_support_tickets.sql', '0021_ask_chunks.sql', '0022_support_message_visible.sql', '0023_match_create_keys_progress_seq.sql', '0024_tournament_groups.sql', '0025_match_create_claims.sql']);
+    assert.deepEqual(await migrate(db(), crlf), ['0015_daily_items_tombstones.sql', '0016_match_abandon.sql', '0017_match_lifecycle.sql', '0018_verdict_repair.sql', '0019_verdict_repair_type.sql', '0020_support_tickets.sql', '0021_ask_chunks.sql', '0022_support_message_visible.sql', '0023_match_create_keys_progress_seq.sql', '0024_tournament_groups.sql', '0025_match_create_claims.sql', '0026_ask_content.sql', '0027_ask_history_audit.sql', '0028_ask_audit_hmac.sql']);
   });
 
   it('0014 recorded as its 1.4.0 / 1.4.1 version: allowlisted (a warning, no failure); any other checksum fails', async () => {

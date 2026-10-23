@@ -57,10 +57,26 @@ describe('reactions are UI only (no backend)', () => {
 });
 
 describe('teamRecord', () => {
-  const m = (a: string, b: string, winner: 'A' | 'B' | null, status = 'finished') => ({ status, teamA: { teamId: a }, teamB: { teamId: b }, summary: { winner } }) as unknown as Match;
-  it('counts finished matches with a winner only, from either side', () => {
-    expect(teamRecord('t1', [m('t1', 't2', 'A'), m('t2', 't1', 'A'), m('t1', 't3', 'A'), m('t1', 't2', null), m('t1', 't2', 'A', 'live')])).toEqual({ played: 3, won: 2, lost: 1, winRate: 67 });
-    expect(teamRecord('t9', null)).toEqual({ played: 0, won: 0, lost: 0, winRate: 0 });
+  // 1.5.0 (F1428-3): real, CONFIRMED results (events with a winner, Player of the Match, the other captain's verdict)
+  const { INDOOR_RULES } = require('../../core/rules');
+  const { addPoint } = require('../../core/scoring');
+  const QUICK = { ...INDOOR_RULES, bestOf: 1, pointsPerSet: 3, winBy: 1, pointCap: null, sideSwitchEvery: null, decidingSideSwitchEvery: null, decidingSwitchAt: null };
+  const side = (teamId: string) => ({ teamId, name: teamId, color: '#000000', players: [1, 2, 3].map((n) => ({ id: `${teamId}p${n}`, name: `${teamId}p${n}` })) });
+  const m = (a: string, b: string, winner: 'A' | 'B' | null, status = 'finished', confirmed = true) => {
+    let events: unknown[] = [];
+    if (winner) for (let i = 0; i < 3; i++) events = addPoint(QUICK, events, winner, { at: 1 });
+    return { status, rules: QUICK, events, firstServe: 'A', teamA: side(a), teamB: side(b), createdBy: `${a}p1`, scorerId: `${a}p1`, captains: { A: `${a}p1`, B: `${b}p1` },
+      verification: confirmed ? { status: 'confirmed', by: `${b}p1`, at: 2_000_000_000_000 } : { status: 'pending' }, playerOfMatchId: winner ? `${a}p1` : null,
+      startedServerAt: 2_000_000_000_000 - 20 * 60_000, finishedServerAt: 2_000_000_000_000, summary: { winner } } as unknown as Match;
+  };
+  it('counts confirmed finished matches with a winner only, from either side', () => {
+    expect(teamRecord('t1', [m('t1', 't2', 'A'), m('t2', 't1', 'A'), m('t1', 't3', 'A'), m('t1', 't2', null), m('t1', 't2', 'A', 'live')])).toMatchObject({ played: 3, won: 2, lost: 1, winRate: 67, pending: 0 });
+    expect(teamRecord('t9', null)).toMatchObject({ played: 0, won: 0, lost: 0, winRate: 0, pending: 0 });
+  });
+  it('F1428-3: an unconfirmed win does not count yet (Fresh Falcons 0 played, 1 pending)', () => {
+    expect(teamRecord('falcons', [m('falcons', 't2', 'A', 'finished', false)])).toMatchObject({ played: 0, won: 0, lost: 0, winRate: 0, pending: 1, awaiting: 1 });
+    const noPotm = { ...m('falcons', 't2', 'A'), playerOfMatchId: null } as unknown as Match;
+    expect(teamRecord('falcons', [noPotm]).played).toBe(0);
   });
 });
 
@@ -82,7 +98,7 @@ describe('copy', () => {
     const files = ['app/(tabs)/index.tsx', 'app/(tabs)/profile.tsx', 'app/team/[id].tsx', 'app/tournament/[id].tsx', 'app/login.tsx', 'app/appearance.tsx', 'app/match/[id]/score.tsx', 'app/match/[id]/index.tsx', 'components/RewardScreen.tsx', 'components/RankCard.tsx'];
     const used = new Set<string>();
     for (const f of files) for (const x of (fs.readFileSync(path.join(root, f), 'utf8') as string).matchAll(/'dn\.(\w+)'/g)) used.add(x[1]);
-    for (const k of used) expect(Object.keys(en.dn)).toContain(k);
+    for (const k of used) expect(Object.keys(en.dn).map((x) => x.replace(/_(one|other)$/, ''))).toContain(k); // 1.5.0: i18next plurals (k_one/k_other) count
   });
 });
 

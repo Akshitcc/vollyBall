@@ -36,9 +36,13 @@ jest.mock('../../services/backend', () => ({
   backend: {
     listMySupportTickets: async () => [],
     createSupportTicket: jest.fn(async () => 'new'),
-    askVolleyLive: (q: string, l: 'en' | 'hi') => {
-      if (mockSignedOut) return Promise.reject(new (require('../../core/codedError').CodedError)('ask_sign_in', 'Sign in to ask VolleyLive'));
-      return require('../../core/ask').answerQuestion(mockIx, q, l);
+    // 1.5.0: the chat API (history + askChat); answers come from the same RAG index
+    askHistory: async () => [],
+    clearAskHistory: async () => undefined,
+    askChat: async (q: string, l: 'en' | 'hi') => {
+      if (mockSignedOut) throw new (require('../../core/codedError').CodedError)('ask_sign_in', 'Sign in to ask VolleyLive');
+      const a = await require('../../core/ask').answerQuestion(mockIx, q, l);
+      return { ...a, id: 'x', at: 0, question: q, lang: l, cards: [], outcome: a.idk ? 'idk' : 'answer', refusal: null };
     },
   },
 }));
@@ -95,11 +99,11 @@ describe.each(['en', 'hi'] as const)('%s', (lang) => {
     await fireEvent.changeText(r.getByTestId('ask-input'), lang === 'en' ? 'what is a libero' : 'what is a libero'); // same English question in both UIs
     await fireEvent.press(r.getByTestId('ask-send'));
     await settle();
-    expect(r.getByTestId('ask-answer-1')).toBeTruthy();
+    expect(r.getByTestId('ask-answer-n1')).toBeTruthy();
     const note = require('../../core/ask/rulesKnowledge').RULE_NOTES.find((x: { id: string }) => x.id === 'rule-libero');
     expect(r.getByText(`1. ${note[lang].title}`)).toBeTruthy(); // the source title is in the UI language
     expect(r.queryByText(new RegExp(T('ask.rulesSource', { title: 'XXX' }).replace('XXX', '.*').replace(/[()]/g, '\\$&')))).toBeNull();
-    await fireEvent.press(r.getByTestId('ask-source-1-0'));
+    await fireEvent.press(r.getByTestId('ask-source-n1-0'));
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/help', params: { faq: 'team-positions' } });
     expect(require('react-native').Linking.openURL).not.toHaveBeenCalled();
   });

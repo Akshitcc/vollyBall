@@ -8,11 +8,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { BackHandler, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { card } from '../../components/Hero';
 import { PressableScale } from '../../components/PressableScale';
-import { LocationPicker, placeReady } from '../../components/LocationPicker';
+import { LocationPicker } from '../../components/LocationPicker';
 import { RulesEditor } from '../../components/RulesEditor';
 import { KeyboardAwareScreen, RevealOnShow, ScrollRevealContext, RevealOnFocus } from '../../components/KeyboardAwareScreen';
 import { Button, Card, Chip, Field, H2, P, Row, styles as ui } from '../../components/ui';
-import { placeFromCourt, type Place } from '../../core/geo';
+import { namedPlace, placeFromCourt, type Place } from '../../core/geo';
 import { INDOOR_RULES, type RuleSet } from '../../core/rules';
 import type { Side } from '../../core/scoring';
 import { TEAM_COLORS, type MatchTeam, type Team } from '../../core/types';
@@ -280,7 +280,7 @@ export default function NewMatch() {
   const problem = teamsProblem(summaryOf(a, capA), summaryOf(b, capB), sizeMode);
   const teamsReady = !problem && !pickProblem && !inBoth.length;
   const now = Date.now();
-  const rulesProblem = location && !placeReady(location) ? t('location.nameRequired') : when !== 'now' && isPastStart(when, now, 0) ? t('errors.codes.time_in_past') : null;
+  const rulesProblem = when !== 'now' && isPastStart(when, now, 0) ? t('errors.codes.time_in_past') : null;
   const rulesReady = !rulesProblem;
   /** One side on its own is complete (picked, named, 6+ players, captain): the tick on its card. */
   const sideReady = (s: 'A' | 'B') => {
@@ -341,7 +341,6 @@ export default function NewMatch() {
       if (v.kind === 'build' && !v.name.trim()) return setError(t('newMatch.nameRequired', { side }));
       if (v.kind === 'team' && !teamCanPlay(v.team)) return setError(t('newMatch.teamTooSmall', { team: v.team.name, count: v.team.memberIds.length, min: MIN_PLAYERS }));
     }
-    if (location && !placeReady(location)) return setError(t('location.nameRequired'));
     if (when !== 'now' && isPastStart(when, Date.now(), 0)) return setError(t('errors.codes.time_in_past'));
     setBusy(true);
     try {
@@ -380,7 +379,7 @@ export default function NewMatch() {
           firstServe,
           createdBy: me.id,
           scorerId: me.id,
-          location,
+          location: namedPlace(location, t('location.pinnedName')),
           scheduledAt: startNow ? Date.now() : when,
           startNow,
           title: title.trim() || undefined,

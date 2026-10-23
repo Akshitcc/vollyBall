@@ -3,7 +3,7 @@
 Scope: MySQL schema + migrations 0001–0023, run on a LOCAL scratch DB only (`volleylive_audit` / `volleylive_test` on dev MySQL 127.0.0.1:3306, existing root dev login). Not touched: production, QA :3307, qa_* resources. Nothing was deployed. No users or grants were created.
 
 ## How to re-run
-- Read-only checks on any DB: `server/scripts/db-audit.sql` (29 SELECTs, each one returns the offending rows; empty = PASS). Or run `npx tsx scripts/db-audit.ts` with DATABASE_URL.
+- Read-only checks on any DB: `server/scripts/db-audit.sql` (32 SELECTs as of 1.5.1, each one returns the offending rows; empty = PASS). Or run `npx tsx scripts/db-audit.ts` with DATABASE_URL.
 - Full local simulation: `npx tsx scripts/db-audit.ts --simulate` (refuses to run unless host is localhost:3306 and the DB name ends in _audit/_test; drops and re-migrates).
 - Tests: `server/tests/dbaudit1426.test.ts` (20), `server/tests/e2e1426.test.ts` (2), `src/services/__tests__/dbaudit1426.test.ts` (2), `src/core/__tests__/e2e1426.test.ts` (9).
 
@@ -46,3 +46,9 @@ Final counts: users 103, teams 17, members 102, matches 56, sets 148, points 401
    - duplicate fixture matches / mismatched claims: report only, to be decided case by case
 3. E2E-4 (more than 10 teams / groups) is waiting on your decision.
 4. Firebase rules for the E2E-2 fixture lock: not done (not cheap). API + demo enforce it.
+
+## 1.5.1 update (Tester F150-1)
+- New check **challenge.match_accepted** (area relations): a match with a `challenge_id` must belong to an existing, **accepted** challenge whose `match_id` points back at it (an abandoned match may stay tagged); and a challenge that is pending / declined / cancelled has no `match_id`. `server/scripts/db-audit.sql` regenerated (32 checks).
+- Why: in 1.5.0 the challenger could create the match of a still-pending challenge, which then blocked the Accept and stayed linked after a Decline. Since 1.5.1 the only way to create a challenge match is the challenged captain's Accept (`POST /api/challenges/:id/accept`, accept + create in one transaction); POST /matches with a challengeId is refused (409 challenge_pending / challenge_closed / challenge_used), and PATCH never links a match.
+- The API simulation (`scripts/auditSim.ts`, used by `--simulate` and `tests/dbaudit1426.test.ts`) now also plays three challenges: the challenger's early create (refused 409), one accepted with its match, one declined and one cancelled (no match). All 32 checks pass on the simulated data.
+- Run read-only on production before deploying 1.5.1 to list any 1.5.0 leftovers (a match linked to a declined challenge). Cleanup is a case-by-case decision for Akshit; nothing was run anywhere but the local :3306 test DB.

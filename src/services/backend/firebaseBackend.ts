@@ -1,4 +1,4 @@
-import { askLocally } from '../askLocal';
+import { askChatLocally, askHistoryLocally, askLocally, clearAskHistoryLocally } from '../askLocal';
 import { stripHidden } from '../../core/text';
 import { assertSupportImage, checkSupportStatus, checkSupportTicket, SUPPORT_IMAGE_TYPES, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
 import { checkFeedback } from '../../core/reviewPrompt';
@@ -824,6 +824,16 @@ export class FirebaseBackend implements Backend {
   async askVolleyLive(question: string, lang: 'en' | 'hi') {
     return askLocally(this.fb.auth.currentUser?.uid, question, lang);
   }
+  /** 1.5.0: agent + tools on the device over this backend's own reads (services/askHost), history in AsyncStorage. */
+  async askChat(question: string, lang: 'en' | 'hi') {
+    return askChatLocally(this, this.fb.auth.currentUser?.uid, question, lang);
+  }
+  async askHistory() {
+    return askHistoryLocally(this.fb.auth.currentUser?.uid);
+  }
+  async clearAskHistory() {
+    await clearAskHistoryLocally(this.fb.auth.currentUser?.uid);
+  }
   async createSupportTicket(t: NewSupportTicket) {
     const me = this.fb.auth.currentUser?.uid;
     if (!me) throw new Error('Not signed in yet');
@@ -989,6 +999,13 @@ export class FirebaseBackend implements Backend {
       u1();
       u2();
     };
+  }
+  /** 1.5.1: Firestore has no transaction across these rules – create, then accept with the match (rules gap, as V1426-3;
+   * the API is the production backend and does it atomically). */
+  async acceptChallenge(c: Challenge, m: NewMatch) {
+    const id = await this.createMatch({ ...m, challengeId: c.id });
+    await this.respondToChallenge(c, 'accepted', id);
+    return id;
   }
   async respondToChallenge(c: Challenge, status: Challenge['status'], matchId?: string) {
     await updateDoc(doc(this.fb.db, 'challenges', c.id), clean({ status, matchId: matchId ?? null }) as DocumentData);

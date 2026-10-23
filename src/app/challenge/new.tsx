@@ -5,7 +5,8 @@ import { pickFromTeam } from '../../core/challengeTeam';
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Text } from 'react-native';
-import { LocationPicker, placeReady } from '../../components/LocationPicker';
+import { LocationPicker } from '../../components/LocationPicker';
+import { namedPlace } from '../../core/geo';
 import { RulesEditor } from '../../components/RulesEditor';
 import { KeyboardAwareScreen } from '../../components/KeyboardAwareScreen';
 import { Banner, Button, Card, Chip, Field, H2, Loading, P, Row, styles as ui } from '../../components/ui';
@@ -95,7 +96,6 @@ export default function NewChallenge() {
     if (!to) return setError(tr('challenge.pickTeam'));
     if (isPastStart(when, Date.now(), 0)) return setError(tr('errors.codes.time_in_past'));
     if (!location) return setError(tr('challenge.pickPlace'));
-    if (!placeReady(location)) return setError(tr('location.nameRequired'));
     for (const team of [from, to]) if (!teamCanPlay(team)) return setError(tr('challenge.teamTooSmall', { team: team.name, min: MIN_PLAYERS }));
     setError(null);
     setBusy(true);
@@ -108,7 +108,7 @@ export default function NewChallenge() {
         toTeamName: to.name,
         toCaptainId: to.captainId,
         when,
-        location: { ...location, name: location.name.trim() },
+        location: namedPlace(location, tr('location.pinnedName'))!,
         message: message.trim(),
         rules,
       });

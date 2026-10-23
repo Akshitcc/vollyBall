@@ -26,6 +26,7 @@ import { FIXTURE_NOT_READY, FIXTURE_TEAMS, fixtureTeamsNow, tournamentOwner } fr
 import { REPAIR_INVALID, REPAIR_MESSAGES, repairPatch, type RepairFix } from '../../../src/core/verdictRepair';
 import { eligibleHandoffAdmins, HANDOVER_MESSAGES, handoverProblem, reassignProblem, reassignRecord } from '../../../src/core/scorerHandoff';
 import { reportAbandon } from '../../../src/core/abandon';
+import { CHALLENGE_LINK_FROZEN, CHALLENGE_LINK_MESSAGES, CHALLENGE_LINK_STATUS, challengeCreateProblem, type ChallengeLinkCode } from '../../../src/core/challengeLink';
 import {
   CAPTAIN_MESSAGES,
   CONFIRM_MESSAGES,
@@ -49,6 +50,7 @@ import type { MatchCaptains, MatchVerification, VerificationStatus } from '../..
 import { isAdmin } from '../context';
 import { createHash } from 'node:crypto';
 import { canonical, changedKeys, insertRuleSet, loadRuleSets, minus, newId, nowDate, txRetry, placeCols, placeFromRow, toDate, toMs, type Trx } from './util';
+import { withCurrentCaptains } from './challengeCaptains';
 
 export const MATCH_NO_WINNER = 'match_no_winner';
 export const MATCH_NO_WINNER_MESSAGE = 'A match can only be finished when a team has won the required sets';
@@ -378,6 +380,8 @@ async function writeMatch(s: Services, trx: Trx, id: string, before: Stored | nu
       throw new HttpError(400, MATCH_BAD_STATUS, 'A new match must be scheduled or live');
   } else {
     const ch = changedKeys(before, after, MATCH_KEYS);
+    // 1.5.0 (F1428-2): the challenge link is decided at create time and never changes
+    if (ch.includes('challengeId')) throw challengeError(CHALLENGE_LINK_FROZEN);
     // Terminal (abandoned, or finished with a Player of the Match): nothing about the match changes
     // any more, except "I want to play" (harmless). QA PM-10/PM-15/AF-43.
     if (isTerminal(before) && ch.some((k) => k !== 'interestedIds'))
@@ -671,7 +675,19 @@ async function claimFixture(trx: Trx, tournamentId: string, fixtureKey: string, 
     throw new HttpError(400, FIXTURE_TEAMS, 'A fixture match must be played by the fixture\'s two teams', { home: now.home, away: now.away });
 }
 
-export async function createMatch(s: Services, viewer: Identity, input: Doc, fixedId?: string, idempotencyKey?: string): Promise<string> {
+export const challengeError = (code: ChallengeLinkCode) => new HttpError(CHALLENGE_LINK_STATUS[code], code, CHALLENGE_LINK_MESSAGES[code]);
+/** Locks the challenge row; refuses a stranger, the wrong teams, a declined/cancelled or already played challenge. */
+/** 1.5.1 (F150-1): a plain create never claims a challenge (only the accept path below does) – the reason, coded. */
+async function claimChallenge(trx: Trx, doc: Doc, actor: string) {
+  const r = await withCurrentCaptains(trx, await trx('challenges').where({ id: doc.challengeId }).first()); // 1.5.2 (F151-1)
+  const c = r ? { id: r.id, fromTeamId: r.from_team_id, toTeamId: r.to_team_id, fromCaptainId: r.from_captain_id, toCaptainId: r.to_captain_id, status: r.status, matchId: r.match_id } : null;
+  throw challengeError(challengeCreateProblem(c, doc, actor));
+}
+
+/** 1.5.1 (F150-1): hooks of the challenge accept path (domain/challenges acceptChallenge), run inside the create transaction. */
+export interface CreateChallengeHooks { claim: (trx: Trx, doc: Doc) => Promise<void>; link: (trx: Trx, matchId: string) => Promise<void> }
+
+export async function createMatch(s: Services, viewer: Identity, input: Doc, fixedId?: string, idempotencyKey?: string, accept?: CreateChallengeHooks): Promise<string> {
   const rule = 'matches.create';
   if (input.createdBy !== viewer.uid) throw forbidden(rule, 'createdBy must be you');
   if (!input.participantIds.includes(viewer.uid)) throw forbidden(rule, 'You must be a participant of a match you create');
@@ -715,7 +731,12 @@ export async function createMatch(s: Services, viewer: Identity, input: Doc, fix
       // 1.4.26 (DB-2): a fixture is played once – it must exist, and a second start (double tap, two devices) is refused
       // while its match isn't abandoned; the fixture is claimed in the same transaction (the app's PATCH then changes nothing)
       if (!fixedId && doc.fixtureId) await claimFixture(trx, doc.tournamentId as string, doc.fixtureId, { A: doc.teamA.teamId ?? null, B: doc.teamB.teamId ?? null });
+      // 1.5.0 (F1428-2): a challenge is claimed by one of its two captains, for its two teams, while it is open – once
+      // 1.5.1 (F150-1): only through the challenged captain's accept (hooks), never a plain create
+      if (!fixedId && accept) await accept.claim(trx, doc);
+      else if (!fixedId && doc.challengeId) await claimChallenge(trx, doc, viewer.uid);
       await writeMatch(s, trx, id, null, doc, 'create', { seed: !!fixedId });
+      if (!fixedId && accept) await accept.link(trx, id);
       if (!fixedId && doc.fixtureId) await trx('fixtures').where({ tournament_id: doc.tournamentId, fixture_key: doc.fixtureId }).update({ match_id: id });
       if (idempotencyKey) await trx('match_create_keys').insert({ user_id: viewer.uid, idem_key: idempotencyKey, match_id: id, created_at: nowDate() });
     });
@@ -1074,12 +1095,19 @@ export async function repairVerdict(s: Services, viewer: Identity, id: string, f
 }
 
 // ---------------- queries ----------------
-export async function listMatchIds(db: Trx, q: { status?: string[]; participant?: string; tournament?: string; withLocation?: boolean; limit: number }) {
+export async function listMatchIds(db: Trx, q: { status?: string[]; participant?: string; tournament?: string; withLocation?: boolean; byFinished?: boolean; sideNameLike?: string[]; limit: number }) {
   // 1.3.9 (V138-11): a player's matches by the match's own date (finished, started, scheduled, created):
   // a confirmation or review bumps updated_at, which must not move an old match to the top
   const query = db('matches').select('matches.id').limit(q.limit);
   if (q.participant) query.orderByRaw('COALESCE(matches.finished_at, matches.started_at, matches.scheduled_at, matches.created_at) DESC, matches.id');
+  // 1.5.7 (Tester F156-5): the Ask latest-match window is ordered by when the match ended, not by updated_at
+  else if (q.byFinished) query.orderByRaw('COALESCE(matches.finished_at, matches.started_at, matches.created_at) DESC, matches.id');
   else query.orderBy('matches.updated_at', 'desc');
+  // 1.5.7 (F156-5): one team's matches by side name (read-only; LIKE with escaped wildcards)
+  if (q.sideNameLike?.length) {
+    const ws = q.sideNameLike.slice(0, 4).map((w) => `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+    query.whereExists((b) => { b.select(db.raw('1')).from('match_sides as ms').whereRaw('ms.match_id = matches.id').andWhere((o) => { for (const w of ws) o.orWhere('ms.name', 'like', w); }); });
+  }
   if (q.status?.length) query.whereIn('matches.status', q.status);
   if (q.tournament) query.where('matches.tournament_id', q.tournament);
   if (q.withLocation) query.whereNotNull('matches.location_name');

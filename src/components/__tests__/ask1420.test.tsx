@@ -10,8 +10,12 @@ jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null, MaterialCommunity
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({ router: { push: (...a: unknown[]) => mockPush(...a), back: jest.fn() }, Stack: { Screen: () => null } }));
 const ix = buildIndex();
-const mockAsk = jest.fn((q: string, lang: 'en' | 'hi') => answerQuestion(ix, q, lang));
-jest.mock('../../services/backend', () => ({ backend: { askVolleyLive: (q: string, l: 'en' | 'hi') => mockAsk(q, l) } }));
+const mockAsk = jest.fn(async (q: string, lang: 'en' | 'hi') => {
+  const a = await answerQuestion(ix, q, lang);
+  return { ...a, id: 'x', at: 0, question: q, lang, cards: [], outcome: a.idk ? 'idk' : 'answer', refusal: null };
+});
+// 1.5.0: the screen uses the chat API (askChat + history)
+jest.mock('../../services/backend', () => ({ backend: { askChat: (q: string, l: 'en' | 'hi') => mockAsk(q, l), askHistory: async () => [], clearAskHistory: async () => undefined } }));
 const openURL = jest.spyOn(require('react-native').Linking, 'openURL').mockImplementation(async () => true);
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 afterEach(async () => { await i18n.changeLanguage('en'); jest.clearAllMocks(); });
@@ -26,22 +30,22 @@ describe.each(['en', 'hi'] as const)('%s', (lang) => {
   };
   it('grounded answer with numbered sources; a rule source opens the FIVB page, an FAQ source the Help Center', async () => {
     const r = await render(<AskScreen />);
-    expect(r.getByText(T('ask.intro'))).toBeTruthy();
+    expect(r.getByText(T('ask.intro2'))).toBeTruthy();
     await ask(r, lang === 'en' ? 'How many points win a set?' : 'एक सेट कितने पॉइंट पर जीतते हैं');
     expect(mockAsk).toHaveBeenCalledWith(expect.any(String), lang);
-    expect(r.getByTestId('ask-answer-1')).toBeTruthy();
+    expect(r.getByTestId('ask-answer-n1')).toBeTruthy();
     expect(r.getByText(T('ask.sources'))).toBeTruthy();
-    await fireEvent.press(r.getByTestId('ask-source-1-0'));
+    await fireEvent.press(r.getByTestId('ask-source-n1-0'));
     expect(openURL).toHaveBeenCalledWith('https://www.fivb.com/volleyball/the-game/official-volleyball-rules/');
     await ask(r, lang === 'en' ? 'how do I sign in' : 'साइन इन कैसे करूँ');
-    await fireEvent.press(r.getByTestId('ask-source-2-0'));
+    await fireEvent.press(r.getByTestId('ask-source-n2-0'));
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/help', params: { faq: 'reg-signin' } });
   });
   it("I don't know + Contact us", async () => {
     const r = await render(<AskScreen />);
     await ask(r, 'bitcoin price today');
     expect(r.getByText(T('ask.idk'))).toBeTruthy();
-    await fireEvent.press(r.getByTestId('ask-contact-1'));
+    await fireEvent.press(r.getByTestId('ask-contact-n1'));
     expect(mockPush).toHaveBeenCalledWith('/contact');
   });
   it('a refused question shows the translated error; too short does nothing', async () => {

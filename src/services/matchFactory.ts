@@ -23,13 +23,17 @@ export async function matchTeamFromTeam(team: Team): Promise<MatchTeam> {
 export async function acceptChallenge(c: Challenge, myUid: string, teams: { from: Team; to: Team }) {
   if (!teamCanPlay(teams.from) || !teamCanPlay(teams.to)) throw new Error(TEAM_TOO_SMALL_MESSAGE);
   const [a, b] = await Promise.all([matchTeamFromTeam(teams.from), matchTeamFromTeam(teams.to)]);
-  const id = await backend.createMatch(
+  // 1.5.1 (F150-1): accept and create in one step – the only way a match gets a challengeId
+  return backend.acceptChallenge(
+    c,
     buildMatch({
       teamA: a,
       teamB: b,
       rules: c.rules,
       createdBy: myUid,
-      scorerId: c.fromCaptainId,
+      // 1.5.0 (F1428-1): the accepting captain scores, so the challenger's captain is the one who confirms the result
+      // (the anti-fraud verdict needs a confirming captain who is neither the scorer nor on the scorer's team)
+      scorerId: myUid,
       location: c.location,
       // Accepted after the agreed time: schedule it for now (a past start time is rejected, QA G9).
       scheduledAt: isPastStart(c.when) ? Date.now() : c.when,
@@ -38,8 +42,6 @@ export async function acceptChallenge(c: Challenge, myUid: string, teams: { from
       captains: { A: teams.from.captainId, B: teams.to.captainId },
     }),
   );
-  await backend.respondToChallenge(c, 'accepted', id);
-  return id;
 }
 
 /** Resolve the first value of a watcher, then unsubscribe. */

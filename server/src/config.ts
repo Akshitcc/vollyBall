@@ -43,6 +43,8 @@ export interface Config {
   storage: { driver: 'local' } | { driver: 's3'; s3: S3Config };
   /** Shared rate-limit store; '' = in memory (single instance). */
   redisUrl: string;
+  /** 1.5.3 (Tester F152-2): ASK_AUDIT_HMAC_KEY ('' = none: ask_audit stores no question hash). */
+  askAuditHmacKey: string;
   /** AUTH_MODE=otp only. */
   otp: { provider: OtpProviderName; sessionSecret: string; sessionTtlSeconds: number; limits: OtpLimits; msg91?: { authKey: string; templateId: string; otpVar: string } } | null;
 }
@@ -153,8 +155,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     // Development: an ephemeral key (photo links stop working after a restart, which is fine locally).
     fileUrlSecret = crypto.randomBytes(32).toString('hex');
   }
+  // 1.5.3 (Tester F152-2): optional; without it no question hash is stored. A placeholder never counts as a key.
+  let askAuditHmacKey = (env.ASK_AUDIT_HMAC_KEY || '').trim();
+  if (askAuditHmacKey && isPlaceholder(askAuditHmacKey)) {
+    if (prod) throw new Error('ASK_AUDIT_HMAC_KEY is still the .env.example placeholder (leave it empty or set a real key)');
+    askAuditHmacKey = '';
+  }
+  if (askAuditHmacKey && askAuditHmacKey.length < 32) throw new Error('ASK_AUDIT_HMAC_KEY must be at least 32 characters');
   const port = Number(env.PORT || 4000);
   return {
+    askAuditHmacKey,
     env: nodeEnv,
     port,
     databaseUrl: env.DATABASE_URL,

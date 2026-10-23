@@ -24,6 +24,8 @@ export interface SimReport {
   friendly: { matchId: string; rallies: number; timeouts: number; undone: number; winner: 'A' | 'B' };
   abandonedId: string;
   support: { tickets: number; feedback: number };
+  /** 1.5.1 (F150-1): challenges – accepted with its match, declined, cancelled; the challenger's early create refused */
+  challenges: { accepted: string; acceptedMatchId: string; declined: string; cancelled: string; earlyCreateStatus: number };
   tournament: { id: string; fixtures: number; played: number; byes: number; champion: string | null; matchIds: string[] };
   league: { id: string; fixtures: number; played: number; table: { teamId: string; played: number; won: number; points: number }[]; matchIds: string[] };
   oversizeStatus: number;
@@ -128,6 +130,18 @@ export async function simulate(c: ClientFor, opts: { prefix?: string; phoneBase?
   must(await as(cap)('PUT', `/api/matches/${abandonedId}/progress`, { events: playSets(rules, ['A'], players).slice(0, 9), status: 'live' }), [200], 'abandoned rallies');
   must(await as(cap)('POST', `/api/matches/${abandonedId}/abandon`, {}), [200], 'abandon');
 
+  // ---- 1.5.1 (F150-1): challenges. Only the challenged captain's Accept creates the match; decline / cancel leave none ----
+  const chBody = (when: number) => ({ fromTeamId: tA, fromCaptainId: cap.uid, toTeamId: tB, toCaptainId: capB.uid, when, location: { name: 'Nehru Park', lat: 28.58, lng: 77.19 }, rules });
+  const chIds: string[] = [];
+  for (let i = 0; i < 3; i++) chIds[i] = must(await as(cap)('POST', '/api/challenges', chBody(Date.now() + (i + 2) * 3_600_000)), [201], `challenge ${i}`).id as string;
+  const chMatch = (cid: string, by: SimUser) => buildMatch({ teamA: a.mt, teamB: b.mt, rules, createdBy: by.uid, scorerId: by.uid, challengeId: cid, title: 'Challenge match', captains: { A: a.captainId, B: b.captainId }, scheduledAt: Date.now() + 2 * 3_600_000 });
+  const early = await as(cap)('POST', '/api/matches', chMatch(chIds[0], cap)); // the challenger pre-creating it (Tester F150-1)
+  if (early.status !== 409) throw new Error(`challenger's early create: HTTP ${early.status}`);
+  const acceptedMatchId = must(await as(capB)('POST', `/api/challenges/${chIds[0]}/accept`, { match: chMatch(chIds[0], capB) }), [201], 'accept challenge').matchId as string;
+  must(await as(capB)('PATCH', `/api/challenges/${chIds[1]}`, { status: 'declined' }), [200], 'decline challenge');
+  must(await as(cap)('PATCH', `/api/challenges/${chIds[2]}`, { status: 'cancelled' }), [200], 'cancel challenge');
+  const challenges = { accepted: chIds[0], acceptedMatchId, declined: chIds[1], cancelled: chIds[2], earlyCreateStatus: early.status };
+
   // ---- support tickets and feedback from players ----
   let tickets = 0;
   let fb = 0;
@@ -211,6 +225,7 @@ export async function simulate(c: ClientFor, opts: { prefix?: string; phoneBase?
     friendly: { matchId, rallies: all.filter((e) => e.type === 'point').length, timeouts: all.filter((e) => e.type === 'timeout').length, undone: 3, winner: 'A' },
     abandonedId,
     support: { tickets, feedback: fb },
+    challenges,
     tournament: { id: tid, fixtures: t.fixtures.length, played: matchIds.length, byes, champion, matchIds },
   };
 }

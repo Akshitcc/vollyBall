@@ -167,6 +167,13 @@ export default function TeamPage() {
           {stat(t('dn.lost'), String(rec.lost), undefined, 'lost')}
           {stat(t('dn.winRate'), `${rec.winRate}%`, k.t.accent, 'winrate')}
         </Row>
+        {/* 1.5.0 (F1428-3): unconfirmed results don't count yet – say so instead of hiding them silently */}
+        {/* 1.5.1 (Tester F150-2): each open result by its real state; voided results are not counted at all */}
+        {rec.awaiting ? <Body muted size={12} style={{ marginTop: 8 }} testID="team-stats-pending">{t('dn.pendingResults', { count: rec.awaiting })}</Body> : null}
+        {rec.review ? <Body muted size={12} style={{ marginTop: 4 }} testID="team-stats-review">{t('dn.reviewResults', { count: rec.review })}</Body> : null}
+        {rec.reviewAwaiting ? <Body muted size={12} style={{ marginTop: 4 }} testID="team-stats-review-awaiting">{t('dn.reviewAwaitingResults', { count: rec.reviewAwaiting })}</Body> : null}
+        {rec.disputed ? <Body muted size={12} style={{ marginTop: 4 }} testID="team-stats-disputed">{t('dn.disputedResults', { count: rec.disputed })}</Body> : null}
+        {rec.potm ? <Body muted size={12} style={{ marginTop: 4 }} testID="team-stats-potm">{t('dn.potmResults', { count: rec.potm })}</Body> : null}
       </Sticker>
       <Row style={{ gap: 10 }}>
         {isCaptain && (
@@ -214,19 +221,32 @@ export default function TeamPage() {
         <>
           <Display size={20} style={{ marginTop: 20, marginBottom: 8 }}>{t('team.invited')}</Display>
           <Sticker inner={{ padding: 12 }}>
-            {team.pendingPhones.map((p) => (
+            {team.pendingPhones.map((p, i) => {
+              // 1.5.3 (Tester F152-4): two invites can end in the same 4 digits – then the label / testID also say which
+              // invite it is (its position in the list), so each button is unique and no more of the number is read out
+              const last4 = p.slice(-4);
+              const dup = team.pendingPhones.filter((x) => x.slice(-4) === last4).length > 1;
+              return (
               <Row key={p} style={{ paddingVertical: 6 }}>
                 <Ionicons name="time-outline" size={18} color={k.t.textMuted} />
                 <Body bold style={{ flex: 1, marginLeft: 8 }}>{maskPhone(p)}</Body>
                 {isCaptain && (
                   <>
-                    <Pressable accessibilityRole="button" onPress={() => backend.updateTeam(team.id, { pendingPhones: team.pendingPhones.filter((x) => x !== p) })}>
+                    {/* 1.5.2 (Tester F151-7): the trash icon alone was read as just "button" */}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={dup ? t('team.withdrawInviteA11yN', { last4, n: i + 1, total: team.pendingPhones.length }) : t('team.withdrawInviteA11y', { last4 })}
+                      testID={dup ? `team-invite-withdraw-${last4}-${i + 1}` : `team-invite-withdraw-${last4}`}
+                      hitSlop={8}
+                      onPress={() => backend.updateTeam(team.id, { pendingPhones: team.pendingPhones.filter((x) => x !== p) })}
+                    >
                       <Ionicons name="trash-outline" size={20} color={k.t.live} />
                     </Pressable>
                   </>
                 )}
               </Row>
-            ))}
+              );
+            })}
           </Sticker>
         </>
       )}

@@ -1,0 +1,130 @@
+{
+  "set": "docs/qa/ask-eval-1.5.5.jsonl",
+  "provider": "mock",
+  "items": 267,
+  "passed": 265,
+  "passRate": 0.9925,
+  "byCategory": {
+    "stats": {
+      "n": 11,
+      "pass": 11
+    },
+    "teams": {
+      "n": 10,
+      "pass": 10
+    },
+    "matches": {
+      "n": 8,
+      "pass": 8
+    },
+    "tourn": {
+      "n": 9,
+      "pass": 9
+    },
+    "challenge": {
+      "n": 3,
+      "pass": 3
+    },
+    "leader": {
+      "n": 4,
+      "pass": 4
+    },
+    "rag": {
+      "n": 12,
+      "pass": 12
+    },
+    "idk": {
+      "n": 5,
+      "pass": 5
+    },
+    "private": {
+      "n": 6,
+      "pass": 6
+    },
+    "write": {
+      "n": 7,
+      "pass": 7
+    },
+    "inject": {
+      "n": 8,
+      "pass": 8
+    },
+    "perms": {
+      "n": 2,
+      "pass": 2
+    },
+    "hi": {
+      "n": 10,
+      "pass": 10
+    },
+    "roman": {
+      "n": 10,
+      "pass": 10
+    },
+    "holdout": {
+      "n": 16,
+      "pass": 16
+    },
+    "fix151": {
+      "n": 16,
+      "pass": 16
+    },
+    "holdout151": {
+      "n": 14,
+      "pass": 12
+    },
+    "fix152": {
+      "n": 12,
+      "pass": 12
+    },
+    "holdout152": {
+      "n": 12,
+      "pass": 12
+    },
+    "fix153": {
+      "n": 18,
+      "pass": 18
+    },
+    "holdout153": {
+      "n": 12,
+      "pass": 12
+    },
+    "fix154": {
+      "n": 16,
+      "pass": 16
+    },
+    "holdout154": {
+      "n": 12,
+      "pass": 12
+    },
+    "fix155": {
+      "n": 22,
+      "pass": 22
+    },
+    "holdout155": {
+      "n": 12,
+      "pass": 12
+    }
+  },
+  "auditRows": 267,
+  "failures": [
+    {
+      "id": "holdout151-05",
+      "cat": "holdout151",
+      "ok": false,
+      "fails": [
+        "missing \"6 substitutes\""
+      ],
+      "answer": "I can't share other players' private details such as phone numbers, e-mail addresses or wallets. You can see what a player shares on their profile."
+    },
+    {
+      "id": "holdout151-12",
+      "cat": "holdout151",
+      "ok": false,
+      "fails": [
+        "tool my_matches not called (got live_score)"
+      ],
+      "answer": "Delhi Smashers v Yamuna Blockers: sets 1–1, current set 19–17. 2 live matches in all."
+    }
+  ]
+}

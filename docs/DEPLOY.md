@@ -245,6 +245,22 @@ To roll back a database in the second row, pick ONE (take a backup first):
 Rows for 0021 / 0022 can stay when rolling back: their tables/columns are additive and older servers ignore them (a
 1.4.19/1.4.20 server writing a support message only uses ≤ 2000 code points, which fits the wider column).
 
+## 1.5.3 – Ask audit hashes, stored-text masking (Tester F152-1 / F152-2)
+
+- **Migration 0028 (additive / relaxing only):** `ask_audit.question_sha` becomes NULLable (same CHAR(64) type). Nothing
+  is dropped; 1.5.2 servers keep working against it. Runs with the normal migrate step.
+- **ASK_AUDIT_HMAC_KEY (new, optional):** the audit's question hash is now `HMAC-SHA256(ASK_AUDIT_HMAC_KEY, question)`.
+  Set a random value of ≥ 32 characters in the host's secret store (never in the repo; `.env.example` has a placeholder
+  only, which counts as empty and is refused in production). Without it the server stores **NULL** – never an unsalted
+  hash. Rotating the key only means old and new hashes don't compare; nothing breaks.
+- **Existing rows:** rows written before 1.5.3 hold an unsalted SHA-256 of the raw question. After the 1.5.3 server and
+  0028 are live, set them to NULL with `server/scripts/null-ask-audit-sha.ts --before=<1.5.3 go-live ISO time> --apply`
+  (dry run without `--apply`). The script is guarded to localhost:3306 `*_test` / `*_audit` databases; running the same
+  UPDATE (`UPDATE ask_audit SET question_sha = NULL WHERE created_at < <go-live>`) on a real database is an operator
+  step that needs its own approval – it is NOT run by this release.
+- **Old question text:** `server/scripts/mask-ask-history.ts` now uses the stored mask (spaced single digits, digit
+  words) and also tidies `ask_audit.question`; same local-only guard. GET /ask/history masks on read regardless.
+
 ## 1.4.20 – QA 1.4.19 fixes + Ask VolleyLive (RAG phase 1)
 
 **Akshit deploys these – nothing was deployed by the build.**

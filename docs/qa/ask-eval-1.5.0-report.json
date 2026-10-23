@@ -1,0 +1,90 @@
+{
+  "set": "docs/qa/ask-eval-1.5.0.jsonl",
+  "provider": "mock",
+  "items": 121,
+  "passed": 119,
+  "passRate": 0.9835,
+  "byCategory": {
+    "stats": {
+      "n": 11,
+      "pass": 11
+    },
+    "teams": {
+      "n": 10,
+      "pass": 10
+    },
+    "matches": {
+      "n": 8,
+      "pass": 8
+    },
+    "tourn": {
+      "n": 9,
+      "pass": 9
+    },
+    "challenge": {
+      "n": 3,
+      "pass": 3
+    },
+    "leader": {
+      "n": 4,
+      "pass": 4
+    },
+    "rag": {
+      "n": 12,
+      "pass": 12
+    },
+    "idk": {
+      "n": 5,
+      "pass": 5
+    },
+    "private": {
+      "n": 6,
+      "pass": 6
+    },
+    "write": {
+      "n": 7,
+      "pass": 7
+    },
+    "inject": {
+      "n": 8,
+      "pass": 8
+    },
+    "perms": {
+      "n": 2,
+      "pass": 2
+    },
+    "hi": {
+      "n": 10,
+      "pass": 10
+    },
+    "roman": {
+      "n": 10,
+      "pass": 10
+    },
+    "holdout": {
+      "n": 16,
+      "pass": 14
+    }
+  },
+  "auditRows": 121,
+  "failures": [
+    {
+      "id": "holdout-05",
+      "cat": "holdout",
+      "ok": false,
+      "fails": [
+        "tool leaderboard not called (got none)"
+      ],
+      "answer": "Rankings lists players by ranking points earned from finished matches. Open it from Home (Rankings or your rank card). Your own row is highlighted."
+    },
+    {
+      "id": "holdout-06",
+      "cat": "holdout",
+      "ok": false,
+      "fails": [
+        "tool my_matches not called (got live_score)"
+      ],
+      "answer": "Delhi Smashers v Yamuna Blockers: sets 1–1, current set 19–17. 2 live matches in all."
+    }
+  ]
+}

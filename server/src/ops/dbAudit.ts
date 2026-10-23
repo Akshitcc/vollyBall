@@ -66,6 +66,10 @@ export const AUDIT_CHECKS: readonly AuditCheck[] = [
     'SELECT id FROM feedback WHERE stars NOT BETWEEN 1 AND 5 OR created_at IS NULL' },
   { id: 'match_create_keys.match', area: 'relations', what: 'every create Idempotency-Key points at its creator\'s match', sql:
     'SELECT k.user_id, k.idem_key FROM match_create_keys k JOIN matches m ON m.id = k.match_id WHERE m.created_by <> k.user_id' },
+  // 1.5.1 (Tester F150-1): a challenge match exists only through the challenged captain's accept
+  { id: 'challenge.match_accepted', area: 'relations', what: 'a match linked to a challenge belongs to an accepted challenge that links it back; a pending / declined / cancelled challenge has no match', sql:
+    "SELECT m.id FROM matches m LEFT JOIN challenges c ON c.id = m.challenge_id WHERE m.challenge_id IS NOT NULL AND (c.id IS NULL OR c.status <> 'accepted' OR (COALESCE(c.match_id, '') <> m.id AND m.status <> 'abandoned')) " +
+    "UNION ALL SELECT c.id FROM challenges c WHERE c.match_id IS NOT NULL AND c.status <> 'accepted'" },
   // ---- 3. finished matches ----
   { id: 'finished.winner', area: 'finished', what: 'a finished match has a winner, a finish time and was_won', sql:
     "SELECT m.id FROM matches m WHERE m.status = 'finished' AND (JSON_UNQUOTE(JSON_EXTRACT(m.summary, '$.winner')) NOT IN ('A','B') OR m.finished_at IS NULL OR m.was_won <> 1)" },

@@ -146,9 +146,10 @@ describe('V1419-8 / V1419-10 / V1419-11', () => {
   it('Create tournament errors clear when the field is fixed; coordinates as a place name', () => {
     const s = src('app/tournament/new.tsx');
     expect(s).toMatch(/if \(fixed\) \{ setError\(null\); setErrFor\(null\); \}/);
-    expect(src('components/LocationPicker.tsx')).toMatch(/testID="place-use-coords"/);
-    expect((en as any).location.useCoords).toBeTruthy();
-    expect((hi as any).location.useCoords).toBeTruthy();
+    // 1.5.0 (F1428-5): the one-tap "use the coordinates" button became automatic: a nameless pin is 'Pinned location'
+    expect(src('components/LocationPicker.tsx')).toMatch(/t\('location\.pinnedName'\)/);
+    expect((en as any).location.pinnedName).toBe('Pinned location');
+    expect((hi as any).location.pinnedName).toBeTruthy();
   });
   it('admin inbox: the status chips are not inside the toggle button', () => {
     const s = src('app/admin-feedback.tsx');
@@ -176,7 +177,7 @@ describe('Ask VolleyLive: knowledge, embeddings, retrieval', () => {
   const ix = buildIndex();
   it('chunks: every FAQ and rule note in EN + HI, with links', () => {
     const c = buildChunks();
-    expect(c.length).toBe((FAQS.length + RULE_NOTES.length) * 2);
+    expect(c.filter((x) => x.kind === 'faq' || x.kind === 'rules').length).toBe((FAQS.length + RULE_NOTES.length) * 2); // 1.5.0: + guides
     expect(c.filter((x) => x.kind === 'rules').every((x) => x.url === FIVB_RULES_URL || x.url.startsWith('volleylive://help?faq='))).toBe(true); // 1.4.21: mapped notes open their FAQ
     expect(c.find((x) => x.id === 'faq:reg-signin:en')!.url).toBe(faqUrl('reg-signin'));
   });
@@ -252,7 +253,8 @@ describe('Ask VolleyLive: answers', () => {
     expect(codeSync(() => checkAskQuestion({ question: ' \u200b a ' }))).toBe('ask_question_short');
     expect(codeSync(() => checkAskQuestion({ question: 'x'.repeat(ASK_QUESTION_MAX + 1) }))).toBe('ask_question_long');
     expect(checkAskQuestion({ question: '  how\u200b  do I\nscore ', lang: 'hi' })).toEqual({ question: 'how do I score', lang: 'hi' });
-    expect(checkAskQuestion({ question: 'how do I score', lang: 'fr' }).lang).toBe('en');
+    // 1.5.1 (Tester nit): an unknown language is refused instead of answered in English
+    expect(codeSync(() => checkAskQuestion({ question: 'how do I score', lang: 'fr' }))).toBe('ask_lang');
     for (const k of ['ask_question_type', 'ask_question_short', 'ask_question_long', 'ask_unavailable']) {
       expect((en as any).errors.codes[k]).toBeTruthy();
       expect((hi as any).errors.codes[k]).toBeTruthy();

@@ -1,0 +1,48 @@
+# PROGRESS 1.5.2 (vc47) – Tester "1.5.1 retest" fixes
+
+Backups: volleylive-latest.apk.bak47, volleylive.zip.bak61, backups/volleylive-1.5.1.{apk,zip}, backups/volleylive-src.pre152.tar.gz. app.config.ts 1.5.2 / 47.
+
+- [x] F151-4 (Medium) masker rework: normalise digits, more phone / e-mail forms, display text only (ids untouched), phone-shape heuristics, FAQ + team names, property/fuzz tests, eval items
+  - src/core/pii.ts rewritten: matching on a normalised copy (NFKC, every Unicode decimal digit → ASCII, format chars removed, spelled-out English digits) mapped back to the original (the rest of the text is unchanged); phones = digit groups joined by space . - – — / ( ) with phone-shape rules (10 digits 6-9; 0 / 91 / 091 / 0091 prefix; + and 8-15 digits; 1-digit groups only as a leading 0 / +CC; runs glued to ASCII letters/digits skipped); Unicode / IDN / full-width ＠ / quoted / "[at] [dot]" e-mails.
+  - Display text only: filterPii skips id / routing fields (ID_KEY: id, uid, *Id, *Ids, *_id, route, href, path, params); the audit tools JSON is masked field by field; source titles masked; admin FAQ text and team names in answers / cards masked.
+  - Fixed during eval: a sentence-final e-mail swallowed the next word ("…com. Example") – a spaced dot now needs spaces on both sides.
+  - Tests: src/core/__tests__/pii152.test.ts 87 (Tester's 49 leak + 27 keep inputs; fuzz 20k uuids / OTP ids → 0 changed; 20k ids in card fields → 0 corrupted; 5k random phones in 5 digit scripts / prefixes / separators → all masked; 5k score lines / number lists → all kept); server/tests/ask152.test.ts F151-4 ×4 (audit, admin FAQ, team name in cards with the id intact, every card id real).
+  - v58 pii58.mts (copy pointed at the local source): 47/47 MASK (audit path too), 22/22 KEEP (1.5.1: 13 leaks + 1 false positive).
+- [x] F151-6 (Medium) ask_history stores / returns the masked question; local-only script for old rows; test
+  - server/src/domain/ask.ts chat(): the history row and the POST response carry scrubPii(question); history() masks on read too (rows from before 1.5.2). Demo / Firebase local history (services/askLocal.ts) stores the masked question as well.
+  - server/scripts/mask-ask-history.ts: LOCAL ONLY (localhost:3306, *_test / *_audit), dry run by default, --apply UPDATEs question only; no schema change, no deletes. No migration.
+  - Tests: server/tests/ask152.test.ts (F151-6: 3 tests – POST/row/GET masked; Devanagari / full-width; old row masked on read + script dry-run/apply/idempotent).
+- [x] F151-1 (Low-Medium) current captain at action time (accept / decline / cancel), API + demo; tests
+  - server/src/domain/challengeCaptains.ts withCurrentCaptains (teams row FOR SHARE inside the transaction): respondChallenge, acceptChallenge and the POST /matches claim use the teams' current captains; loadChallenges returns them (the new captain sees Accept / Decline); the answered row records them.
+  - demoBackend challengeNow(): same for acceptChallenge / respondToChallenge / createMatch claim / watchChallenges.
+  - Tests: server/tests/fixes152.test.ts 5/5 (accept, decline, cancel, list, POST /matches); src/services/__tests__/challenge152.test.ts F151-1 ×4.
+  - Firebase build: firestore.rules still check the stored captain ids (documented gap, like V1426-3).
+- [x] F151-2 (Low) demo accept: 5 parallel taps → 1 match; test
+  - demoBackend.acceptChallenge: one accept in flight per challenge – the same user's parallel taps share it (same match id); another user's waits and is then checked (challenge_used); a decline while an accept is in flight is refused.
+  - Tests: challenge152 "5 parallel accept taps → 1 match" (fails with 5 matches without the fix – checked) + accept/decline together → one outcome.
+- [x] F151-3 (Low) result copy EN/HI matches the rules (disputed; flagged + unconfirmed shows both)
+  - resultStatus: new state reviewAwaiting (flagged AND the other captain hasn't confirmed); review = flagged + confirmed. teamRecord counts it; team page line team-stats-review-awaiting; Ask answer + card copy EN/HI.
+  - Disputed copy EN/HI: "it doesn't count. An admin can void it." (no "unless an admin approves" – an approve of a rejected result doesn't count it).
+  - Tests: src/components/__tests__/fixes152ui.test.tsx F151-3 ×4 (incl. approved_rejected stays disputed / not counted).
+- [x] F151-5 (Low) read-only trigger words only on action intent; eval items
+  - intents.ts: mark / pick / choose / select / close / set / end / finish / start removed from the always-write lists; WRITE_AMBIG needs an imperative (sentence start or after please / can you / i want you to …) with an object (it | the/my/our/this… ≤2 words match/result/score/game/set/winner/toss/challenge/tournament/team/…, potm / player of the match) or "VERB <name> as captain/POTM/winner".
+  - "Mark Fernandes stats" / "Pick Pereira stats" → player_stats; "Close matches near me?" → my_matches; "Set rules for a deciding set?" → the 15-point note.
+  - Tests: src/core/__tests__/intents152.test.ts 31; eval fix152 ×6.
+- [x] F151-7 (Low) pending-invite ✕ accessible label EN/HI; test
+  - team/[id].tsx: accessibilityLabel t('team.withdrawInviteA11y', { last4 }) – "Withdraw the invite for the number ending 5678" / HI; testID team-invite-withdraw-<last4>; hitSlop 8.
+  - Tests: fixes152ui renders the team page (EN + HI): role, label (last 4 only, never the full number), press withdraws.
+- [x] Eval: new items, held-out honest, pass rate
+  - docs/qa/ask-eval-1.5.2.jsonl = the 151 1.5.1 items unchanged + 12 fix152 (F151-4 ×5, F151-3 ×1, F151-5 ×6) + 12 new holdout152 written and frozen (sha256 of the 12 lines 793cd382…) BEFORE the first run.
+  - World additions: admin FAQ 'scorer-desk' (phones / e-mails in new formats + a set-score line), team "Call ९८१२३४५६३१ XI" (id with a phone-like uuid tail) captained by Juhu49 ("pii").
+  - Scorer: the PII check now skips id fields (ID_KEY) – the first run flagged the deliberately phone-like team id in f151-4-04's card (the answer itself was masked); ids are not display text (F151-4).
+  - Result (local :3306, mock): 173/175 = 98.9%; 1.5.0+1.5.1 items 149/151 (unchanged: holdout151-05/-12 left open, untuned), fix152 12/12, holdout152 12/12 on the first run.
+- [x] v58 harnesses against the local build (copies in /workspace/qa-runs, local API :4201 on local DB :3306; the QA folders read only)
+  - pii58 47/47 masked + 22/22 kept (1.5.1: 13 leaks, 1 false positive); otp58 30/30 (AUTH_MODE=otp OTP_PROVIDER=dev, DB volleylive_otp152_test, per-process random session secret).
+  - ch58 24 checks, 5 FAIL = the same 5 as the Tester's 1.5.1 baseline (F1-M code wish-list; F2 states from harness-speed too_short matches); X1 now: former captain accept 403 challenge_not_captain, new captain 201 (F151-1 fixed).
+  - f2_58 9 checks, 2 FAIL = same as baseline (the probe's "rejected then approved counts" assumption – the basis of F151-3); Sh (short, unconfirmed) now reviewAwaiting, DpA disputed.
+  - ask58 21 checks, 3 FAIL (baseline 5): F4-1 audit masking and F4-2 admin-FAQ masking now PASS; left = the Tester's Info items (pichle natije, 7 on court) + audit row count incl. rate-limited rows (same as baseline).
+  - ask58b: 5/5 planted-injection checks PASS locally; its POTM part depends on the Tester's block data and can't run here.
+  - battery: full58 46/46, db58 18/18, run 47/47 (81 matches; first attempt hit a transient ECONNRESET, rerun on block 12 clean), grN4 12/12, gr1428 15 teams 42/42 (champion Bandra Blockers), grN32 13/13 (block 20, champion Sion N32). db-audit on the harness DB: 32/32, 0 violations.
+  - INCIDENT: ask58b hard-codes its own API = <QA API>/api for chat; my first run of the copy sent 5 POST /api/ask/chat (dev-auth test numbers +91900000202x/203x) to the QA API :4100 before failing → ~5 ask_history + 5 ask_audit rows in the QA DB. Not cleaned up (would touch QA again) – reported. All copies now use :4201 and lib.mts refuses any other API.
+- [x] pipeline START=1 STOP_AFTER_SCAN=1 (suites, eval, scan 0) – tsc ok; jest 1984/1984 (157); tz 5 zones; server 457/457; rules 226/226; policy all passed; eval 173/175; scan checked=268 failures=0
+- [x] RELEASE-1.5.2, then START=4 (zip, apk 47/1.5.2, shas → /workspace/volleylive-1.5.2-shas.txt) – cert fac61745…3b9c, badging 47/1.5.2, zip 638 files clean

@@ -63,7 +63,8 @@ export function RankCard({ rankings, style }: { rankings: RankingsResult | null 
           <Text style={[{ fontSize: 56, lineHeight: 56, color: k.t.primary, minWidth: 64 }, k.f.score]} testID={ranked ? 'profile-rank-num' : 'rank-disc'}>{ranked ? `#${row!.rank}` : '–'}</Text>
         )}
         <View style={{ flex: 1, marginLeft: 12 }} testID="profile-rank" accessible accessibilityLabel={full}>
-          <Over numberOfLines={1}>{ranked ? `${t('rankings.yourRankAll')} · ${t('rankings.ofTotal', { total: rankings!.total })}` : t('rankings.yourRankAll')}</Over>
+          {/* 1.5.0 (Tester F1428-7): wraps to 2 lines at 360 px instead of clipping 'YOUR RANK · ALL PLAYERS · O…' */}
+          <Over numberOfLines={2} testID="profile-rank-label">{ranked ? `${t('rankings.yourRankAll')} · ${t('rankings.ofTotal', { total: rankings!.total })}` : t('rankings.yourRankAll')}</Over>
           {ranked ? null : <Body bold size={17} style={{ marginTop: 2 }}>{full}</Body>}
           {rankings && (
             <View style={{ marginTop: 6 }}>

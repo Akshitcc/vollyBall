@@ -203,6 +203,12 @@ export interface Backend {
   createSupportTicket(t: import('../../core/support').NewSupportTicket): Promise<string>;
   /** 1.4.20 Ask VolleyLive: a grounded answer with sources, or idk (then the app offers Contact us). */
   askVolleyLive(question: string, lang: 'en' | 'hi'): Promise<import('../../core/ask').AskAnswer>;
+  /** 1.5.0 Ask VolleyLive chat: one turn with read-only tools (as me) and rich cards; saved to my history. */
+  askChat(question: string, lang: 'en' | 'hi'): Promise<import('../../core/ask/agent').AskHistoryItem>;
+  /** 1.5.0: my own saved chat turns (oldest first, last ASK_HISTORY_PAGE). */
+  askHistory(): Promise<import('../../core/ask/agent').AskHistoryItem[]>;
+  /** 1.5.0: clears my own chat history. */
+  clearAskHistory(): Promise<void>;
   /** My own tickets, newest first. */
   listMySupportTickets(): Promise<import('../../core/support').SupportTicket[]>;
   /** App admins only: every ticket, newest first. */
@@ -220,6 +226,8 @@ export interface Backend {
   createChallenge(c: NewChallenge): Promise<string>;
   watchChallenges(teamIds: string[], cb: (c: Challenge[]) => void): Unsubscribe;
   respondToChallenge(c: Challenge, status: ChallengeStatus, matchId?: string): Promise<void>;
+  /** 1.5.1 (F150-1): the challenged captain accepts and creates the challenge match in one step; returns the match id. */
+  acceptChallenge(c: Challenge, m: NewMatch): Promise<string>;
 
   // ---- tournaments ----
   createTournament(t: NewTournament): Promise<string>;

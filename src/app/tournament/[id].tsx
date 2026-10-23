@@ -20,6 +20,9 @@ import { Blob, Body, Display, Glow, LivePill, Over, Sticker, useKit } from '../.
 import { claimedTournamentMatches, isTournamentAdmin } from '../../core/tournamentAdmin';
 import { confirmAsk } from '../../services/dialogs';
 
+/** 1.5.0 (QA V1428-4): narrower bracket cards – at 360 px the next round starts inside the screen (with the hint). */
+const BRACKET_CARD_W = 168;
+
 export default function TournamentPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { t: tr } = useTranslation();
@@ -124,7 +127,12 @@ export default function TournamentPage() {
     }
   };
 
-  const FixtureCard = ({ f, compact }: { f: Fixture; compact?: boolean }) => {
+  // 1.5.0 (QA V1428-3): a team dot always has a contrasting ring (Day outline / Night light ring), so a dark team colour
+  // stays visible on the navy Night cards
+  const dot = (color: string | undefined, size: number, testID?: string) => (
+    <View testID={testID} style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color ?? k.t.textMuted, marginRight: 6, borderWidth: 1.5, borderColor: k.day ? k.t.outline : k.t.text }} />
+  );
+  const FixtureCard = ({ f, compact, final }: { f: Fixture; compact?: boolean; final?: boolean }) => {
     const m = data.byFixture.get(f.id);
     const home = teamOf(f.homeId);
     const away = teamOf(f.awayId);
@@ -136,7 +144,7 @@ export default function TournamentPage() {
     const winnerSide = m?.summary.winner;
     const line = (tt: typeof home, sets: number | undefined, win: boolean, side: 'home' | 'away') => (
       <Row style={{ marginVertical: 2 }}>
-        <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: tt?.color ?? k.t.textMuted, marginRight: 6, borderWidth: k.day ? 1.5 : 0, borderColor: k.t.outline }} />
+        {dot(tt?.color, 10)}
         <Body bold={win} size={14} color={tt ? k.t.text : k.t.textMuted} style={{ flex: 1 }} numberOfLines={1}>
           {tt?.name ?? open(side) ?? (bye ? tr('tournament.bye') : tr('tournament.tbd'))}
         </Body>
@@ -146,7 +154,7 @@ export default function TournamentPage() {
     const press = m ? () => router.push(`/match/${m.id}`) : ready && isOrganizer && !starting ? () => start(f) : undefined;
     return (
       <Sticker
-        style={[{ marginBottom: 10 }, compact && { width: 210, marginRight: 10 }]}
+        style={[{ marginBottom: 10 }, compact && { width: BRACKET_CARD_W, marginRight: 10 }]}
         highlight={ready && isOrganizer}
         onPress={press}
         testID={`fixture-${f.id}`}
@@ -158,6 +166,10 @@ export default function TournamentPage() {
         {line(away, m?.summary.setsB, winnerSide === 'B', 'away')}
         {ready && isOrganizer && <Body bold size={12} style={{ marginTop: 4 }}>{starting === f.id ? tr('tournament.starting') : tr('tournament.tapToStart')}</Body>}
         {bye && <Body muted bold size={12}>{tr('tournament.advances')}</Body>}
+        {/* 1.5.0 (QA V1428-4): the final names its champion */}
+        {final && m?.status === 'finished' && winnerSide ? (
+          <Body bold size={12} style={{ marginTop: 4 }} testID={`fixture-champion-${f.id}`}>🏆 {tr('tournament.championShort', { team: (winnerSide === 'A' ? home : away)?.name ?? '' })}</Body>
+        ) : null}
       </Sticker>
     );
   };
@@ -180,9 +192,15 @@ export default function TournamentPage() {
             {k.day ? <View style={{ height: 0, borderTopWidth: 1.5, borderStyle: 'dashed', borderColor: k.t.outline, opacity: 0.3 }} /> : <View style={{ height: 1, backgroundColor: k.t.surface2 }} />}
             <Row style={{ paddingVertical: 10 }} testID={`table-row-${r.teamId}`}>
               <Text style={[{ width: 28, textAlign: 'center', color: k.t.text }, k.f.bold]}>{i + 1}</Text>
-              <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: tt?.color ?? k.t.textMuted, marginRight: 6, borderWidth: k.day ? 1.5 : 0, borderColor: k.t.outline }} />
-              <Text style={[{ flex: 1, color: k.t.text, fontSize: 14 }, k.f.bold]} numberOfLines={1}>{tt?.name}</Text>
-              {q ? <Text testID={`qualifies-${r.teamId}`} accessibilityLabel={tr('tournament.qualifies')} style={[{ color: k.t.text, fontSize: 11, marginRight: 4 }, k.f.bold]}>{tr('tournament.qShort')}</Text> : null}
+              {dot(tt?.color, 10, `table-dot-${r.teamId}`)}
+              {/* 1.5.0 (QA V1428-2): long names wrap to 2 lines and shrink a little instead of being cut at 360 px; the
+                  qualified badge is a separate pill with its own gap that never squeezes the name to nothing */}
+              <Text testID={`table-name-${r.teamId}`} style={[{ flex: 1, flexShrink: 1, color: k.t.text, fontSize: 13, lineHeight: 17 }, k.f.bold]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}>{tt?.name}</Text>
+              {q ? (
+                <View testID={`qualifies-${r.teamId}`} accessible accessibilityLabel={tr('tournament.qualifies')} style={{ marginLeft: 6, marginRight: 4, paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8, borderWidth: 1, borderColor: k.day ? k.t.outline : k.t.text, flexShrink: 0 }}>
+                  <Text style={[{ color: k.t.text, fontSize: 10, lineHeight: 15 }, k.f.bold]} numberOfLines={1}>{tr('tournament.qShort')}</Text>
+                </View>
+              ) : null}
               <Body style={{ width: 28, textAlign: 'center' }}>{r.played}</Body>
               <Body style={{ width: 28, textAlign: 'center' }}>{r.won}</Body>
               <Body style={{ width: 28, textAlign: 'center' }}>{r.lost}</Body>
@@ -291,16 +309,21 @@ export default function TournamentPage() {
       ) : null}
 
       {current === 'bracket' && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} testID="tournament-bracket">
-          {(t.format === 'groups' ? koRounds : rounds).map((r) => (
+        <>
+        {(t.format === 'groups' ? koRounds : rounds).length > 1 ? (
+          <Body muted size={12} style={{ marginBottom: 6 }} testID="bracket-scroll-hint">{tr('tournament.bracketScrollHint')}</Body>
+        ) : null}
+        <ScrollView horizontal showsHorizontalScrollIndicator testID="tournament-bracket">
+          {(t.format === 'groups' ? koRounds : rounds).map((r, ri, all) => (
             <View key={r} style={{ marginRight: 4 }}>
               <Over style={{ marginBottom: 6 }}>{roundLabel(r)}</Over>
               <View style={{ flex: 1, justifyContent: 'space-around' }}>
-                {data.fixtures.filter((f) => f.round === r).map((f) => <FixtureCard key={f.id} f={f} compact />)}
+                {data.fixtures.filter((f) => f.round === r).map((f) => <FixtureCard key={f.id} f={f} compact final={ri === all.length - 1} />)}
               </View>
             </View>
           ))}
         </ScrollView>
+        </>
       )}
       {current === 'fixtures' && (
         <View testID="tournament-fixtures">

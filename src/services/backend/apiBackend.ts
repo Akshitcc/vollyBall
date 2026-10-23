@@ -1,3 +1,4 @@
+import type { AskHistoryItem } from '../../core/ask/agent';
 import { checkAskQuestion, type AskAnswer } from '../../core/ask';
 import type { RepairFix } from '../../core/verdictRepair';
 import { assertSupportImage, checkSupportStatus, checkSupportTicket, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
@@ -708,6 +709,16 @@ export class ApiBackend implements Backend {
     const q = checkAskQuestion({ question, lang });
     return this.request<AskAnswer>('POST', '/ask', q);
   }
+  askChat(question: string, lang: 'en' | 'hi') {
+    const q = checkAskQuestion({ question, lang });
+    return this.request<AskHistoryItem>('POST', '/ask/chat', q);
+  }
+  async askHistory() {
+    return (await this.request<{ items: AskHistoryItem[] }>('GET', '/ask/history')).items;
+  }
+  async clearAskHistory() {
+    await this.request<void>('DELETE', '/ask/history');
+  }
   async createSupportTicket(t: NewSupportTicket) {
     const c = checkSupportTicket(t);
     if (t.screenshot) assertSupportImage(t.screenshot.type, t.screenshot.size);
@@ -759,6 +770,10 @@ export class ApiBackend implements Backend {
       return () => {};
     }
     return this.watch('challenges', () => this.get<Challenge[]>(`/challenges?teams=${teamIds.map(encodeURIComponent).join(',')}`), cb);
+  }
+  async acceptChallenge(c: Challenge, m: NewMatch) {
+    const key = this.createKeyFor({ ...m, challengeId: c.id });
+    return (await this.request<{ matchId: string }>('POST', `/challenges/${encodeURIComponent(c.id)}/accept`, { match: m }, undefined, undefined, { 'Idempotency-Key': key })).matchId;
   }
   async respondToChallenge(c: Challenge, status: ChallengeStatus, matchId?: string) {
     await this.request('PATCH', `/challenges/${encodeURIComponent(c.id)}`, { status, matchId: matchId ?? null });

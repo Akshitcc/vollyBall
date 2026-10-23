@@ -41,10 +41,14 @@ describe('1. API simulation: 2-team match, full knockout and league', () => {
     assert.equal(rep.league.played, 45);
     assert.deepEqual(rep.support, { tickets: 4, feedback: 4 });
     assert.equal(await count('support_tickets'), 4);
+    // 1.5.1 (F150-1): accepted challenge has its match; declined / cancelled have none; the challenger's early create was refused
+    assert.equal(rep.challenges.earlyCreateStatus, 409);
+    assert.equal((await h.db('challenges').where({ id: rep.challenges.accepted }).first()).match_id, rep.challenges.acceptedMatchId);
+    for (const id of [rep.challenges.declined, rep.challenges.cancelled]) assert.equal(await count('matches', { challenge_id: id }), 0);
   });
   it('every audit check passes on the simulated data', async () => {
     assert.deepEqual(await failing(), []);
-    assert.equal(AUDIT_CHECKS.length, 31);
+    assert.equal(AUDIT_CHECKS.length, 32);
   });
   it('users: all registered with required fields, unique mobile, DOB and pincode', async () => {
     const rows = await h.db('users').whereIn('id', rep.users.map((u) => u.uid));

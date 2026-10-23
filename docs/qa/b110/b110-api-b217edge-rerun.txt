@@ -111,7 +111,7 @@ OK               | L7 | 200 | captain removes the legacy invite (list without it
 OK               | L8 | 200 | captain edits team name only (pending untouched) | {"id":"team_smashers","name":"Delhi Smashers","nameLower":"delhi smashers","color":"#D93636","captainId":"seed
 UNEXPECTED-REJECT| L9 | 403 | legacy user creates a team | You must be the captain of a team you create [teams.create]
 INFO             | L10 | 400 | lookup legacy number by-phone | Invalid request: phone – Phone must be an Indian mobile number in E.164 format: +91 followed by 10 digits starting with 6-9
-INFO             | F8 | 201 | declared image/jpeg, bytes are PNG | {"id":"20bc50ce-5faf-44c5-8325-d6d2a0b3c3a1","matchId":"match_live","url":"http://localhost:4100/files/matches
+INFO             | F8 | 201 | declared image/jpeg, bytes are PNG | {"id":"20bc50ce-5faf-44c5-8325-d6d2a0b3c3a1","matchId":"match_live","url":"<QA API>/files/matches
    served as image/png
 INFO             | F9 | 400 | PNG magic + HTML payload (polyglot) | The image is incomplete (too small or cut off)
 INFO             | F10 | 400 | GIF89a header only (6 bytes) | The image is incomplete (too small or cut off)

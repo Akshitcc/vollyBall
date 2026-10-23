@@ -1,6 +1,6 @@
 /** Server entry point: wires real implementations and starts HTTP + WebSocket. */
 import { PincodeLookup } from './pincode';
-import { createAskProvider } from './ask/providers';
+import { createAskAgent, createAskProvider } from './ask/providers';
 import 'dotenv/config';
 import http from 'node:http';
 import { createApp } from './app';
@@ -78,7 +78,9 @@ async function main() {
     adminUids: new Set(cfg.adminUids),
     rateLimiter,
     ask: createAskProvider(process.env), // 1.4.20: ASK_PROVIDER / ASK_API_KEY (the key is never logged)
+    askAgent: createAskAgent(process.env), // 1.5.0: the chat agent (function calling), same env, same key rules
     auth,
+    askAuditHmacKey: cfg.askAuditHmacKey || undefined, // 1.5.3: never logged
     trustProxy: cfg.trustProxy,
     info: { version: VERSION, storage: storage.kind ?? 'local', rateStore: redis ? 'redis' : 'memory', auth: cfg.authMode === 'otp' ? `otp:${cfg.otp?.provider}` : cfg.authMode },
   };

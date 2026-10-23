@@ -162,6 +162,8 @@ export function dataLabel(s: string | null | undefined, t: TFunction = tr): stri
 /** Error codes from src/core/validate.ts, the API server (`error` in the JSON body) and the app. */
 const CODED = new Set([
   // 1.4.26 fixtures / saves, 1.4.27 groups format
+  // 1.5.0 (F1428-2) challenge ↔ match link
+  'challenge_unknown', 'challenge_not_captain', 'challenge_closed', 'challenge_used', 'challenge_teams', 'challenge_match_invalid', 'challenge_link_frozen', 'challenge_pending', 'challenge_accept_match',
   'fixture_locked', 'fixture_unknown', 'fixture_taken', 'fixture_not_ready', 'fixture_teams', 'fixture_match_mismatch', 'progress_stale', 'progress_seq_required', 'idempotency_mismatch',
   'groups_only', 'groups_advance', 'groups_team', 'groups_count', 'groups_fixture', 'groups_seed', 'groups_too_few', 'groups_too_small',
   'text_empty', 'text_too_short', 'text_too_long', 'text_control', 'text_bidi', 'time_in_past', 'time_invalid', 'end_before_start',
@@ -177,7 +179,7 @@ const CODED = new Set([
   'support_message_type',
   'ask_question_type',
   'ask_sign_in',
-  'ask_question_short',
+  'ask_question_short', 'ask_lang',
   'ask_question_long',
   'ask_unavailable',
   // launch prep: server-side SMS OTP

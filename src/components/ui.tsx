@@ -85,6 +85,7 @@ export function Button({
   big,
   testID,
   disabledHint,
+  accessibilityLabel,
 }: {
   title: string;
   onPress?: () => void;
@@ -97,6 +98,8 @@ export function Button({
   testID?: string;
   /** Shown under a disabled button: what is still missing (e.g. "Enter a 10-digit mobile number"). */
   disabledHint?: string;
+  /** Screen-reader label when the visible title needs context (1.5.4 F153-6: "Join Fresh Falcons"). Defaults to the title. */
+  accessibilityLabel?: string;
 }) {
   const hf = useHiFont();
   const v = {
@@ -112,6 +115,7 @@ export function Button({
   const btn = (
     <PressableScale
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled: !!disabled || !!loading, busy: !!loading }}
       accessibilityHint={off ? disabledHint : undefined}
       testID={testID}

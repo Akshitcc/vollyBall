@@ -62,3 +62,9 @@ export function placeLabel(p: { name?: string | null; lat?: number | null; lng?:
   if (n) return n;
   return typeof p.lat === 'number' && typeof p.lng === 'number' && Number.isFinite(p.lat) && Number.isFinite(p.lng) ? `${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}` : '';
 }
+
+/**
+ * 1.5.0 (Tester F1428-5): a pin without a name never blocks a form – it is saved under the looked-up name, else the
+ * default "Pinned location" (`fallback`, translated by the caller). The coordinates are kept as they are.
+ */
+export const namedPlace = (p: Place | null, fallback: string): Place | null => (p ? { ...p, name: p.name.trim() || fallback } : null);

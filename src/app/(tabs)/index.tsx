@@ -51,6 +51,18 @@ export default function Home() {
   const outgoing = challenges.filter((c) => c.status === 'pending' && c.fromCaptainId === me.id);
   const [busy, setBusy] = useState<string | null>(null);
 
+  const answerInvite = async (teamId: string, join: boolean) => {
+    if (busy) return;
+    setBusy(`inv-${teamId}`);
+    try {
+      if (join) await backend.acceptTeamInvite(teamId, me.id, me.phone);
+      else await backend.declineTeamInvite(teamId, me.phone);
+    } catch (e) {
+      notify(tr('home.couldNotRespond'), translateError(e));
+    } finally {
+      setBusy(null);
+    }
+  };
   const respond = async (c: Challenge, accept: boolean) => {
     setBusy(c.id);
     try {
@@ -127,6 +139,8 @@ export default function Home() {
               <QuickAction key={id} id={id} icon={icon} label={tr(label)} onPress={go} fill={k.day ? [k.t.primary, k.t.success, k.t.pink, k.t.surface][i % 4] : k.t.surface} />
             ))}
           </View>
+          {/* 1.5.0 (Tester F1428-6): Ask VolleyLive from Home (it was only in the Help Center) */}
+          <HomeAskCard />
           {upcoming[0] ? <UpcomingRow m={upcoming[0]} /> : null}
 
           {DEMO_MODE && <Banner tone="warn" text={tr('home.demoBanner')} />}
@@ -149,8 +163,10 @@ export default function Home() {
             <Text style={[font.h3, { flex: 1 }]}>{tr('home.wantsYou', { team: t.name })}</Text>
           </Row>
           <Row style={{ gap: 10, marginTop: 8 }}>
-            <Button title={tr('home.joinTeam')} icon="checkmark" style={{ flex: 1 }} onPress={() => backend.acceptTeamInvite(t.id, me.id, me.phone)} />
-            <Button title={tr('common.decline')} variant="secondary" style={{ flex: 1 }} onPress={() => backend.declineTeamInvite(t.id, me.phone)} />
+            {/* 1.5.0 (F1428-4): one tap = one join for the signed-in player only (no double submit) */}
+            {/* 1.5.4 (F153-6): screen readers hear which team – "Join Fresh Falcons" / "Decline Fresh Falcons" */}
+            <Button title={tr('home.joinTeam')} accessibilityLabel={tr('home.joinTeamA11y', { team: t.name })} icon="checkmark" style={{ flex: 1 }} loading={busy === `inv-${t.id}`} disabled={!!busy} testID={`invite-join-${t.id}`} onPress={() => void answerInvite(t.id, true)} />
+            <Button title={tr('common.decline')} accessibilityLabel={tr('home.declineTeamA11y', { team: t.name })} variant="secondary" style={{ flex: 1 }} disabled={!!busy} testID={`invite-decline-${t.id}`} onPress={() => void answerInvite(t.id, false)} />
           </Row>
         </Card>
       ))}
@@ -264,6 +280,24 @@ function UpcomingRow({ m }: { m: Match }) {
         <Body muted size={12} numberOfLines={1}>{formatWhen(m.scheduledAt)}{placeLabel(m.location) ? ` · ${placeLabel(m.location)}` : ''}</Body>
       </View>
       <Ionicons name="chevron-forward" size={18} color={k.t.text} />
+    </Sticker>
+  );
+}
+
+/** 1.5.0 (F1428-6): Ask VolleyLive entry – full-width sticker, wraps to 2 lines at 360 px, Day/Night tokens. */
+export function HomeAskCard() {
+  const { t } = useTranslation();
+  const k = useKit();
+  return (
+    <Sticker onPress={() => router.push('/ask')} testID="home-ask" accessibilityLabel={t('home.askTitle')} style={{ marginTop: 4 }} inner={{ flexDirection: 'row', alignItems: 'center', padding: 14 }}>
+      <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: k.day ? k.t.primary : k.t.surface2, borderColor: k.t.outline, borderWidth: k.day ? 2 : 0 }}>
+        <Ionicons name="chatbubbles" size={22} color={k.day ? k.t.onPrimary : k.t.primary} />
+      </View>
+      <View style={{ flex: 1, marginLeft: 12 }}>
+        <Body bold size={16} numberOfLines={2}>{t('home.askTitle')}</Body>
+        <Body muted size={12} numberOfLines={2}>{t('home.askText')}</Body>
+      </View>
+      <Ionicons name="chevron-forward" size={20} color={k.t.textMuted} />
     </Sticker>
   );
 }

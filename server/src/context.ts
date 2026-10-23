@@ -31,6 +31,10 @@ export interface Services {
   minAge?: number;
   /** 1.4.20 Ask VolleyLive answer step (ASK_PROVIDER); absent = the mock (extractive, no network). */
   ask?: import('../../src/core/ask').AskProvider;
+  /** 1.5.0 Ask VolleyLive chat agent (ASK_PROVIDER with function calling); absent = s.ask wrapped, else the mock planner. */
+  askAgent?: import('../../src/core/ask/agent').AskAgentProvider;
+  /** 1.5.3 (Tester F152-2): key for the ask_audit question HMAC (ASK_AUDIT_HMAC_KEY); absent = no hash stored (NULL). */
+  askAuditHmacKey?: string;
   /** Pushes are fire-and-forget; tests can await them through this hook. */
   pending?: Set<Promise<unknown>>;
 }

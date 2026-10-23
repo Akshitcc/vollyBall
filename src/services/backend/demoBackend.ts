@@ -1,8 +1,9 @@
 import { FIXTURE_LOCKED, FIXTURE_UNKNOWN, fixtureStartProblem, lockedFixtureChange } from '../../core/fixtureLock';
+import { CHALLENGE_CLOSED, CHALLENGE_LINK_FROZEN, CHALLENGE_LINK_MESSAGES, CHALLENGE_NOT_CAPTAIN, CHALLENGE_UNKNOWN, CHALLENGE_USED, challengeAcceptProblem, challengeCreateProblem, challengeRespondLinkProblem } from '../../core/challengeLink';
 import { groupsProblem } from '../../core/groups';
 import { fixtureResultFromMatch } from '../../core/results';
 import type { FixtureResult } from '../../core/tournament';
-import { askLocally } from '../askLocal';
+import { askChatLocally, askHistoryLocally, askLocally, clearAskHistoryLocally } from '../askLocal';
 import { assertSupportImage, checkSupportStatus, checkSupportTicket, SUPPORT_IMAGE_TYPES, supportRateWait, type NewSupportTicket, type SupportStatus, type SupportTicket } from '../../core/support';
 import { checkFeedback, REVIEW_LAST_ASKED_PREFIX } from '../../core/reviewPrompt';
 import { BUNDLED_DAILY_ITEMS, checkDailyItem, dailyTombstone, type DailyItem } from '../../core/dailyItems';
@@ -141,6 +142,8 @@ export class DemoBackend implements Backend {
       if (!this.db.users[DEMO_QA_ADMIN.id] && !Object.values(this.db.users).some((u) => u.phone === DEMO_QA_ADMIN.phone)) {
         this.db.users[DEMO_QA_ADMIN.id] = demoQaAdminProfile();
       }
+      // 1.5.0 (F1428-4): demo data from older builds loses the automatic invites for unregistered numbers
+      if (raw) this.cleanStrayInvites();
       const a = await AsyncStorage.getItem(AUTH_KEY);
       if (a) this.authUser = JSON.parse(a);
       const q = await AsyncStorage.getItem(QA_ADMIN_KEY);
@@ -230,13 +233,19 @@ export class DemoBackend implements Backend {
       },
     };
   }
-  /** So the demo user sees how team invites work (only once they are registered). */
-  private seedInviteFor(phone: string, uid: string) {
-    const t = this.db.teams['team_smashers'];
-    if (t && !t.pendingPhones.includes(phone) && !t.memberIds.includes(uid)) {
-      t.pendingPhones = [...t.pendingPhones, phone];
-      this.changed();
+  /**
+   * 1.5.0 (Tester F1428-4): the demo no longer adds an invite to Delhi Smashers for every new sign-up – nobody sent those,
+   * and a half-registered sign-up left an invite for a number that isn't on VolleyLive. Invites come only from a captain
+   * (updateTeam: registered numbers only). Stored demo data from older builds is cleaned on load (cleanStrayInvites).
+   */
+  private cleanStrayInvites() {
+    const registered = new Set(Object.values(this.db.users).filter((u) => hasStoredRegistration({ firstName: u.firstName ?? null, lastName: u.lastName ?? null, dob: u.dob ?? null, pincode: u.pincode ?? null })).map((u) => u.phone));
+    let changed = false;
+    for (const t of Object.values(this.db.teams)) {
+      const keep = t.pendingPhones.filter((ph) => registered.has(ph));
+      if (keep.length !== t.pendingPhones.length) { t.pendingPhones = keep; changed = true; }
     }
+    return changed;
   }
   async signOut() {
     this.authUser = null;
@@ -354,7 +363,6 @@ export class DemoBackend implements Backend {
       p = checkProfileFields(p0);
     }
     this.db.users[p.id] = { ...this.db.users[p.id], ...p };
-    if (isNew) this.seedInviteFor(p.phone, p.id);
     this.changed();
   }
   async getProfiles(ids: string[]) {
@@ -416,10 +424,14 @@ export class DemoBackend implements Backend {
   async acceptTeamInvite(teamId: string, id: string, phone: string) {
     const t = this.db.teams[teamId];
     if (!t) return;
+    // 1.5.0 (F1428-4): like the API – only the signed-in player joins, with their own invited number, once
+    if (!this.authUser || this.authUser.uid !== id || this.authUser.phoneNumber !== phone) throw new Error('Only the invited player can join the team');
+    if (!t.pendingPhones.includes(phone)) return; // already answered (a second tap changes nothing)
+    const already = t.memberIds.includes(id);
     this.db.teams[teamId] = {
       ...t,
-      memberIds: t.memberIds.includes(id) ? t.memberIds : [...t.memberIds, id],
-      subIds: t.memberIds.length >= 6 ? [...t.subIds, id] : t.subIds,
+      memberIds: already ? t.memberIds : [...t.memberIds, id],
+      subIds: !already && t.memberIds.length >= 6 && !t.subIds.includes(id) ? [...t.subIds, id] : t.subIds,
       pendingPhones: t.pendingPhones.filter((p) => p !== phone),
     };
     this.changed();
@@ -427,6 +439,10 @@ export class DemoBackend implements Backend {
   async declineTeamInvite(teamId: string, phone: string) {
     const t = this.db.teams[teamId];
     if (!t) return;
+    // 1.5.1 (Tester F150-3): like the API – only the invited player declines their own invite (the captain withdraws an
+    // invite by editing the team, not through this call)
+    if (!this.authUser || this.authUser.phoneNumber !== phone) throw new Error('Only the invited player can decline the invite');
+    if (!t.pendingPhones.includes(phone)) return;
     this.db.teams[teamId] = { ...t, pendingPhones: t.pendingPhones.filter((p) => p !== phone) };
     this.changed();
   }
@@ -449,11 +465,19 @@ export class DemoBackend implements Backend {
     if (!participantsMatchRoster(m)) throw new Error(PARTICIPANTS_MESSAGE);
   }
   async createMatch(m0: NewMatch) {
+    return this.createMatchAs(m0, false);
+  }
+  private async createMatchAs(m0: NewMatch, viaAccept: boolean) {
     this.requireTerms();
     // 1.3.8 (QA V137-2): like the API, only a complete profile (name, date of birth, pincode) creates a match
     const meProfile = this.db.users[this.authUser?.uid ?? ''];
     if (!meProfile || !hasStoredRegistration({ firstName: meProfile.firstName ?? null, lastName: meProfile.lastName ?? null, dob: meProfile.dob ?? null, pincode: meProfile.pincode ?? null }))
       throw new CodedError('profile_incomplete', 'Complete your profile (name, date of birth and pincode) to create a match');
+    // 1.5.1 (F150-1): a challenge match only through the challenged captain's accept (acceptChallenge), like the API
+    if (m0.challengeId && !viaAccept) {
+      const cp = challengeCreateProblem(this.challengeNow(m0.challengeId), m0, this.authUser?.uid);
+      throw new CodedError(cp, CHALLENGE_LINK_MESSAGES[cp]);
+    }
     // 1.3.0: scheduled/live only, captains, no POTM / finish / server fields (core/matchGuards.ts).
     const cap = (t: Match['teamA'] | null | undefined) => (t?.teamId ? this.db.teams[t.teamId]?.captainId ?? null : null);
     const { startedAt: _s, startedServerAt: _ss, ...rest } = m0;
@@ -597,6 +621,8 @@ export class DemoBackend implements Backend {
       const lp = tournamentLinkProblem(m, { tournamentId: 'tournamentId' in patch ? patch.tournamentId : m.tournamentId, fixtureId: 'fixtureId' in patch ? patch.fixtureId : m.fixtureId }, this.authUser?.uid, (tid) => this.db.tournaments[tid]);
       if (lp) throw new CodedError(lp, NOT_TOURNAMENT_ADMIN_MESSAGE);
     }
+    // 1.5.0 (F1428-2): the challenge link never changes after create
+    if ('challengeId' in patch && (patch.challengeId ?? null) !== (m.challengeId ?? null) && m.status !== 'finished' && m.status !== 'abandoned') throw new CodedError(CHALLENGE_LINK_FROZEN, CHALLENGE_LINK_MESSAGES[CHALLENGE_LINK_FROZEN]);
     // 1.4.5 (QA V144-1): {status: 'abandoned'} is the abandon action (records who, when, the score; policy switch)
     if (patch.status === 'abandoned' && (m.status === 'live' || m.status === 'scheduled')) {
       if (Object.keys(patch).some((k) => k !== 'status' && k !== 'updatedAt')) throw new CodedError(MATCH_STATUS_MOVE, GUARD_MESSAGES[MATCH_STATUS_MOVE]);
@@ -824,6 +850,16 @@ export class DemoBackend implements Backend {
   async askVolleyLive(question: string, lang: 'en' | 'hi') {
     return askLocally(this.authUser?.uid, question, lang);
   }
+  /** 1.5.0: agent + tools on the device over this backend's own reads (services/askHost), history in AsyncStorage. */
+  async askChat(question: string, lang: 'en' | 'hi') {
+    return askChatLocally(this, this.authUser?.uid, question, lang);
+  }
+  async askHistory() {
+    return askHistoryLocally(this.authUser?.uid);
+  }
+  async clearAskHistory() {
+    await clearAskHistoryLocally(this.authUser?.uid);
+  }
   async createSupportTicket(t: NewSupportTicket) {
     await this.ready;
     const me = this.authUser?.uid;
@@ -942,16 +978,65 @@ export class DemoBackend implements Backend {
       () =>
         Object.values(this.db.challenges)
           .filter((c) => teamIds.includes(c.fromTeamId) || teamIds.includes(c.toTeamId))
+          .map((c) => this.challengeNow(c.id)!)
           .sort((a, b) => b.createdAt - a.createdAt),
       cb,
     );
   }
+  /**
+   * 1.5.2 (Tester F151-1): the challenge with the teams' CURRENT captains (like the API) – after a captaincy transfer the
+   * new captain answers / cancels and the former one can't. A deleted team keeps the stored captain.
+   */
+  private challengeNow(id: string): Challenge | null {
+    const c = this.db.challenges[id];
+    if (!c) return null;
+    return { ...c, fromCaptainId: this.db.teams[c.fromTeamId]?.captainId ?? c.fromCaptainId, toCaptainId: this.db.teams[c.toTeamId]?.captainId ?? c.toCaptainId };
+  }
+  /** 1.5.2 (Tester F151-2): accepts in flight per challenge – parallel taps share one accept (one match). */
+  private accepting = new Map<string, { uid: string | undefined; p: Promise<string> }>();
+  /** 1.5.1 (F150-1): the challenged captain accepts and creates the challenge match in one step (API POST /challenges/:id/accept). */
+  async acceptChallenge(c: Challenge, m: NewMatch) {
+    const inflight = this.accepting.get(c.id);
+    if (inflight && inflight.uid === this.authUser?.uid) return inflight.p; // a double tap: the same accept, the same match
+    if (inflight) await inflight.p.catch(() => {}); // someone else's accept first; then ours is checked against its result
+    const p = this.acceptChallengeOnce(c, m);
+    this.accepting.set(c.id, { uid: this.authUser?.uid, p });
+    try {
+      return await p;
+    } finally {
+      if (this.accepting.get(c.id)?.p === p) this.accepting.delete(c.id);
+    }
+  }
+  private async acceptChallengeOnce(c: Challenge, m: NewMatch) {
+    const cur = this.challengeNow(c.id);
+    const doc = { ...m, challengeId: c.id };
+    const ap = challengeAcceptProblem(cur, doc, this.authUser?.uid);
+    if (ap) throw new CodedError(ap, CHALLENGE_LINK_MESSAGES[ap]);
+    const [from, to] = [this.db.teams[cur!.fromTeamId], this.db.teams[cur!.toTeamId]];
+    if (!from || !to || !teamCanPlay(from) || !teamCanPlay(to)) throw new Error(TEAM_TOO_SMALL_MESSAGE);
+    const id = await this.createMatchAs(doc, true);
+    this.db.challenges[c.id] = { ...this.db.challenges[c.id], status: 'accepted', matchId: id, fromCaptainId: cur!.fromCaptainId, toCaptainId: cur!.toCaptainId };
+    this.changed();
+    return id;
+  }
   async respondToChallenge(c: Challenge, status: Challenge['status'], matchId?: string) {
+    // 1.5.0 (F1428-2): like the API – the challenged captain answers / the challenger cancels a PENDING challenge, and an
+    // accept links only the match created for it (its two teams, by one of the two captains)
+    const cur = this.challengeNow(c.id); // 1.5.2 (F151-1): current captains
+    if (!cur) throw new CodedError(CHALLENGE_UNKNOWN, CHALLENGE_LINK_MESSAGES[CHALLENGE_UNKNOWN]);
+    if (this.accepting.has(c.id)) throw new CodedError(CHALLENGE_USED, CHALLENGE_LINK_MESSAGES[CHALLENGE_USED]); // an accept is in flight
+    const me = this.authUser?.uid;
+    const respond = cur.toCaptainId === me && (status === 'accepted' || status === 'declined');
+    const cancel = cur.fromCaptainId === me && status === 'cancelled' && !matchId;
+    if (!respond && !cancel) throw new CodedError(CHALLENGE_NOT_CAPTAIN, CHALLENGE_LINK_MESSAGES[CHALLENGE_NOT_CAPTAIN]);
+    if (cur.status !== 'pending') throw new CodedError(cur.status === 'accepted' ? CHALLENGE_USED : CHALLENGE_CLOSED, CHALLENGE_LINK_MESSAGES[cur.status === 'accepted' ? CHALLENGE_USED : CHALLENGE_CLOSED]);
+    const lp = challengeRespondLinkProblem(cur, status, matchId);
+    if (lp) throw new CodedError(lp, CHALLENGE_LINK_MESSAGES[lp]);
     if (status === 'accepted') {
       const [from, to] = [this.db.teams[c.fromTeamId], this.db.teams[c.toTeamId]];
       if (!from || !to || !teamCanPlay(from) || !teamCanPlay(to)) throw new Error(TEAM_TOO_SMALL_MESSAGE);
     }
-    this.db.challenges[c.id] = { ...this.db.challenges[c.id], status, matchId: matchId ?? null };
+    this.db.challenges[c.id] = { ...this.db.challenges[c.id], status, matchId: matchId ?? null, fromCaptainId: cur.fromCaptainId, toCaptainId: cur.toCaptainId };
     this.changed();
   }
 

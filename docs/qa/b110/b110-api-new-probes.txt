@@ -1,13 +1,13 @@
 OK                | IM1 | 400 | PNG 66 bytes (min 67) | photo_truncated: The image is incomplete (too small or cut off)
-OK                | IM2 | 201 | PNG 67 bytes | {"id":"2b0c2228-1296-492b-8be9-6f26aa0ca9db","matchId":"match_live","url":"http://localhost:4100/fil
+OK                | IM2 | 201 | PNG 67 bytes | {"id":"2b0c2228-1296-492b-8be9-6f26aa0ca9db","matchId":"match_live","url":"<QA API>/fil
 OK                | IM3 | 400 | JPEG 99 bytes (min 100) | photo_truncated: The image is incomplete (too small or cut off)
-OK                | IM4 | 201 | JPEG 100 bytes | {"id":"c3ef9f0d-d096-46ec-818c-cf48e2eed73e","matchId":"match_live","url":"http://localhost:4100/fil
+OK                | IM4 | 201 | JPEG 100 bytes | {"id":"c3ef9f0d-d096-46ec-818c-cf48e2eed73e","matchId":"match_live","url":"<QA API>/fil
 OK                | IM5 | 400 | GIF 25 bytes with trailer (min 26) | photo_truncated: The image is incomplete (too small or cut off)
 OK                | IM6 | 400 | GIF 200 bytes NO trailer (truncated) | photo_truncated: The image is incomplete (too small or cut off)
-OK                | IM7 | 201 | GIF 26 bytes with trailer | {"id":"fabf7066-8e18-449f-9fc5-03fa9d002bf8","matchId":"match_live","url":"http://localhost:4100/fil
+OK                | IM7 | 201 | GIF 26 bytes with trailer | {"id":"fabf7066-8e18-449f-9fc5-03fa9d002bf8","matchId":"match_live","url":"<QA API>/fil
 OK                | IM8 | 400 | 0-byte image/jpeg | photo_empty: Empty upload
 OK                | IM9 | 413 | 10 MB exactly image/jpeg | photo_too_large: Images must be smaller than 10 MB
-OK                | IM10 | 201 | 10 MB - 1 image/jpeg | {"id":"c7d53662-7654-43fe-a72d-0c4edaa9f789","matchId":"match_live","url":"http://localhost:4100/fil
+OK                | IM10 | 201 | 10 MB - 1 image/jpeg | {"id":"c7d53662-7654-43fe-a72d-0c4edaa9f789","matchId":"match_live","url":"<QA API>/fil
 OK                | IM11 | 403 | SVG as image/svg+xml | permission_denied: Only images (JPEG, PNG, WebP, HEIC, GIF) can be uploaded [storage.matches.create]
 OK                | IM12 | 400 | SVG declared image/png | photo_type: The file is not a JPEG, PNG, WebP, HEIC or GIF image
 OK                | IM13 | 400 | HTML declared image/jpeg | photo_type: The file is not a JPEG, PNG, WebP, HEIC or GIF image
@@ -15,7 +15,7 @@ OK                | IM14 | 400 | WebP header only RIFF....WEBP 20 bytes | photo_
 INFO              | IM6b | 400 | truncated GIF error code | {"error":"photo_truncated","message":"The image is incomplete (too small or cut off)"}
 OK                | PA1 | 403 | seed13 (player of match_beach, NOT of match_live) uploads to match_live | photo_not_allowed: Only the players and the scorer of this match can add photos [photos.create]
 OK                | PA2 | 403 | seed20 (non-player of match_live) uploads | photo_not_allowed: Only the players and the scorer of this match can add photos [photos.create]
-INFO              | PA3 | 201 | seed2 player uploads to FINISHED match_old1 | {"id":"2f15a1f0-5f2a-4b7c-8dfd-9838c98d276f","matchId":"match_old1","url":"http://localhost:4100/fil
+INFO              | PA3 | 201 | seed2 player uploads to FINISHED match_old1 | {"id":"2f15a1f0-5f2a-4b7c-8dfd-9838c98d276f","matchId":"match_old1","url":"<QA API>/fil
 OK                | PA4a | 200 | scorer abandons match (PATCH status abandoned) | {"id":"ae9c6491-6130-498e-99f0-cf9ff46804fd","title":"probe14","teamA":{"teamId":null,"name":"Sand K
 INFO              | PA4 | 201 | player seed14 uploads to ABANDONED match | {"id":"6cc98c27-bb52-4790-9f77-cbe2e51d1a1b","matchId":"ae9c6491-6130-498e-99f0-cf9ff46804fd","url":
 OK                | PA5 | 403 | seed3 deletes seed2's photo | permission_denied: Only the uploader can delete a photo [photos.delete]

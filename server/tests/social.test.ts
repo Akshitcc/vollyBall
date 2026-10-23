@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { EVERYONE, SQUAD_A, SQUAD_B, createMatch, makeTeam, register, startHarness, type Harness, newMatchBody } from './helpers';
+import { EVERYONE, SQUAD_A, SQUAD_B, createMatch, makeTeam, register, startHarness, type Harness, newMatchBody, playersOf, team } from './helpers';
 
 let h: Harness;
 before(async () => (h = await startHarness()));
@@ -89,6 +89,9 @@ describe('challenges (rules: challenges/{id})', () => {
     const id = (await h.as('cap').post('/api/challenges').send({ fromTeamId: a, fromCaptainId: 'cap', toTeamId: b, toCaptainId: 'dan', when: Date.now(), location: place, rules })).body.id;
     assert.equal((await h.as('b6').post(`/api/teams/${b}/leave`)).status, 200);
     assert.equal((await h.as('dan').patch(`/api/challenges/${id}`).send({ status: 'accepted' })).status, 403);
+    // 1.5.1 (F150-1): the accept route (accept + match) checks the team size too
+    const m = newMatchBody({ teamA: team('QA Spikers', playersOf(SQUAD_A), a), teamB: team('Delhi Smashers', playersOf(SQUAD_B), b), createdBy: 'dan', scorerId: 'dan', captains: { A: 'cap', B: 'dan' }, challengeId: id });
+    assert.equal((await h.as('dan').post(`/api/challenges/${id}/accept`).send({ match: m })).status, 403);
     assert.equal((await h.as('dan').patch(`/api/challenges/${id}`).send({ status: 'declined' })).status, 200);
   });
 
@@ -100,10 +103,15 @@ describe('challenges (rules: challenges/{id})', () => {
     assert.equal((await h.as('eve').patch(`/api/challenges/${id}`).send({ status: 'declined' })).status, 403);
     assert.equal((await h.as('dan').patch(`/api/challenges/${id}`).send({ status: 'cancelled' })).status, 403);
     assert.equal((await h.as('dan').patch(`/api/challenges/${id}`).send({ status: 'accepted', matchId: 'nope' })).status, 400);
+    // 1.5.1 (F150-1): an accept without its match is refused; the accept route creates it
+    assert.equal((await h.as('dan').patch(`/api/challenges/${id}`).send({ status: 'accepted' })).body.error, 'challenge_accept_match');
     h.push.sent.length = 0;
-    assert.equal((await h.as('dan').patch(`/api/challenges/${id}`).send({ status: 'accepted' })).body.status, 'accepted');
+    const m = newMatchBody({ teamA: team('QA Spikers', playersOf(SQUAD_A), a), teamB: team('Delhi Smashers', playersOf(SQUAD_B), b), createdBy: 'dan', scorerId: 'dan', captains: { A: 'cap', B: 'dan' }, challengeId: id });
+    assert.equal((await h.as('dan').post(`/api/challenges/${id}/accept`).send({ match: m })).status, 201);
+    assert.equal((await h.db('challenges').where({ id }).first()).status, 'accepted');
     await h.flushPush();
-    assert.equal(h.push.sent.length, 1);
+    // 1.5.1: one 'challenge accepted' push to the challenger (the match itself may notify its players too)
+    assert.equal(h.push.sent.filter((p) => p.data?.type === 'challenge').length, 1);
     assert.equal((await h.as('cap').patch(`/api/challenges/${id}`).send({ status: 'cancelled' })).status, 403); // no longer pending
     assert.equal((await h.as('cap').del(`/api/challenges/${id}`)).status, 403);
   });

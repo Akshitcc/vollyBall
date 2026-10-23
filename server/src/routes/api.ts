@@ -22,6 +22,7 @@ import * as feedback from '../domain/feedback';
 import * as support from '../domain/support';
 import * as ask from '../domain/ask';
 import { ASK_RATE } from '../../../src/core/ask';
+import { ASK_CHAT_RATE } from '../../../src/core/ask/agent';
 import { SUPPORT_RATE } from '../../../src/core/support';
 import { isAdmin } from '../context';
 import { RATE_LIMITED, RateLimiter } from '../rateLimit';
@@ -307,6 +308,24 @@ export function apiRouter(s: Services): Router {
     await limited(me(req).uid, 'ask', ASK_RATE);
     res.json(await ask.ask(s, me(req), q));
   }));
+  // 1.5.0 Ask VolleyLive chat: validated, rate limited per user (ASK_CHAT_RATE; a refused turn is audited too), then
+  // the agent runs its read-only tools AS this user. History: own turns only. Admin: knowledge content + re-index.
+  r.post('/ask/chat', h(async (req, res) => {
+    const q = ask.validateAsk(req.body ?? {});
+    try {
+      await limited(me(req).uid, 'askchat', ASK_CHAT_RATE);
+    } catch (e) {
+      await ask.writeAudit(s, { userId: me(req).uid, question: q.question, lang: q.lang, provider: '-', tools: [], steps: 0, ms: 0, outcome: 'rate_limited' }).catch(() => {});
+      throw e;
+    }
+    res.json(await ask.chat(s, me(req), q));
+  }));
+  r.get('/ask/history', h(async (req, res) => res.json(await ask.history(s, me(req)))));
+  r.delete('/ask/history', h(async (req, res) => { await ask.clearHistory(s, me(req)); res.status(204).end(); }));
+  r.get('/admin/ask/content', h(async (req, res) => res.json(await ask.listContent(s, me(req)))));
+  r.put('/admin/ask/content/:id', h(async (req, res) => res.json(await ask.putContent(s, me(req), req.params.id, req.body ?? {}))));
+  r.delete('/admin/ask/content/:id', h(async (req, res) => res.json(await ask.deleteContent(s, me(req), req.params.id, req.query.lang))));
+  r.post('/admin/ask/reindex', h(async (req, res) => res.json(await ask.reindex(s, me(req)))));
   r.get('/support/tickets', h(async (req, res) => res.json(await support.listMine(s, me(req)))));
   r.post('/support/tickets/:id/screenshot', raw, h(async (req, res) => {
     res.status(201).json(await support.uploadScreenshot(s, me(req), req.params.id, req.header('content-type'), req.body as Buffer));
@@ -388,6 +407,12 @@ export function apiRouter(s: Services): Router {
   r.patch('/challenges/:id', h(async (req, res) => {
     const p = parse(challengePatchSchema, req.body);
     res.json(await challenges.respondChallenge(s, me(req), req.params.id, p));
+  }));
+  // 1.5.1 (F150-1): accept = create the challenge match (body: the match, as POST /matches), atomically
+  r.post('/challenges/:id/accept', lim.match, h(async (req, res) => {
+    rejectServerFields(req.body?.match);
+    const m = parse(newMatchSchema, req.body?.match);
+    res.status(201).json(await challenges.acceptChallenge(s, me(req), req.params.id, m, req.header('idempotency-key') ?? undefined));
   }));
   r.delete('/challenges/:id', h(async () => {
     throw forbidden('challenges.delete', 'Challenges cannot be deleted');

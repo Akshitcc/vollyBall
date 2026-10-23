@@ -58,7 +58,11 @@ export function LocationPicker({ value, onChange }: { value: Place | null; onCha
     setNaming(false);
     if (typed.current && latest.current?.name) return; // typed while we were looking it up
     if (name) onChange({ ...p, name });
-    else setNoName(true);
+    else {
+      // 1.5.0 (F1428-5): no place name from the lookup – use the default name (editable) instead of blocking the form
+      onChange({ ...p, name: t('location.pinnedName') });
+      setNoName(true);
+    }
   };
 
   const useMine = async () => {
@@ -103,18 +107,10 @@ export function LocationPicker({ value, onChange }: { value: Place | null; onCha
           </View>
           </RevealOnShow>
           {naming && !value.name && <Text style={ui.hint}>{t('location.locating')}</Text>}
-          {/* 1.4.18: the "no name found" line arrives after the lookup – it scrolls into view too */}
-          <RevealOnShow show={!!noName && !value.name} below={16}>
-            {noName && !value.name ? (
-              <Text style={[ui.hint, { color: colors.danger }]} testID="place-name-hint">
-                {t('location.nameHint', { coords: formatCoords(value) })}
-              </Text>
-            ) : null}
-            {/* 1.4.20 (QA V1419-8): a reverse lookup with no place name – one tap uses the coordinates as the name */}
-            {noName && !value.name ? (
-              <Button title={t('location.useCoords')} variant="ghost" icon="pin-outline" onPress={() => { typed.current = true; onChange({ ...value, name: formatCoords(value) }); }} testID="place-use-coords" />
-            ) : null}
-          </RevealOnShow>
+          {/* 1.5.0 (F1428-5): no name found – the default name is filled in; a quiet hint says it can be renamed */}
+          {noName ? (
+            <Text style={ui.hint} testID="place-name-hint">{t('location.pinnedHint', { coords: formatCoords(value) })}</Text>
+          ) : null}
         </>
       )}
     </View>
