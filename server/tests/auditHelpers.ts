@@ -15,7 +15,7 @@ export const clientFor = (hh: Harness): ClientFor => (uid, phone) => async (meth
 };
 
 /** The simulation is one busy organiser: lift the per-user write limits (the limiter itself is tested elsewhere). */
-export const liftLimits = (l: RateLimiter) => { for (const k of ['terms', 'verify', 'matchWrite'] as const) l.limits[k] = { burst: 1e6, perMinute: 1e6 }; };
+export const liftLimits = (l: RateLimiter) => { for (const k of ['terms', 'verify', 'matchWrite'] as const) l.limits[k] = { burst: 1e6, perMinute: 1e6 }; l.liftNamed = true; };
 
 export const AUDIT_RULES: RuleSet = { ...INDOOR_RULES, bestOf: 3 };
 

@@ -6,7 +6,7 @@
 import { CodedError } from './codedError';
 import { computeState, type Side } from './scoring';
 import { ABANDON_NEEDS_ADMIN, ABANDON_PENDING, MATCH_FINISHED, MATCH_TERMINAL, matchOver } from './matchGuards';
-import { matchWinner, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, sideOfPlayer, verificationStatus } from './antifraud';
+import { matchWinner, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, sideOfPlayer, verificationStatus } from './antifraud';
 import { ABANDON_REQUEST_LIMIT, lifecycleProblem, lifecycleStateProblem, lcRoles, maxEventsOf, type LcAction } from './lifecycle';
 import { ABANDON_POLICY, type AbandonPolicy } from './abandonPolicy';
 import type { AbandonRecord, AbandonRequest, AbandonScore, Match } from './types';
@@ -208,6 +208,21 @@ export function finishedWithoutWinner(m: Pick<M, 'status' | 'events' | 'rules' |
 export function needsAdminAction(m: M): boolean {
   // 1.4.8 (QA V147-2): and a match nobody can confirm (lifecycle 'repairVerdict': the admin sets a scorer / confirmer)
   return abandonNeedsReview(m) || finishedWithoutWinner(m) || abandonPending(m) || lifecycleStateProblem('repairVerdict', m) === null;
+}
+
+/**
+ * 1.5.9 (Tester F158-11): what the admin review list shows – results that were played: finished matches to review
+ * (flagged) or repair, abandoned ones waiting for review, and a live match's pending abandon request. Never a
+ * scheduled (not yet played) match – the seeded "nobody can confirm" demo shapes were scheduled and showed up as
+ * future flagged matches with Approve / Void (the server answers 409 not_completed); their repair stays on the match page.
+ */
+export function onAdminReviewList(m: Match): boolean {
+  return playedForAdminReview(m) && (needsReview(m) || needsAdminAction(m));
+}
+/** The status part only (played: finished / abandoned, or live with an abandon request). The admin screen applies this
+ *  to the backend's list – which flags count is the backend's call (listFlagged uses onAdminReviewList). */
+export function playedForAdminReview(m: Match): boolean {
+  return m.status === 'finished' || m.status === 'abandoned' || (m.status === 'live' && abandonPending(m));
 }
 
 export type ResolveAction = 'reinstate' | 'confirm_abandon' | 'reopen' | 'abandon' | 'reject_request';

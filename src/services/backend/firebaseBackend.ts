@@ -7,8 +7,10 @@ import { checkDailyItem, dailyTombstone, type DailyItem } from '../../core/daily
  * Production backend: Firebase Auth (phone), Firestore, Storage.
  *
  * Data model (see firestore.rules):
- *   users/{uid}                    profile
- *   phoneIndex/{e164}              { uid }  – lookup by mobile number (get only, no listing)
+ *   users/{uid}                    public profile (id, name, photo) – 1.5.9: phone / position / city moved to
+ *   users/{uid}/private/profile    owner only (firebaseProfileDocs.ts)
+ *   phoneIndex/{e164}              { uid }  – lookup by mobile number (get only, no listing; 1.5.9: counted in
+ *   phoneLookups/{uid}             { q, n, since } – the per-account lookup window, firestore.rules)
  *   teams/{teamId}                 team, memberIds, pendingPhones
  *   matches/{matchId}              match + event log + summary
  *   matches/{matchId}/photos/{id}  photo album
@@ -18,6 +20,8 @@ import { checkDailyItem, dailyTombstone, type DailyItem } from '../../core/daily
  */
 import { checkRegistrationUpdate, emailClaimId, emailKey, fullName, isApsPincode, pincodePrefixOk, sentRegistration } from '../../core/registration';
 import { MIN_AGE } from '../config';
+import { legacyKeys, ownView, privateOf, publicView, splitProfile } from './firebaseProfileDocs';
+import { PHONE_LOOKUP_RULES, phoneLookupWait } from '../../core/phoneLookup';
 import { onAuthStateChanged, signInWithPhoneNumber, signOut as fbSignOut, type ApplicationVerifier } from 'firebase/auth';
 import { deleteField,
   addDoc,
@@ -50,9 +54,9 @@ import { planEventSteps } from '../../core/eventSteps';
 import { computeState, summarize, type Side } from '../../core/scoring';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
-import { CONFIRM_MESSAGES, byMatchDateDesc, captainVerdict, confirmedAtOf, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
+import { verdictStep, CONFIRM_MESSAGES, byMatchDateDesc, captainVerdict, confirmedAtOf, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
 import { finishedScoreProblem, firebaseUpdateProblem, GUARD_MESSAGES, guardCreate, guardProgress, guardUpdate, MATCH_STATUS_MOVE, matchOver } from '../../core/matchGuards';
-import { answerAbandon, needsAdminAction, nextMaxEvents, planAbandon, reportAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../core/abandon';
+import { answerAbandon, needsAdminAction, onAdminReviewList, nextMaxEvents, planAbandon, reportAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../core/abandon';
 import { HANDOVER_MESSAGES, handoverProblem, reassignProblem, reassignRecord } from '../../core/scorerHandoff';
 import { TERMS_VERSION, TERMS_VERSION_MISMATCH, type TermsAcceptance } from '../../core/terms';
 import { checkText } from '../../core/validate';
@@ -63,7 +67,7 @@ import type { Challenge, Court, Match, MatchPhoto, Team, Tournament, UserProfile
 import { assertRoster, canonicalParticipants, challengeProblem, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, tournamentTeamsProblem } from '../../core/roster';
 import { getFirebase } from '../firebase';
 import { repairPatch, type RepairFix } from '../../core/verdictRepair';
-import { abandonDoc, repairDoc, reassignDoc, reportDoc, resolveDoc, reviewDoc, verifyDoc, type FxSentinels } from './firebaseActionDocs';
+import { abandonDoc, repairDoc, reassignDoc, reportDoc, resolveDoc, reviewDoc, verifyDoc, firstConfirmDoc, type FxSentinels } from './firebaseActionDocs';
 import { clean, matchCreateBase, matchCreateChecked, matchCreateDoc, replayMatchData } from './firebaseMatchDoc';
 import { checkChallengeFields, checkCourtFields, checkMatchFields, checkProfileFields, checkTeamFields, checkTournamentFields, ValidationError } from '../../core/validate';
 import { INVALID_PHONE_CODE, isValidE164 } from '../../core/phone';
@@ -91,7 +95,7 @@ function matchFrom(data: DocumentData, id: string): Match {
     createdAt: ms(data.createdAt) ?? ms(data.startedAt) ?? ms(data.scheduledAt) ?? ms(data.updatedAt) ?? 0,
     startedServerAt: ms(data.startedServerAt),
     finishedServerAt: ms(data.finishedServerAt),
-    verification: v ? ({ ...v, at: ms(v.at), reviewedAt: ms(v.reviewedAt) } as Match['verification']) : null,
+    verification: v ? ({ ...v, at: ms(v.at), reviewedAt: ms(v.reviewedAt), ...(v.first ? { first: { ...(v.first as object), at: ms((v.first as Record<string, unknown>).at) } } : {}) } as Match['verification']) : null,
     // 1.3.9 (V138-11): derived from the captain's answer time, never stored over a match time
     confirmedAt: v ? confirmedAtOf({ verification: { ...(v as object), at: ms(v.at) } as Match['verification'], reopenEpoch: data.reopenEpoch ?? 0 }) : null,
     // 1.4.5 (QA V144-1/2): server times (request.time in the rules) as ms
@@ -186,14 +190,35 @@ export class FirebaseBackend implements Backend {
   // ---------- profiles ----------
   watchProfile(uid: string, cb: (p: UserProfile | null) => void) {
     // 1.3.7: your own profile also merges your private registration doc (dob, email, pincode…).
-    let pub: UserProfile | null | undefined;
+    // 1.5.9 (F158-3): and your private profile doc (phone, position, city), falling back to a legacy public doc's
+    // copies until they are moved; anyone else's profile is the public fields only (firebaseProfileDocs.ts).
+    const own = this.fb.auth.currentUser?.uid === uid;
+    let pub: Record<string, unknown> | null | undefined;
+    let privProfile: Record<string, unknown> | null | undefined = own ? undefined : null;
     let priv: Partial<UserProfile> = {};
-    const emit = () => pub !== undefined && cb(pub ? { ...pub, ...priv } : null);
+    const emit = () => {
+      if (pub === undefined || privProfile === undefined) return;
+      if (!pub) return cb(null);
+      cb(own ? { ...ownView(uid, pub, privProfile), ...priv } : publicView(uid, pub));
+      if (own && legacyKeys(pub).length) void this.moveLegacyProfile(uid);
+    };
     const unPub = onSnapshot(doc(this.fb.db, 'users', uid), (s) => {
-      pub = s.exists() ? ({ ...(s.data() as UserProfile), id: s.id }) : null;
+      pub = s.exists() ? (s.data() as Record<string, unknown>) : null;
       emit();
     });
-    const own = this.fb.auth.currentUser?.uid === uid;
+    const unProfile = own
+      ? onSnapshot(
+          doc(this.fb.db, 'users', uid, 'private', 'profile'),
+          (s) => {
+            privProfile = s.exists() ? (s.data() as Record<string, unknown>) : null;
+            emit();
+          },
+          () => {
+            privProfile = null;
+            emit();
+          },
+        )
+      : () => {};
     const unPriv = own
       ? onSnapshot(
           doc(this.fb.db, 'users', uid, 'private', 'registration'),
@@ -207,14 +232,43 @@ export class FirebaseBackend implements Backend {
       : () => {};
     return () => {
       unPub();
+      unProfile();
       unPriv();
     };
+  }
+  /**
+   * 1.5.9 (F158-3): your legacy public doc's phone / position / city go to users/{uid}/private/profile and leave the
+   * public doc (pushToken: just removed – pushTokens/{uid} is the one the functions read). Once per session; a
+   * refusal (e.g. T&C not accepted yet, an old value the rules no longer accept) is retried by the next save.
+   */
+  private movedLegacy = new Set<string>();
+  private async moveLegacyProfile(uid: string) {
+    if (this.movedLegacy.has(uid)) return;
+    this.movedLegacy.add(uid);
+    const pubRef = doc(this.fb.db, 'users', uid);
+    const privRef = doc(this.fb.db, 'users', uid, 'private', 'profile');
+    await runTransaction(this.fb.db, async (tx) => {
+      const pub = await tx.get(pubRef);
+      const priv = await tx.get(privRef);
+      const d = pub.exists() ? (pub.data() as Record<string, unknown>) : null;
+      const keys = legacyKeys(d);
+      if (!keys.length) return;
+      if (!priv.exists()) {
+        const p = privateOf(d, null);
+        if (!p.phone) return;
+        tx.set(privRef, clean({ phone: p.phone, position: p.position ?? null, city: p.city ?? null, updatedAt: serverTimestamp() }));
+      }
+      tx.update(pubRef, Object.fromEntries(keys.map((k) => [k, deleteField()])));
+    }).catch(() => {});
   }
   async saveProfile(p0: UserProfile) {
     // The Indian format is checked when the number is set or changed (firestore.rules do the same),
     // so a profile from before build 216 can still be saved unchanged (fix-retest N4).
     const cur = await getDoc(doc(this.fb.db, 'users', p0.id));
-    const samePhone = cur.exists() && (cur.data() as UserProfile).phone === p0.phone;
+    // 1.5.9 (F158-3): the stored number is in the private profile (or, legacy, still on the public doc)
+    const curPriv = await getDoc(doc(this.fb.db, 'users', p0.id, 'private', 'profile')).catch(() => null);
+    const curPubDoc = cur.exists() ? (cur.data() as Record<string, unknown>) : null;
+    const samePhone = privateOf(curPubDoc, curPriv?.exists() ? (curPriv.data() as Record<string, unknown>) : null).phone === p0.phone;
     if (!samePhone && !isValidE164(p0.phone)) throw new ValidationError(INVALID_PHONE_CODE, 'phone');
     // 1.3.7: names on the public profile; dob / email / pincode / district / state in the owner-only doc
     // (firestore.rules users/{uid}/private/registration). A save is checked together with the stored
@@ -260,7 +314,12 @@ export class FirebaseBackend implements Backend {
           if (!c.exists()) tx.set(claim, { uid: p0.id });
         }
         if (reg) tx.set(doc(this.fb.db, 'users', p0.id, 'private', 'registration'), reg);
-        tx.set(doc(this.fb.db, 'users', p.id), clean(p), { merge: true });
+        // 1.5.9 (F158-3): public fields on users/{uid}; phone / position / city on the owner-only private profile;
+        // a legacy public doc's copies are removed in the same write (the rules refuse a public doc that keeps them)
+        const split = splitProfile(p);
+        const strip = Object.fromEntries(legacyKeys(curPubDoc).map((k) => [k, deleteField()]));
+        tx.set(doc(this.fb.db, 'users', p0.id, 'private', 'profile'), clean({ ...split.priv, updatedAt: serverTimestamp() }));
+        tx.set(doc(this.fb.db, 'users', p.id), { ...clean(split.pub), ...strip }, { merge: true });
         tx.set(doc(this.fb.db, 'phoneIndex', p.phone), { uid: p.id });
         if (release) tx.delete(release);
       });
@@ -278,16 +337,54 @@ export class FirebaseBackend implements Backend {
     const out: UserProfile[] = [];
     for (const part of chunk(ids, 30)) {
       const snap = await getDocs(query(collection(this.fb.db, 'users'), where(documentId(), 'in', part)));
-      snap.forEach((d) => out.push(withId<UserProfile>(d)));
+      // 1.5.9 (F158-3): public fields only – a legacy doc's phone / position / city are not passed on
+      snap.forEach((d) => out.push(publicView(d.id, d.data() as Record<string, unknown>)));
     }
     return out;
   }
-  async findUserByPhone(phone: string) {
+  /**
+   * 1.5.9 (F158-3): a lookup is counted before it is made – the app's own throttle (the API's per-user bucket) and
+   * the rules' per-account window (phoneLookups/{uid}: the number must be the caller's current counted lookup to read
+   * phoneIndex). One at a time, so two lookups can't race for the counter. Only id, name and photo leave this method.
+   */
+  private lookupChain: Promise<unknown> = Promise.resolve();
+  findUserByPhone(phone: string) {
+    const run = this.lookupChain.then(() => this.lookupOnce(phone), () => this.lookupOnce(phone));
+    this.lookupChain = run.catch(() => {});
+    return run;
+  }
+  private async lookupOnce(phone: string) {
+    const me = this.fb.auth.currentUser?.uid;
+    if (!me) throw new CodedError('not_signed_in', 'Not signed in yet');
+    if (!isValidE164(phone)) return null;
+    const wait = phoneLookupWait(me);
+    if (wait) throw Object.assign(new CodedError('rate_limited', 'Too many requests. Wait a moment and try again.'), { retryAfter: wait });
+    await this.countLookup(me, phone);
     const idx = await getDoc(doc(this.fb.db, 'phoneIndex', phone));
     if (!idx.exists()) return null;
     const uid = (idx.data() as { uid: string }).uid;
     const u = await getDoc(doc(this.fb.db, 'users', uid));
-    return u.exists() ? ({ ...(u.data() as UserProfile), id: u.id }) : null;
+    return u.exists() ? { id: u.id, name: (u.data() as UserProfile).name, photoURL: (u.data() as UserProfile).photoURL ?? null } : null;
+  }
+  private async countLookup(uid: string, phone: string) {
+    const ref = doc(this.fb.db, 'phoneLookups', uid);
+    const cur = await getDoc(ref).catch(() => null);
+    const d = cur?.exists() ? (cur.data() as { q?: string; n?: number; since?: { toMillis(): number } }) : null;
+    if (d?.q === phone) return; // the same number again: already counted
+    const denied = (e: unknown) => (e as { code?: string })?.code === 'permission-denied';
+    try {
+      await setDoc(ref, d ? { q: phone, n: (d.n ?? 0) + 1, since: d.since } : { q: phone, n: 1, since: serverTimestamp() });
+    } catch (e) {
+      if (!d || !denied(e)) throw e;
+      // the window is full – or over: then a new one starts
+      try {
+        await setDoc(ref, { q: phone, n: 1, since: serverTimestamp() });
+      } catch (e2) {
+        if (!denied(e2)) throw e2;
+        const left = d.since ? Math.ceil((d.since.toMillis() + PHONE_LOOKUP_RULES.windowS * 1000 - Date.now()) / 1000) : PHONE_LOOKUP_RULES.windowS;
+        throw Object.assign(new CodedError('rate_limited', 'Too many requests. Wait a moment and try again.'), { retryAfter: Math.max(1, left) });
+      }
+    }
   }
   async uploadAvatar(uid: string, localUri: string) {
     const { blob, type, ext } = await photoBlob(localUri);
@@ -784,8 +881,14 @@ export class FirebaseBackend implements Backend {
     const me = this.fb.auth.currentUser?.uid ?? '';
     const s = await getDoc(doc(this.fb.db, 'matches', matchId));
     if (!s.exists()) throw new Error('Match not found');
-    const problem = confirmProblem(matchFrom(s.data(), matchId), me);
+    const m = matchFrom(s.data(), matchId);
+    const problem = confirmProblem(m, me);
     if (problem) throw new CodedError(problem, CONFIRM_MESSAGES[problem]);
+    // 1.5.8 (Tester F157x-1): on a two-captain match the first confirmation only records `verification.first`
+    if (verdictStep(m, status) === 'first') {
+      await updateDoc(doc(this.fb.db, 'matches', matchId), firstConfirmDoc(s.data(), me, fx(), Date.now()) as DocumentData);
+      return;
+    }
     // 1.3.7 (F135-1): keep the captain's verdict; after an admin cleared the flag the status stays 'approved'.
     // 1.4.6 (QA V145-2): after a re-open the verdict carries the epoch (firebaseActionDocs.verifyDoc)
     await updateDoc(doc(this.fb.db, 'matches', matchId), verifyDoc(s.data(), me, status, reason, fx(), Date.now()) as DocumentData);
@@ -962,7 +1065,7 @@ export class FirebaseBackend implements Backend {
     const seen = new Map<string, Match>();
     for (const m of await this.countableMatches([], budget)) seen.set(m.id, m);
     for (const d of extra) if (!seen.has(d.id)) seen.set(d.id, matchOf(d));
-    return [...seen.values()].filter((m) => needsReview(m) || needsAdminAction(m));
+    return [...seen.values()].filter(onAdminReviewList); // 1.5.9 (F158-11): played matches only
   }
 
   // ---------- challenges ----------

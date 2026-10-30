@@ -1,3 +1,4 @@
+import { BrandLogo } from '../components/BrandLogo';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useRef, useState } from 'react';
@@ -133,6 +134,8 @@ export default function Login() {
       {!session ? (
         <View style={{ flex: 1, paddingHorizontal: 20 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: compact ? 0 : 4 }} testID={compact ? 'login-brand-compact' : 'login-brand'}>
+            {/* 1.5.8: Bold Spiker badge (same on Day and Night), decorative – the title below is the header */}
+            <BrandLogo variant="badge" size={compact ? 28 : 36} testID="login-logo" />
             <StepDots step={0} total={3} testID="login-steps" />
           </View>
           {SHOW_DEMO_OTP && <View style={{ marginTop: 10 }}><Banner tone="warn" text={t('login.demoBanner', { code: DEMO_OTP })} /></View>}

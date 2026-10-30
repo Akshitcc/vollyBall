@@ -5,12 +5,13 @@
  * licence texts opens on its own screen, /licenses), "Made in India", and a small Technical info section.
  * 1.3.8 (V137-12): web shows "Version x" only; native adds the store build number.
  */
+import { BrandLogo } from '../components/BrandLogo';
 import { Ionicons } from '@expo/vector-icons';
 import { appVersionInfo } from '../services/appVersion';
 import { router } from 'expo-router';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Image, Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { AboutCard } from '../components/AboutCard';
 import { SectionHeader, card } from '../components/Hero';
 import { Button } from '../components/ui';
@@ -38,7 +39,8 @@ export default function AboutScreen() {
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.bg }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }} testID="about-screen">
       <View style={{ alignItems: 'center', marginBottom: 8 }}>
-        <Image source={require('../../assets/icon.png')} style={{ width: 88, height: 88, borderRadius: 20 }} accessibilityIgnoresInvertColors accessible accessibilityLabel={t('aboutPage.logo')} testID="about-logo" />
+        {/* 1.5.8: Bold Spiker mark (Day / Night variant through useTheme) */}
+        <BrandLogo size={88} accessibilityLabel={t('aboutPage.logo')} testID="about-logo" />
         <Text style={[type.h1, { color: colors.text, marginTop: 10 }]} accessibilityRole="header">VolleyLive</Text>
         <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]} testID="about-page-version">
           {build ? t('aboutPage.versionLine', { version, build }) : t('aboutPage.versionOnly', { version })}

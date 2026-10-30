@@ -9,7 +9,7 @@ import { FAQS } from '../../core/helpFaq';
 import type { SupportTicket } from '../../core/support';
 
 let mockAdmin = false;
-let mockContact = { email: null as string | null, whatsapp: null as string | null };
+let mockContact = { email: null as string | null, whatsapp: null as string | null, url: null as string | null };
 jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null, MaterialCommunityIcons: () => null }));
 jest.mock('expo-router', () => ({
@@ -46,7 +46,7 @@ jest.mock('../../services/backend', () => ({
 }));
 jest.spyOn(require('react-native').Linking, 'openURL').mockImplementation(async () => true);
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 10)); });
-afterEach(async () => { await i18n.changeLanguage('en'); jest.clearAllMocks(); mockAdmin = false; mockContact = { email: null, whatsapp: null }; mockMine = []; });
+afterEach(async () => { await i18n.changeLanguage('en'); jest.clearAllMocks(); mockAdmin = false; mockContact = { email: null, whatsapp: null, url: null }; mockMine = []; });
 
 describe.each(['en', 'hi'] as const)('%s', (lang) => {
   const T = (k: string, o?: object) => i18n.getFixedT(lang)(k, o as never) as unknown as string;
@@ -73,16 +73,22 @@ describe.each(['en', 'hi'] as const)('%s', (lang) => {
     expect(r.queryByTestId('help-email')).toBeNull();
     expect(r.queryByTestId('help-whatsapp')).toBeNull();
     expect(r.getByTestId('help-contact')).toBeTruthy();
-    expect(r.getByText(`${T('help.supportSite')}: www.contact.com`)).toBeTruthy();
-    await fireEvent.press(r.getByTestId('help-support-url'));
-    expect(require('react-native').Linking.openURL).toHaveBeenCalledWith('https://www.contact.com');
+    // 1.5.8 (F157u-1): no SUPPORT_URL configured -> no external link (never the old placeholder), the Feedback route instead
+    expect(r.queryByTestId('help-support-url')).toBeNull();
+    expect(r.queryByText(/contact\.com/)).toBeNull();
+    expect(r.getByTestId('help-feedback')).toBeTruthy();
     await r.unmount();
-    mockContact = { email: 'help@example.com', whatsapp: '919876543210' };
+    mockContact = { email: 'help@example.com', whatsapp: '919876543210', url: 'https://support.volleylive.test/help' };
     mockMine = [tk({ userId: 'me', status: 'replied' })];
     r = await render(<HelpScreen />);
     await settle();
     expect(r.getByText(T('help.email'))).toBeTruthy();
     expect(r.getByText(T('help.whatsapp'))).toBeTruthy();
+    // 1.5.8 (F157u-1): a configured SUPPORT_URL is shown and opened; the Feedback fallback is then not needed
+    expect(r.getByText(`${T('help.supportSite')}: support.volleylive.test/help`)).toBeTruthy();
+    await fireEvent.press(r.getByTestId('help-support-url'));
+    expect(require('react-native').Linking.openURL).toHaveBeenCalledWith('https://support.volleylive.test/help');
+    expect(r.queryByTestId('help-feedback')).toBeNull();
     expect(r.getByText(T('help.myTickets'))).toBeTruthy();
     expect(r.getByText(new RegExp(T('support.status.replied')))).toBeTruthy();
   });

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { MAX_PLAYERS, ROSTER_MESSAGES, USER_ID_RE } from '../../../src/core/roster';
 import { badRequest, HttpError } from '../errors';
 import { E164_IN_RE, INVALID_PHONE_CODE, INVALID_PHONE_MESSAGE } from '../../../src/core/phone';
-import { HEX_COLOR_RE, LIMITS, MAX_EVENTS, MAX_TOURNAMENT_TEAMS, MAX_URL_LENGTH, type LimitKey } from '../../../src/core/limits';
+import { HEX_COLOR_RE, LIMITS, MAX_EVENTS, MAX_TOURNAMENT_FIXTURES, MAX_TOURNAMENT_TEAMS, MAX_URL_LENGTH, type LimitKey } from '../../../src/core/limits';
 import { cleanText, textProblem, TEXT_ERROR_CODES } from '../../../src/core/text';
 import { checkRules, EVENTS_INVALID_CODE, RULES_INVALID_CODE } from '../../../src/core/validate';
 import { END_BEFORE_START_CODE } from '../../../src/core/dates';
@@ -45,9 +45,12 @@ export const placeSchema = z.object({
 export const ruleSetSchema = z.object({
   preset: z.enum(['indoor', 'beach', 'custom']),
   bestOf: z.union([z.literal(1), z.literal(3), z.literal(5)]),
-  pointsPerSet: z.number().int().min(1).max(99),
-  decidingSetPoints: z.number().int().min(1).max(99),
-  winBy: z.number().int().min(1).max(5),
+  // 1.5.8 (Tester F157x-2): no absurd sets – at least 5 points (the app's own quick rules use 5; presets 21 / 25),
+  // win by 1 or 2 (the editor's options), best of 1 / 3 / 5 (above)
+  pointsPerSet: z.number().int().min(5).max(99),
+  // 1.5.9 (Tester F158-1): the deciding set's target too – at least 5, like pointsPerSet (= firestore.rules rulesOk)
+  decidingSetPoints: z.number().int().min(5).max(99),
+  winBy: z.number().int().min(1).max(2),
   pointCap: nullableInt(1, 99),
   timeoutsPerSet: z.number().int().min(0).max(9),
   sideSwitchEvery: nullableInt(1, 99),
@@ -256,7 +259,7 @@ const tournamentFields = {
   endDate: ms,
   location: placeSchema,
   teams: z.array(tournamentTeamSchema).max(MAX_TOURNAMENT_TEAMS),
-  fixtures: z.array(fixtureSchema).max(2000),
+  fixtures: z.array(fixtureSchema).max(MAX_TOURNAMENT_FIXTURES), // 1.5.8 (V1426-3): 496
   status: z.enum(['registration', 'running', 'finished']),
 };
 export const newTournamentSchema = z.object(tournamentFields);

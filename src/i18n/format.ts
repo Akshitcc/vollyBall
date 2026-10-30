@@ -1,3 +1,4 @@
+import { placeLabel } from '../core/geo';
 import type { TournamentDisplayStatus } from '../core/tournament';
 /**
  * Translated versions of display helpers whose English originals live in
@@ -142,6 +143,9 @@ const DATA_LABELS: Record<string, string> = {
   'New Delhi': 'demo.newDelhi',
   'Team A': 'common.teamA', // older matches created before team names were required
   'Team B': 'common.teamB',
+  // 1.5.9 (Tester F158-10): a pin with no place name is saved under the creator's language's label; shown in yours
+  'Pinned location': 'location.pinnedName',
+  'पिन की गई जगह': 'location.pinnedName',
 };
 export function dataLabel(s: string | null | undefined, t: TFunction = tr): string {
   if (!s) return '';
@@ -365,3 +369,8 @@ export function colourName(hex: string, t: TFunction = tr): string {
 }
 /** Accessible name of a colour swatch: "Team colour: Red". */
 export const swatchLabel = (hex: string, t: TFunction = tr): string => t('colours.swatchLabel', { name: colourName(hex, t) });
+
+/** 1.5.9 (F158-10): a place for display – its name (app-written labels such as "Pinned location" translated), else the coordinates. */
+export function placeLabelT(p: Parameters<typeof placeLabel>[0], t: TFunction = tr): string {
+  return dataLabel(placeLabel(p), t);
+}

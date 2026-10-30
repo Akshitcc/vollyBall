@@ -1,5 +1,4 @@
 /** Match page: real-time scoreboard for followers, stats, timeline, photos. */
-import { placeLabel } from '../../../core/geo';
 import { statusKey } from '../../../core/matchTiming';
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
@@ -39,6 +38,7 @@ import { dataLabel, describeRulesT, letterSpacing, matchStatusLabel, shareTextT 
 import { colors, currentTheme, font, gradients, teamText, themed } from '../../../theme';
 import { tokens } from '../../../theme/tokens';
 import { shareOrCopy } from '../../../services/share';
+import { placeLabelT } from '../../../i18n/format';
 
 type Tab = 'stats' | 'timeline' | 'photos';
 
@@ -233,7 +233,7 @@ export default function MatchPage() {
         >
           <Row style={{ marginBottom: 8 }}>
             <Ionicons name="location" size={18} color={colors.primaryText} />
-            <Text style={[font.body, { marginLeft: 6, flex: 1, fontWeight: '700' }]}>{placeLabel(m.location)}</Text>
+            <Text style={[font.body, { marginLeft: 6, flex: 1, fontWeight: '700' }]}>{placeLabelT(m.location)}</Text>
             <Text style={{ color: colors.primaryText, fontWeight: '800' }}>{tr('match.directions')}</Text>
           </Row>
         </Pressable>

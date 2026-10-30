@@ -13,7 +13,7 @@ import { FAQ_CATEGORIES, FAQS, searchFaqs, type Faq } from '../core/helpFaq';
 import type { SupportTicket } from '../core/support';
 import { formatWhenT } from '../i18n/format';
 import { backend } from '../services/backend';
-import { mailtoUrl, SUPPORT_URL, supportContact, whatsappUrl } from '../services/supportContact';
+import { mailtoUrl, supportContact, whatsappUrl } from '../services/supportContact';
 import { colors, type } from '../theme';
 
 /**
@@ -110,15 +110,21 @@ export default function HelpScreen() {
       <Text style={[type.body, { fontWeight: '900', color: colors.text, marginTop: 12, marginBottom: 8 }]} accessibilityRole="header">{t('help.stillNeed')}</Text>
       <View style={{ gap: 8 }}>
         <Button title={t('help.contactUs')} icon="mail-outline" onPress={() => router.push('/contact')} testID="help-contact" />
-        <Text
-          onPress={() => void Linking.openURL(SUPPORT_URL)}
-          accessibilityRole="button"
-          accessibilityLabel={`${t('help.supportSite')}: ${SUPPORT_URL}`}
-          style={[type.body, { color: colors.primaryText, fontWeight: '800', textDecorationLine: 'underline', paddingVertical: 10 }]}
-          testID="help-support-url"
-        >
-          {t('help.supportSite')}: {SUPPORT_URL.replace(/^https:\/\//, '')}
-        </Text>
+        {/* 1.5.8 (Tester F157u-1): the support website only when EXPO_PUBLIC_SUPPORT_URL is set (never the placeholder);
+            otherwise the in-app routes: Contact us (above) and Feedback */}
+        {contact.url ? (
+          <Text
+            onPress={() => void Linking.openURL(contact.url!)}
+            accessibilityRole="button"
+            accessibilityLabel={`${t('help.supportSite')}: ${contact.url}`}
+            style={[type.body, { color: colors.primaryText, fontWeight: '800', textDecorationLine: 'underline', paddingVertical: 10 }]}
+            testID="help-support-url"
+          >
+            {t('help.supportSite')}: {contact.url.replace(/^https:\/\//, '')}
+          </Text>
+        ) : (
+          <Button title={t('feedback.open')} icon="chatbox-ellipses-outline" variant="secondary" onPress={() => router.push('/feedback')} testID="help-feedback" />
+        )}
         {contact.email ? <Button title={t('help.email')} icon="at-outline" variant="secondary" onPress={() => void Linking.openURL(mailtoUrl(contact.email!, 'VolleyLive'))} testID="help-email" /> : null}
         {contact.whatsapp ? <Button title={t('help.whatsapp')} icon="logo-whatsapp" variant="secondary" onPress={() => void Linking.openURL(whatsappUrl(contact.whatsapp!))} testID="help-whatsapp" /> : null}
       </View>

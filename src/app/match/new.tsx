@@ -5,6 +5,7 @@ import { LIMITS } from '../../core/limits';
 import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
+import { useWebStepHistory } from '../../hooks/useWebStepHistory';
 import { BackHandler, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { card } from '../../components/Hero';
 import { PressableScale } from '../../components/PressableScale';
@@ -316,18 +317,20 @@ export default function NewMatch() {
   useEffect(() => {
     if (!canOpenStep(step, teamsReady, rulesReady) && step > 0) setStep(teamsReady ? 1 : 0);
   }, [step, teamsReady, rulesReady]);
+  // 1.5.9 (Tester F158-9): web – the steps are browser history entries (Back on step 3 -> step 2)
+  const webSteps = useWebStepHistory<NewMatchStep>(step, setStep);
   const goTo = (target: NewMatchStep) => {
     if (target === step || !canOpenStep(target, teamsReady, rulesReady)) return;
     setError(null);
-    setStep(target);
+    if (!webSteps.move(target)) setStep(target);
   };
   /** Header arrow / Android back: previous step; leave the screen only from the Teams step. */
   const back = useCallback(() => {
     const prev = previousStep(step);
     if (prev == null) return false;
-    setStep(prev);
+    if (!webSteps.move(prev)) setStep(prev);
     return true;
-  }, [step]);
+  }, [step, webSteps]);
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', back);
     return () => sub.remove();
@@ -387,6 +390,7 @@ export default function NewMatch() {
         }),
         teamSizeMode: sizeMode,
       } as Parameters<typeof backend.createMatch>[0]);
+      await webSteps.unwind(); // web: no stale step entries behind the new match (F158-9)
       if (startNow) router.replace(`/match/${id}/score`);
       else router.replace(`/match/${id}`);
     } catch (e) {

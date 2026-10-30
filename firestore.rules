@@ -84,11 +84,13 @@ service cloud.firestore {
       // All 10 fields present (size 10, each read below) and nothing else; integer fields in range via
       // one regex over their decimal form (a float like 1.5 or a negative number fails it), and the
       // sum fails to evaluate (deny) if any required field is a string.
+      // 1.5.8 (Tester F157x-2, = server ruleSetSchema): points per set 5..99, win by 1 or 2.
+      // 1.5.9 (Tester F158-1): the deciding set's target too: 5..99.
       return r.size() == 10 && r.preset in ['indoor', 'beach', 'custom']
         && (string(r.bestOf) + ',' + string(r.pointsPerSet) + ',' + string(r.decidingSetPoints) + ',' + string(r.winBy)
             + ',' + string(r.timeoutsPerSet) + ',' + string(r.pointCap) + ',' + string(r.sideSwitchEvery)
             + ',' + string(r.decidingSideSwitchEvery) + ',' + string(r.decidingSwitchAt))
-            .matches('^[135],[1-9][0-9]?,[1-9][0-9]?,[1-5],[0-9](,(null|[1-9][0-9]?)){4}$')
+            .matches('^[135],([5-9]|[1-9][0-9]),([5-9]|[1-9][0-9]),[12],[0-9](,(null|[1-9][0-9]?)){4}$')
         && r.bestOf + r.pointsPerSet + r.decidingSetPoints + r.winBy + r.timeoutsPerSet > 0
         && (r.pointCap == null || r.pointCap >= r.pointsPerSet)
         && (r.decidingSwitchAt == null || r.decidingSwitchAt <= r.decidingSetPoints);
@@ -329,30 +331,43 @@ service cloud.firestore {
     }
 
     // ---------- users ----------
+    // 1.5.9 (Tester F158-3): users/{uid} is the PUBLIC profile (any signed-in user reads it): id, name, first / last
+    // name, photo and timestamps only. The mobile number, playing position and city are private:
+    // users/{uid}/private/profile, owner only (no admin path needs them). A public doc can't hold a private field –
+    // a legacy (≤ 1.5.8) doc loses phone / position / city / pushToken on its owner's next write (the app moves them
+    // in the same transaction; scripts/migrate-private-profiles.js moves the rest – needs Akshit's approval).
     match /users/{userId} {
       allow read: if signedIn();
-      // Fields as src/core/types.ts UserProfile (pushToken: legacy docs only). No role/admin fields.
+      // Fields as src/services/backend/firebaseBackend.ts PUBLIC_PROFILE_KEYS. No role/admin fields.
       function profileOk(d, ks) {
-        return d.keys().hasOnly(['id', 'name', 'phone', 'photoURL', 'position', 'city', 'pushToken', 'createdAt', 'updatedAt', 'firstName', 'lastName'])
+        return d.keys().hasOnly(['id', 'name', 'photoURL', 'createdAt', 'updatedAt', 'firstName', 'lastName'])
           && (!ks.hasAny(['firstName']) || personNameOk(d.firstName))
           && (!ks.hasAny(['lastName']) || personNameOk(d.lastName))
           && (!ks.hasAny(['name']) || nameOk(d.name, 2, 60))
-          && (!ks.hasAny(['city']) || optTextOk(d.get('city', null), 80))
-          && (!ks.hasAny(['position']) || d.get('position', null) == null
-              || d.position in ['setter', 'outside', 'middle', 'opposite', 'libero', 'any'])
           && (!ks.hasAny(['photoURL']) || d.get('photoURL', null) == null || photoUrlOk(d.photoURL, 'avatars%2F' + userId + '%2F'))
           && (!ks.hasAny(['id']) || d.id == userId)
           && (!ks.hasAny(['createdAt']) || optMsOk(d.get('createdAt', null)));
       }
-      // The Indian format is required when the number is set or changed. A profile from before
-      // build 216 with another number can still be edited while it stays the same (fix-retest N4).
+      // A new profile comes with its private doc in the same write, holding the caller's verified number.
       allow create, update: if signedIn() && uid() == userId
-        && request.resource.data.phone == myPhone()
-        && (validPhone(request.resource.data.phone) || (resource != null && resource.data.phone == request.resource.data.phone))
         && request.resource.data.name is string
         && profileOk(request.resource.data, writtenKeys())
-        && termsOk();
+        && termsOk()
+        && (resource != null || getAfter(/databases/$(database)/documents/users/$(userId)/private/profile).data.phone == myPhone());
       allow delete: if false;
+
+      // 1.5.9 (F158-3): the private profile. The number is the caller's verified one; the Indian format is required
+      // when it is set or changed – a number from before build 216 can still be saved while it stays the same
+      // (fix-retest N4), incl. the first move from a legacy public doc that holds it.
+      function privateProfileOk(d, old, ks) {
+        return d.keys().hasOnly(['phone', 'position', 'city', 'updatedAt'])
+          && d.phone == myPhone()
+          && (validPhone(d.phone) || (old != null && old.get('phone', null) == d.phone)
+              || get(/databases/$(database)/documents/users/$(userId)).data.get('phone', null) == d.phone)
+          && (!ks.hasAny(['city']) || optTextOk(d.get('city', null), 80))
+          && (!ks.hasAny(['position']) || d.get('position', null) == null
+              || d.position in ['setter', 'outside', 'middle', 'opposite', 'libero', 'any']);
+      }
 
       // 1.3.7 (1.3.6 registration): date of birth, email, pincode, district and state are private – only
       // the owner reads or writes them (the profile doc above is readable by every signed-in user).
@@ -371,7 +386,8 @@ service cloud.firestore {
         allow read: if signedIn() && uid() == userId;
         allow create, update: if signedIn() && uid() == userId && ((docId == 'registration'
           && registrationOk(request.resource.data, resource == null ? null : resource.data.get('dob', null), resource == null ? null : resource.data.get('email', null)))
-          || (docId == 'review' && reviewClockOk(request.resource.data, resource == null ? null : resource.data)));
+          || (docId == 'review' && reviewClockOk(request.resource.data, resource == null ? null : resource.data))
+          || (docId == 'profile' && termsOk() && privateProfileOk(request.resource.data, resource == null ? null : resource.data, writtenKeys())));
         allow delete: if false;
       }
     }
@@ -409,9 +425,21 @@ service cloud.firestore {
         && (myEmailAfter() == null || emailClaimId(myEmailAfter()) != claimId);
     }
 
-    // Lookup by mobile number: exact get only, listing is forbidden.
+    // Lookup by mobile number: exact get only, listing is forbidden. The doc maps the number to the uid and nothing
+    // else (the name / photo come from the public profile).
+    // 1.5.9 (Tester F158-3): a lookup is counted. Reading someone else's entry (or learning there is none) needs this
+    // number in the caller's phoneLookups doc, and that doc moves to a new number only by counting it:
+    // at most phoneLookupLimit() numbers per phoneLookupWindowS() seconds per account (= src/core/phoneLookup.ts
+    // PHONE_LOOKUP_RULES; rules-tests compare). Firestore has no per-IP view, so a per-IP limit needs a server
+    // (the API has one; Cloud Functions would too) – see docs/DEPLOY.md.
+    function phoneLookupLimit() { return 60; }
+    function phoneLookupWindowS() { return 3600; }
+    function lookedUp(p) {
+      let q = /databases/$(database)/documents/phoneLookups/$(uid());
+      return exists(q) && get(q).data.q == p;
+    }
     match /phoneIndex/{phone} {
-      allow get: if signedIn();
+      allow get: if signedIn() && ((resource != null && resource.data.uid == uid()) || lookedUp(phone));
       allow list: if false;
       allow create, update: if signedIn() && phone == myPhone()
         && (validPhone(phone) || (resource != null && resource.data.uid == uid()))
@@ -419,6 +447,24 @@ service cloud.firestore {
         && request.resource.data.uid == uid()
         && termsOk();
       allow delete: if false;
+    }
+
+    // 1.5.9 (F158-3): the per-account lookup counter (see phoneIndex). Own doc only; never listed or deleted.
+    // q = the number being looked up; n = numbers counted since `since` (server time). A new number either counts
+    // (n + 1, at most the limit, same window) or – once the window is over – starts a new one (n = 1, since = now).
+    function lookupDocOk(d) {
+      return d.keys().hasOnly(['q', 'n', 'since']) && validPhone(d.q) && d.n is int && d.since is timestamp;
+    }
+    match /phoneLookups/{userId} {
+      allow get: if signedIn() && uid() == userId;
+      allow list, delete: if false;
+      allow create: if signedIn() && uid() == userId && termsOk() && lookupDocOk(request.resource.data)
+        && request.resource.data.n == 1 && request.resource.data.since == request.time;
+      allow update: if signedIn() && uid() == userId && termsOk() && lookupDocOk(request.resource.data)
+        && ((request.resource.data.since == resource.data.since && request.resource.data.n == resource.data.n + 1
+              && request.resource.data.n <= phoneLookupLimit())
+          || (request.time > resource.data.since + duration.value(phoneLookupWindowS(), 's')
+              && request.resource.data.since == request.time && request.resource.data.n == 1));
     }
 
     // ---------- teams ----------
@@ -448,6 +494,8 @@ service cloud.firestore {
       // Captains may only invite numbers that are already registered (present in
       // phoneIndex). At most one new number per write, appended at the end of the list
       // (the app and arrayUnion both append), so the rule can check it.
+      // 1.5.9 (F158-3/F158-2): the number must be the captain's current counted lookup (phoneLookups), so an
+      // invite is not a free registered-number test – it costs one lookup like the search before it.
       function invitesOnlyRegistered() {
         let before = resource.data.pendingPhones.toSet();
         let after = request.resource.data.pendingPhones;
@@ -456,7 +504,12 @@ service cloud.firestore {
           || (added.size() == 1
               && added.hasOnly([after[after.size() - 1]])
               && validPhone(after[after.size() - 1])
+              && lookedUp(after[after.size() - 1])
               && exists(/databases/$(database)/documents/phoneIndex/$(after[after.size() - 1])));
+      }
+
+      function startersOf(d) {
+        return d.memberIds.removeAll(d.get('subIds', [])).size();
       }
 
       function teamOk(d, ks) {
@@ -480,6 +533,8 @@ service cloud.firestore {
           && teamOk(request.resource.data, writtenKeys())
           && request.resource.data.captainId in request.resource.data.memberIds
           && request.resource.data.memberIds.size() <= 12
+          // 1.5.9 (Tester F158-12): at most 6 starters (members not in subIds); an older team over it may only go down
+          && (startersOf(request.resource.data) <= 6 || startersOf(request.resource.data) <= startersOf(resource.data))
           // members join only by accepting an invite (PRD TEAM-05); the captain can remove, not add
           && request.resource.data.memberIds.toSet().difference(resource.data.memberIds.toSet()).size() == 0
           && request.resource.data.pendingPhones.size() <= 12
@@ -1120,9 +1175,37 @@ service cloud.firestore {
     // 1.4.6: never the CURRENT scorer (V145-6), and a verdict belongs to the current re-open epoch (V145-2: `epoch`, only
     // written after a re-open, equals reopenEpoch).
     function confirmOk(r, v) {
-      return completed(r) && verdictCapt(r, uid()) && uid() != r.scorerId
-        && (vStatus(r) == 'pending' ? confirmFromPending(v) : confirmAfterApproval(r, v))
-        && v.by == uid() && v.at == request.time && v.get('epoch', 0) == r.get('reopenEpoch', 0);
+      let s = sidesOf(r);
+      return completed(r) && verdictCaptS(r, s, uid()) && uid() != r.scorerId && v.get('epoch', 0) == r.get('reopenEpoch', 0)
+        && confirmStepOk(r, v, firstOf(r), s);
+    }
+    function confirmStepOk(r, v, f, s) {
+      return v.get('captain', null) == null
+        ? firstConfirmOk(r, v, f, s)
+        : (vStatus(r) == 'pending' ? confirmFromPending(v) : confirmAfterApproval(r, v))
+          && v.by == uid() && v.at == request.time && secondCaptainOk(r, v, f, s);
+    }
+    // 1.5.8 (Tester F157x-1, core needsBothCaptains / verdictStep): a creator and scorer on neither roster -> BOTH
+    // captains are verdict captains and the result counts only after both confirm. The first confirm adds only
+    // verification.first = {by: me, at: request.time, epoch} (status unchanged: pending, or approved without a verdict).
+    // otherCapt: the other captain is a verdict captain too (uid() already is one), measured with the same sides s.
+    function otherCapt(r, s) { return verdictCaptS(r, s, uid() == r.captains.A ? r.captains.B : r.captains.A); }
+    function firstOf(r) {
+      let f = r.get('verification', {}).get('first', null);
+      return f != null && f.get('epoch', 0) == r.get('reopenEpoch', 0) ? f : null;
+    }
+    function firstConfirmOk(r, v, f, s) {
+      return f == null && v.status == vStatus(r)
+        && (vStatus(r) == 'pending' || (vStatus(r) == 'approved' && captainOf(r) == null))
+        && v.diff(r.get('verification', {})).affectedKeys().hasOnly(['first', 'status', 'epoch'])
+        && v.first.keys().hasOnly(['by', 'at', 'epoch']) && v.first.by == uid() && v.first.at == request.time
+        && v.first.get('epoch', 0) == r.get('reopenEpoch', 0) && otherCapt(r, s);
+    }
+    // the verdict: on a two-captain match a confirm needs the OTHER captain's first confirm; the first confirmer can't
+    // answer again (core confirmProblem already_reviewed); `first` is kept as it was
+    function secondCaptainOk(r, v, f, s) {
+      return v.get('first', null) == r.get('verification', {}).get('first', null)
+        && (f == null ? v.captain == 'rejected' || !otherCapt(r, s) : f.by != uid());
     }
     // verdict 'confirmed'/'rejected' must match the decision. 1.3.9 (V138-3): required on every new
     // answer (1.3.7+ clients always send it); a 1.3.6 client's answer without it is refused, so the
@@ -1131,7 +1214,7 @@ service cloud.firestore {
       return v.get('captain', null) == (decision == 'confirmed' ? 'confirmed' : 'rejected');
     }
     function confirmFromPending(v) {
-      return v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain', 'epoch'])
+      return v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain', 'epoch', 'first'])
         && v.status in ['confirmed', 'disputed'] && verdictOk(v, v.status)
         && (v.status == 'disputed' ? optTextOk(v.get('reason', null), 200) : v.get('reason', null) == null);
     }
@@ -1140,7 +1223,7 @@ service cloud.firestore {
     function confirmAfterApproval(r, v) {
       let old = r.get('verification', {});
       return !adminApprovalCounts() && vStatus(r) == 'approved' && captainOf(r) == null && old.get('by', null) == null
-        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain', 'reviewedBy', 'reviewedAt', 'epoch'])
+        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'captain', 'reviewedBy', 'reviewedAt', 'epoch', 'first'])
         && v.status == 'approved' && v.get('captain', null) in ['confirmed', 'rejected']
         && v.get('reviewedBy', null) == old.get('reviewedBy', null) && v.get('reviewedAt', null) == old.get('reviewedAt', null)
         && (v.captain == 'rejected' ? optTextOk(v.get('reason', null), 200) : v.get('reason', null) == null);
@@ -1162,8 +1245,9 @@ service cloud.firestore {
       return (completed(r) || (r.status == 'finished' && v.status == 'voided')) && !(vStatus(r) in ['approved', 'voided'])
         && uid() != r.createdBy && uid() != r.scorerId && !(uid() in r.participantIds)
         && !(uid() in [r.get('captains', {}).get('A', null), r.get('captains', {}).get('B', null)])
-        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'reviewedBy', 'reviewedAt', 'captain', 'epoch'])
+        && v.keys().hasOnly(['status', 'by', 'at', 'reason', 'reviewedBy', 'reviewedAt', 'captain', 'epoch', 'first'])
         && v.status in ['approved', 'voided'] && v.reviewedBy == uid() && v.reviewedAt == request.time
+        && v.get('first', null) == old.get('first', null)
         && v.get('epoch', 0) == r.get('reopenEpoch', 0)
         && v.get('by', null) == old.get('by', null) && v.get('at', null) == old.get('at', null)
         && v.get('reason', null) == old.get('reason', null)
@@ -1534,7 +1618,9 @@ service cloud.firestore {
         && (!ks.hasAny(['startDate']) || notPast(d.startDate))
         && (!ks.hasAny(['startDate', 'endDate']) || (msOk(d.startDate) && msOk(d.endDate) && d.endDate >= d.startDate))
         && (!ks.hasAny(['teams']) || (d.teams is list && tournamentTeamIdsUnique(d.teams)))
-        && (!ks.hasAny(['fixtures']) || (d.fixtures is list && d.fixtures.size() <= 2000))
+        // 1.5.8 (QA V1426-3): at most the app's real maximum – a 32-team league is 32*31/2 = 496 fixtures (knockout 31,
+        // groups + knockout <= 243); = MAX_TOURNAMENT_FIXTURES in src/core/limits.ts
+        && (!ks.hasAny(['fixtures']) || (d.fixtures is list && d.fixtures.size() <= 496))
         && (!ks.hasAny(['createdAt']) || optMsOk(d.get('createdAt', null)));
     }
     // T&C (1.3.0): a request may read at most 10 documents. A tournament write reads each team

@@ -11,7 +11,7 @@ import type { ResultStatus } from '../resultStatus';
  */
 import { buildPrompt, defang, IDK_TOKEN, looksLikeInjection, mockProvider, retrieve, scrubPii, sourceOf, type AskIndex, type AskLang, type AskProvider, type AskSource, type ScoredChunk } from './index';
 import { ASK_MAX_CARDS, type AskCard } from './cards';
-import { parseIntent } from './intents';
+import { bareTeamName, parseIntent } from './intents';
 import { runTool, TOOL_SPECS, type ToolHost, type ToolOutcome, type ToolSpec } from './tools';
 import { stripHidden } from '../text';
 import { GUIDES, screenUrl } from './guides';
@@ -86,8 +86,8 @@ export const dedupeNames = (c: string[]) => [...new Map(c.map((n) => [n, c.filte
 type MatchRow = { status: string; teamA: string; teamB: string; setsA: number; setsB: number; result?: ResultStatus | null };
 type LatestRow = { teamA: string; teamB: string; setsA: number; setsB: number; sets: string; lastSet: string | null; result?: ResultStatus | null };
 /** 1.5.1 (F150-7): the state of a finished result, in words. */
-const RESULT_EN: Record<ResultStatus, string> = { counted: 'confirmed', awaiting: 'pending – waiting for the other captain to confirm', potm: 'pending – Player of the Match not picked yet', review: 'under admin review – not counted yet', reviewAwaiting: 'pending – waiting for the other captain to confirm, and under admin review', disputed: 'disputed – rejected by the other captain, not counted', voided: 'voided by an admin – does not count' };
-const RESULT_HI: Record<ResultStatus, string> = { counted: 'पुष्टि हो चुकी', awaiting: 'बाकी – दूसरे कप्तान की पुष्टि का इंतज़ार', potm: 'बाकी – प्लेयर ऑफ़ द मैच चुनना बाकी', review: 'एडमिन जाँच में – अभी गिना नहीं गया', reviewAwaiting: 'बाकी – दूसरे कप्तान की पुष्टि का इंतज़ार, और एडमिन जाँच में', disputed: 'विवादित – दूसरे कप्तान ने ठुकराया, गिना नहीं गया', voided: 'एडमिन ने रद्द किया – नहीं गिना जाएगा' };
+const RESULT_EN: Record<ResultStatus, string> = { counted: 'confirmed', awaitingSecond: 'pending – one captain confirmed, waiting for the other captain', awaiting: 'pending – waiting for the other captain to confirm', potm: 'pending – Player of the Match not picked yet', review: 'under admin review – not counted yet', reviewAwaiting: 'pending – waiting for the other captain to confirm, and under admin review', disputed: 'disputed – rejected by the other captain, not counted', voided: 'voided by an admin – does not count' };
+const RESULT_HI: Record<ResultStatus, string> = { counted: 'पुष्टि हो चुकी', awaitingSecond: 'बाकी – एक कप्तान ने पुष्टि की, दूसरे कप्तान का इंतज़ार', awaiting: 'बाकी – दूसरे कप्तान की पुष्टि का इंतज़ार', potm: 'बाकी – प्लेयर ऑफ़ द मैच चुनना बाकी', review: 'एडमिन जाँच में – अभी गिना नहीं गया', reviewAwaiting: 'बाकी – दूसरे कप्तान की पुष्टि का इंतज़ार, और एडमिन जाँच में', disputed: 'विवादित – दूसरे कप्तान ने ठुकराया, गिना नहीं गया', voided: 'एडमिन ने रद्द किया – नहीं गिना जाएगा' };
 const T = {
   en: {
     private: "I can't share other players' private details such as phone numbers, e-mail addresses or wallets. You can see what a player shares on their profile.",
@@ -283,7 +283,15 @@ export async function runAgent(o: RunAgentOpts): Promise<AgentResult> {
   }
   // no tools: a grounded help answer or "I don't know"
   const answer = cleanText(text);
-  if (!hits.length || !answer || answer.includes(IDK_TOKEN)) return { ...base, answer: '', sources: [], idk: true, steps, outcome: limited ? 'limited' : 'idk', limited, injection: contentInjection };
+  if (!hits.length || !answer || answer.includes(IDK_TOKEN)) {
+    // 1.5.8 (Tester F157-2): nothing found for a bare team name ("Juhu") → look the team up (roster, or "which team?")
+    const team = intent.kind === 'rag' && !intent.topic ? bareTeamName(o.question) : null;
+    if (team && !limited) {
+      const r = await runTool(o.host, 'team_roster', { team }, o.lang);
+      if (r.ok && (r.data as D).found > 0) return { ...base, answer: scrubPii(describeOutcome(r, o.lang)), sources: [], idk: false, cards: r.cards.slice(0, ASK_MAX_CARDS), tools: [{ name: r.name, args: r.args, ok: r.ok, ms: r.ms }], steps, outcome: 'answer', injection: contentInjection || looksLikeInjection(JSON.stringify(r.data)) };
+    }
+    return { ...base, answer: '', sources: [], idk: true, steps, outcome: limited ? 'limited' : 'idk', limited, injection: contentInjection };
+  }
   const seen = new Set<string>();
   const sources = hits.map(sourceOf).filter((x) => (seen.has(x.id) ? false : (seen.add(x.id), true)));
   return { ...base, answer, sources, idk: false, steps, outcome: 'answer', limited, injection: contentInjection };

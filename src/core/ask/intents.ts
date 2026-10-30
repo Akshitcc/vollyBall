@@ -62,11 +62,20 @@ const POLITE = /^\s(?:please|pls|kindly|can you|could you|would you|will you|can
 // a sentence without such a marker a help question.
 const CAP_ASSIGN2 = /\S\s*(?:=|->|→|=>)\s*(?:the\s+)?(?:new\s+)?(?:captain|skipper|कप्तान)\b|(?:captain|captaincy|skipper|कप्तान|कप्तानी)\s*(?:->|→|=>)\s*\S/i;
 const CAP_DO = /\s(?:do it|go ahead|how about|what about|why not|when you get a chance|when you can|right now|asap|make it happen|kar do na|abhi kar do)\s/;
-const CAP_HOW = /\s(?:steps?|how|explain|explains|guide|process|procedure|tutorial|instructions?|possible|which screen|what screen|where|when|kaise|kaisey|tarika|tareeka|kahan|kahaan|कैसे|तरीका|कहाँ|कहां)\s/;
+const CAP_HOW = /\s(?:steps|step by step|step-by-step|how|explain|explains|guide|process|procedure|tutorial|instructions?|possible|which screen|what screen|where|when|kaise|kaisey|tarika|tareeka|kahan|kahaan|कैसे|तरीका|कहाँ|कहां)\s/;
+// 1.5.8 (Tester F157-3): a result dispute that mentions the other captain ("Other captain rejected our result, can admin
+// make it count?") is about the result, not the captaincy – unless someone is explicitly named / assigned as captain
+const CAP_DISPUTE = /\s(?:reject|rejects|rejected|rejecting|dispute|disputes|disputed|disputing|void|voided|admin|admins|count|counts|counted|flag|flagged|appeal|appealed|ठुकरा\S*|विवाद\S*|एडमिन)\s/;
+const CAP_NAMED = /\s(?:make|appoint|set|name|elect|choose|pick|let)\s(?!it\s|this\s|that\s|them\s|the result\s)(?:\S+\s){1,3}(?:the\s)?(?:new\s)?(?:captain|skipper|kaptaan|कप्तान)\s/;
+const disputeOnly = (question: string, q: string) => CAP_DISPUTE.test(q) && !CAP_NAMED.test(q) && !CAP_ASSIGN.test(question) && !CAP_ASSIGN2.test(question);
+// 1.5.8 (F157-3): what a captain does / may do ("What does a captain do?", "captain responsibilities", "what powers…",
+// "need to be a member?", "how do I step down", "can the captain confirm the score?") → the captain guide
+const CAP_ROLE = /\swhat (?:does|do) (?:a |the |our |my )?(?:team |match )?(?:captain|captains|skipper|kaptaan) do\s|\s(?:responsibility|responsibilities|responsible|duty|duties|power|powers|rights|role|roles|job|jobs|kaam|kam|member|members|step down|stepping down|resign|quit|confirm|confirms|confirmed|after a match starts|during a match|mid match|क्या करता|काम|ज़िम्मेदारी|जिम्मेदारी)\s/;
 function captainChange(question: string, q: string): boolean {
   const raw = question.normalize('NFKC');
   if (CAP_ASSIGN.test(raw) || CAP_ASSIGN2.test(raw)) return true;
   if (!CAP_WORD.test(q)) return false;
+  if (disputeOnly(raw, q)) return false;
   if (CAP_DO.test(q) && (CAP_CHANGE.test(q) || /\sdo it\s/.test(q))) return true;
   if (!CAP_CHANGE.test(q)) return false;
   if (POLITE.test(q)) return true;
@@ -75,7 +84,8 @@ function captainChange(question: string, q: string): boolean {
 /** 1.5.7 (F156-6): a question ABOUT captains (how to change, who is captain) – answered from the captain guide. */
 export function captainHelp(question: string): boolean {
   const q = n(question);
-  if (!CAP_WORD.test(q) || captainChange(question, q)) return false;
+  if (!CAP_WORD.test(q) || captainChange(question, q) || disputeOnly(question.normalize('NFKC'), q)) return false;
+  if (CAP_ROLE.test(q)) return true;
   // about WHO the captain is or HOW captains change / are picked – not every sentence that mentions captains ("how does
   // the scorer desk help captains?" stays a normal knowledge question)
   if (!CAP_CHANGE.test(q) && !CAP_TOPIC.test(q)) return false;
@@ -149,6 +159,37 @@ function tournamentName(question: string): string | undefined {
 }
 const limitOf = (q: string, def: number) => { const m = /\b(?:top|टॉप)\s*(\d{1,2})\b|\b(\d{1,2})\s*(?:top|best|players|khiladi|खिलाड़ी)/.exec(q); const v = m ? Number(m[1] ?? m[2]) : def; return Math.max(1, Math.min(10, v)); };
 
+const TEAM_STOP = new Set('i me my mine mera meri mere main hum we us our you your it this that all everything everyone something anything rankings ranking leaderboard stats stat profile wallet tournament tournaments cup league fixtures standings table results result scores score live help faq rules settings history teams players player people account notifications ask app the a an there'.split(' '));
+const teamName = (e: string | undefined) => {
+  const t = (e ?? '').trim().replace(/^(?:the|team)\s+/, '').replace(/\s+team$/, '').trim();
+  const ws = t.split(' ').filter(Boolean);
+  return t && [...t].length >= 2 && ws.length <= 4 && !ws.some((w) => TEAM_STOP.has(w) || GENERIC.has(w)) ? t.slice(0, 40) : null;
+};
+const TEAM_RESULT_RES = [
+  /^\s(.+?)\s(?:ka\s|ki\s|ke\s|का\s|की\s)?(?:last|latest|recent|previous|pichla|pichhla|aakhri|आख़िरी|पिछला)\s(?:result|results|match|game|score|nateeja|natija|नतीजा|मैच)(?:\s(?:kya|क्या)(?:\s(?:tha|thi|hai|था|थी|है))?)?\s$/,
+  /^\s(?:last|latest|recent|previous)\s(?:result|match|game)\s(?:of|for)\s(.+?)\s$/,
+  /^\s(?:how did|how has|how have)\s(.+?)\s(?:do|done|go|play|played|perform|performed|fare|fared)(?:\s(?:today|yesterday|lately|recently|last time|in their last match))?\s$/,
+  /^\s(?:is|are)\s(.+?)\s(?:playing|live)(?:\s(?:now|today|right now|at the moment))?\s$/,
+];
+const TEAM_SHOW_RES = [
+  /^\s(?:show|show me|open|find|display)\s(.+?)\s$/,
+  /^\s(?:tell me |tell us |info |details )?about\s(.+?)\steam\s$/,
+  /^\s(?:tell me about|info on|details of|details about)\s(?:the\s)?team\s(.+?)\s$/,
+  /^\s(.+?)\steam\s(?:ke baare mein|ke bare me|ke baare me|के बारे में|info|details|kaisi hai)\s$/,
+];
+/** 1.5.8 (F157-2): a bare team name ("Juhu", "Juhu Jets?") – tried as a team lookup only when Ask found nothing else. */
+export function bareTeamName(question: string): string | null {
+  const q = n(question);
+  if (ME.test(q) || [...q.trim()].length > 40) return null;
+  return teamName(q.trim());
+}
+function teamAsk(q: string, firstPerson: boolean): { name: AskToolName; args: Record<string, string> } | null {
+  if (firstPerson) return null;
+  for (const re of TEAM_RESULT_RES) { const t = teamName(re.exec(q)?.[1]); if (t) return { name: 'live_score', args: { team: t } }; }
+  for (const re of TEAM_SHOW_RES) { const m = re.exec(q); const t = teamName(m?.[1]); if (t && (re !== TEAM_SHOW_RES[0] || !/\s(?:match|matches|game|games|me)\s/.test(` ${m![1]} `))) return { name: 'team_roster', args: { team: t } }; }
+  return null;
+}
+
 export function parseIntent(question: string): Intent {
   const q = n(question);
   if (INJECT.test(q)) return { kind: 'injection' };
@@ -164,12 +205,17 @@ export function parseIntent(question: string): Intent {
   // Meera captain now? do it"); captain questions get the captain guide, or the roster of the named team ("who is the
   // captain of Juhu Spikers") – never the fair-play / verdict FAQ
   if (captainChange(question, q) || CAPTAIN_SET.test(q)) return { kind: 'write' };
+  if (CAP_WORD.test(q) && disputeOnly(question.normalize('NFKC'), q)) return { kind: 'rag' }; // 1.5.8 (F157-3): a result dispute → the dispute / admin answer
   const WHO_CAP = /^\s(?:who is|who's|whos|who are|name the)\s|\s(?:kaun hai|kaun he|kaun hain|कौन है|कौन हैं)\s/;
   if (captainHelp(question) || (WHO_CAP.test(q) && CAP_WORD.test(q))) {
     const team = entityOf(question, [CAP_WORD, /\s(?:name|names|current|team|tell|batao|bataiye|naam|नाम)\s/]);
     if (WHO_CAP.test(q) && team && [...team].length >= 3 && !team.split(' ').every((w) => GENERIC.has(w))) return { kind: 'tools', calls: [{ name: 'team_roster', args: { team: team.slice(0, 40) } }] };
     return { kind: 'rag', topic: 'captain' };
   }
+  // 1.5.8 (Tester F157-2): more team phrasings – latest result / how did X do / is X playing → live_score (its latest
+  // match, or "which team?"); show X / about X team → team_roster (or "which team?")
+  const tr = teamAsk(q, firstPerson);
+  if (tr) return { kind: 'tools', calls: [tr] };
   if (HOWTO.test(q) && !/\show (is|are)\s.+\s(doing|performing)\s/.test(q)) return { kind: 'rag' };
   // 1.5.4 (Tester F153 Info, disputed paraphrases): "If the admin approves my rejected match, will it count?" / "What
   // happens after I reject a result?" ask for the rule, not for my matches → help / FAQ

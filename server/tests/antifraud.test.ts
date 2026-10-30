@@ -264,8 +264,8 @@ describe('captains and opposing-captain confirmation (AF-36..AF-46)', () => {
     code(ok, 200);
     assert.equal(ok.body.verification.status, 'confirmed');
     assert.equal(ok.body.verification.by, 'aarav');
-    // replay is idempotent; a different decision afterwards is 409
-    code(await h.as('aarav').post(`/api/matches/${id}/confirm`), 200);
+    // 1.5.8 (Tester F157x-1 Info): a replay is 409 already_reviewed now (was an idempotent 200, AF-45); so is a different decision
+    code(await h.as('aarav').post(`/api/matches/${id}/confirm`), 409, 'already_reviewed');
     code(await h.as('aarav').post(`/api/matches/${id}/reject`).send({}), 409, 'already_reviewed');
   });
   it('a scorer on the B side makes B a scoring side: B captain can not confirm', async () => {

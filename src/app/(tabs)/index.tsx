@@ -1,6 +1,6 @@
 import { HomeGreeting } from '../../components/HomeGreeting';
-import { placeLabel } from '../../core/geo';
 import { Ionicons } from '@expo/vector-icons';
+import { useOnline } from '../../services/connectivity';
 import { toPassText } from '../../components/rankText';
 import { router } from 'expo-router';
 import React, { useRef, useState } from 'react';
@@ -33,10 +33,12 @@ import { useLocalScores } from '../../services/localScore';
 import { formatWhenT as formatWhen, translateError } from '../../i18n/format';
 import { notify } from '../../services/dialogs';
 import { colors, elevation, font, gradients, overlineFor, type, themed } from '../../theme';
+import { placeLabelT } from '../../i18n/format';
 
 
 export default function Home() {
   const { t: tr } = useTranslation();
+  const online = useOnline(); // 1.5.8: Home offline indicator
   const me = useMe();
   const myTeams = useWatch<Team[]>((cb) => backend.watchMyTeams(me.id, cb), [me.id]) ?? [];
   // An account from before build 216 with a non-Indian number can't receive invites: say so (N4).
@@ -126,6 +128,13 @@ export default function Home() {
         </View>
 
         <View style={{ paddingHorizontal: 16 }}>
+          {/* 1.5.8 (Tester 360px pass): the app's offline indicator (the match page's sync pill) on Home too */}
+          {!online ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'center', gap: 5, backgroundColor: k.t.surface2, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, marginTop: 8, maxWidth: '100%' }} testID="home-offline" accessibilityLiveRegion="polite">
+              <Ionicons name="cloud-offline" size={13} color={colors.gold} />
+              <Text style={{ color: colors.gold, fontWeight: '700', fontSize: 12 }} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{tr('home.offline')}</Text>
+            </View>
+          ) : null}
           {matches === undefined ? (
             <View testID="home-loading" accessibilityLabel={tr('home.loading')} style={{ marginTop: 14 }}>
               <Skeleton h={190} r={k.t.radius.card} />
@@ -181,7 +190,7 @@ export default function Home() {
             </Text>
           </Row>
           <P muted style={{ marginTop: 4 }}>
-            {formatWhen(c.when)} · {placeLabel(c.location)}
+            {formatWhen(c.when)} · {placeLabelT(c.location)}
           </P>
           {c.message ? <P style={{ marginTop: 4, fontStyle: 'italic' }}>“{c.message}”</P> : null}
           <Row style={{ gap: 10, marginTop: 8 }}>
@@ -277,7 +286,7 @@ function UpcomingRow({ m }: { m: Match }) {
       </View>
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Body bold size={15} numberOfLines={1}>{m.teamA.name} {t('common.vs')} {m.teamB.name}</Body>
-        <Body muted size={12} numberOfLines={1}>{formatWhen(m.scheduledAt)}{placeLabel(m.location) ? ` · ${placeLabel(m.location)}` : ''}</Body>
+        <Body muted size={12} numberOfLines={1}>{formatWhen(m.scheduledAt)}{placeLabelT(m.location) ? ` · ${placeLabelT(m.location)}` : ''}</Body>
       </View>
       <Ionicons name="chevron-forward" size={18} color={k.t.text} />
     </Sticker>

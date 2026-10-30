@@ -6,13 +6,15 @@
  *  - review:    flagged (e.g. played in under 10 minutes) and the other captain confirmed – waiting for an admin
  *  - reviewAwaiting: 1.5.2 (Tester F151-3) flagged AND the other captain hasn't confirmed yet – waiting for both
  *                (an admin's approve only clears the flag; it still needs the captain – ADMIN_APPROVAL)
+ *  - awaitingSecond: 1.5.8 (Tester F157x-1) a two-captain match (created / scored by someone on neither team): one captain
+ *                confirmed, waiting for the other – not counted
  *  - disputed:  the other captain rejected it – never counts (an admin's approve doesn't change that; an admin can void it)
  *  - voided:    an admin voided it – never counts
  * Not finished / abandoned → null.
  */
-import { ADMIN_APPROVAL, captainVerdict, isEligible, matchFlags, matchWinner, verificationStatus, type CountableMatch } from './antifraud';
+import { ADMIN_APPROVAL, captainVerdict, firstConfirm, isEligible, matchFlags, matchWinner, verificationStatus, type CountableMatch } from './antifraud';
 
-export type ResultStatus = 'counted' | 'awaiting' | 'potm' | 'review' | 'reviewAwaiting' | 'disputed' | 'voided';
+export type ResultStatus = 'counted' | 'awaiting' | 'awaitingSecond' | 'potm' | 'review' | 'reviewAwaiting' | 'disputed' | 'voided';
 export function resultStatus(m0: unknown): ResultStatus | null {
   const m = m0 as CountableMatch & { summary?: { winner?: 'A' | 'B' | null } | null };
   if (m.status !== 'finished') return null;
@@ -24,5 +26,5 @@ export function resultStatus(m0: unknown): ResultStatus | null {
   if (captainVerdict(m) === 'rejected' || v === 'disputed') return 'disputed';
   if (v !== 'approved' && matchFlags(m).length) return captainVerdict(m) === 'confirmed' || ADMIN_APPROVAL.COUNTS_WITHOUT_CAPTAIN ? 'review' : 'reviewAwaiting';
   if (!m.playerOfMatchId) return 'potm';
-  return 'awaiting';
+  return firstConfirm(m) ? 'awaitingSecond' : 'awaiting';
 }

@@ -17,7 +17,7 @@ import { useAuth } from '../state/AuthContext';
 import { colors, type } from '../theme';
 import { AdminReviewButtons, flagText, reviewScoreText } from '../components/ResultBadge';
 import { AbandonPanel, abandonedLine, abandonWhy } from '../components/AbandonPanel';
-import { needsAdminAction } from '../core/abandon';
+import { needsAdminAction, playedForAdminReview } from '../core/abandon';
 import { repairedRecently, showsVerdictRepair, VerdictRepairCard } from '../components/VerdictRepairCard';
 
 // a player's name from the match's own rosters (the review list has no profiles loaded)
@@ -29,7 +29,8 @@ export default function AdminReviewScreen() {
   const [list, setList] = useState<Match[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(() => {
-    backend.listFlagged().then(setList).catch((e) => setError(translateError(e, t)));
+    // 1.5.9 (F158-11): played matches only, also when an older backend returns more
+    backend.listFlagged().then((l) => setList(l.filter(playedForAdminReview))).catch((e) => setError(translateError(e, t)));
   }, [t]);
   useEffect(load, [load]);
   const review = async (id: string, d: 'approve' | 'void') => {
@@ -92,9 +93,9 @@ export default function AdminReviewScreen() {
               <View style={{ marginTop: 10 }}>
                 <AbandonPanel match={m} meId={user?.uid ?? ''} isAdmin={isAdmin} nameOf={(uid) => nameOf(m, uid)} onChanged={load} testID={`abandon-panel-${m.id}`} />
               </View>
-            ) : (
+            ) : m.status === 'finished' ? (
               <AdminReviewButtons onApprove={() => void review(m.id, 'approve')} onVoid={() => void review(m.id, 'void')} approveID={`approve-${m.id}`} voidID={`void-${m.id}`} score={reviewScoreText(m, t)} style={{ marginTop: 10 }} />
-            )}
+            ) : null}
           </Card>
         );
       })}

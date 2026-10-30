@@ -39,7 +39,7 @@ describe('F150-2: result states and the team record', () => {
   });
   it('teamRecord: only really-waiting results are "waiting for the other captain"; flagged → review; rejected → disputed; voided not counted', () => {
     const r = teamRecord('t1', [counted, awaiting, tooShortConfirmed, rejected, voided, approvedWaiting, noPotm]);
-    expect(r).toEqual({ played: 1, won: 1, lost: 0, winRate: 100, awaiting: 2, review: 1, reviewAwaiting: 0, disputed: 1, potm: 1, pending: 5 });
+    expect(r).toEqual({ played: 1, won: 1, lost: 0, winRate: 100, awaiting: 2, awaitingSecond: 0, review: 1, reviewAwaiting: 0, disputed: 1, potm: 1, pending: 5 }); // 1.5.8: + awaitingSecond
     // Tester repros: (a) confirmed but too short, (b) rejected, (c) voided → none of them is "waiting for the other captain"
     expect(teamRecord('t2', [tooShortConfirmed]).awaiting).toBe(0);
     expect(teamRecord('t2', [rejected]).awaiting).toBe(0);

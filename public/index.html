@@ -37,7 +37,50 @@
         height: 100%;
         flex: 1;
       }
+      /* 1.5.9 (Tester F158-7): the boot screen follows the SAVED theme (script below), not only the system scheme, and
+         shows the logo until the app's first render replaces #root's content. */
+      html[data-vl-theme="day"],
+      html[data-vl-theme="day"] body {
+        background-color: #FFFAF3;
+      }
+      html[data-vl-theme="night"],
+      html[data-vl-theme="night"] body {
+        background-color: #1E2A44;
+      }
+      #vl-boot {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #vl-boot img {
+        width: 96px;
+        height: 96px;
+      }
     </style>
+    <script>
+      /* 1.5.9 (F158-7): read the saved Appearance choice before the first paint (same storage and rules as
+         src/theme/ThemeProvider.tsx + resolve.ts: AsyncStorage on the web = localStorage "volleylive.theme.v1"; the
+         device default, else the one account that saved a choice, else Auto = Day 06:00-18:00 by the device clock).
+         Anything unreadable leaves the system-scheme colours above. */
+      (function () {
+        try {
+          var s = JSON.parse(window.localStorage.getItem('volleylive.theme.v1') || '{}') || {};
+          var ok = function (v) { return v === 'auto' || v === 'day' || v === 'night'; };
+          var setting = ok(s.setting) ? s.setting : null;
+          if (!setting && s.users && typeof s.users === 'object') {
+            var picks = Object.keys(s.users).map(function (k) { return s.users[k] && s.users[k].setting; }).filter(ok);
+            if (picks.length === 1) setting = picks[0];
+          }
+          if (!setting) setting = 'auto';
+          var d = new Date(), m = d.getHours() * 60 + d.getMinutes();
+          var name = setting === 'auto' ? (m >= 360 && m < 1080 ? 'day' : 'night') : setting;
+          document.documentElement.setAttribute('data-vl-theme', name);
+          var metas = document.querySelectorAll('meta[name="theme-color"]');
+          for (var i = 0; i < metas.length; i++) { metas[i].setAttribute('content', name === 'day' ? '#FFFAF3' : '#1E2A44'); metas[i].removeAttribute('media'); }
+        } catch (e) {}
+      })();
+    </script>
   </head>
 
   <body>
@@ -46,6 +89,6 @@
       You need to enable JavaScript to run this app.
     </noscript>
     <!-- The root element for your Expo app. -->
-    <div id="root"></div>
+    <div id="root"><div id="vl-boot" aria-hidden="true"><img src="/boot-logo.png" alt="" width="96" height="96" /></div></div>
   </body>
 </html>

@@ -54,7 +54,7 @@ describe('V137-1: a captain confirmation recorded before 1.3.7 survives the admi
     const m = (await h.as('bob').get(`/api/matches/${id}`)).body;
     assert.equal(m.verification.status, 'approved');
     assert.equal((await h.as('bob').get('/api/me/wallet')).body.countedMatches, 1);
-    code(await h.as('aarav').post(`/api/matches/${id}/confirm`), 200); // idempotent replay
+    code(await h.as('aarav').post(`/api/matches/${id}/confirm`), 409, 'already_reviewed'); // 1.5.8 (F157x-1 Info): no idempotent 200
     code(await h.as('aarav').post(`/api/matches/${id}/reject`).send({ reason: 'changed my mind' }), 409, 'already_reviewed');
   });
   it('0012 backfills confirmed / rejected from the older columns, only where still NULL, and is re-runnable', async () => {

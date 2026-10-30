@@ -8,7 +8,7 @@ import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { AccessibilityInfo, StyleSheet, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
-import { ADMIN_APPROVAL, ANTI_FRAUD, captainVerdict, confirmProblem, expectedConfirmer, matchFlags, resultState, verificationStatus, type FraudFlag, type ResultState, verdictCaptains } from '../core/antifraud';
+import { ADMIN_APPROVAL, ANTI_FRAUD, captainVerdict, confirmProblem, expectedConfirmer, firstConfirm, needsBothCaptains, verdictStep, matchFlags, resultState, verificationStatus, type FraudFlag, type ResultState, verdictCaptains } from '../core/antifraud';
 import type { Match } from '../core/types';
 import { translateError } from '../i18n/format';
 import { backend } from '../services/backend';
@@ -79,6 +79,10 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
   if (state === 'not_finished' || state === 'abandoned') return null;
   const canConfirm = confirmProblem(match, meId) === null;
   const confirmer = expectedConfirmer(match);
+  // 1.5.8 (Tester F157x-1): created / scored by someone on neither team – both captains confirm
+  const both = needsBothCaptains(match);
+  const first = both ? firstConfirm(match) : null;
+  const firstStep = canConfirm && verdictStep(match, 'confirmed') === 'first';
   const run = async (f: () => Promise<void>, ok: string, kind: 'confirmed' | 'other' = 'other') => {
     setBusy(true);
     setError(null);
@@ -125,7 +129,11 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
           {t('verify.captains')}: {nameOf(match.captains.A) ?? '—'} · {nameOf(match.captains.B) ?? '—'}
         </Text>
       ) : null}
-      {(state === 'awaiting_confirmation' || state === 'approved_awaiting_confirmation') && !canConfirm && confirmer ? (
+      {(state === 'awaiting_confirmation' || state === 'approved_awaiting_confirmation') && first && confirmer ? (
+        <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]} testID="result-first-confirmed">{t('verify.firstConfirmedBy', { name: nameOf(first.by) ?? '—', other: nameOf(confirmer) ?? '—' })}</Text>
+      ) : (state === 'awaiting_confirmation' || state === 'approved_awaiting_confirmation') && both && !canConfirm && match.captains ? (
+        <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]} testID="result-both-confirm">{t('verify.bothConfirm', { a: nameOf(match.captains.A) ?? '—', b: nameOf(match.captains.B) ?? '—' })}</Text>
+      ) : (state === 'awaiting_confirmation' || state === 'approved_awaiting_confirmation') && !canConfirm && confirmer ? (
         <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]}>{t('verify.waitingFor', { name: nameOf(confirmer) ?? '—' })}</Text>
       ) : null}
       {/* 1.4.13 (QA V1412-1): nobody can confirm (e.g. a captain who plays for the other team) – say so, name nobody */}
@@ -135,7 +143,7 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
       {canConfirm ? (
         <View style={s.panel} testID="confirm-panel">
           <Text style={[type.h3, { color: colors.text }]}>{t('verify.askTitle')}</Text>
-          <Text style={[type.body, { color: colors.text, marginTop: 4, marginBottom: 10 }]}>{t('verify.askText')}</Text>
+          <Text style={[type.body, { color: colors.text, marginTop: 4, marginBottom: 10 }]}>{t(both ? 'verify.askTextBoth' : 'verify.askText')}</Text>
           {rejecting ? (
             <>
               <Text style={[type.caption, { color: colors.text, fontWeight: '700' }]} nativeID="reject-reason-label">{t('verify.reason')}</Text>
@@ -158,7 +166,7 @@ export function ResultPanel({ match, meId, isAdmin, nameOf, onConfirmed }: { mat
             </>
           ) : (
             <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Button title={t('verify.confirm')} icon="checkmark" loading={busy} onPress={() => void run(() => backend.confirmResult(match.id), t('verify.confirmedToast'), 'confirmed').then((ok) => ok && onConfirmed?.())} style={{ flex: 1 }} testID="confirm-result" />
+              <Button title={t('verify.confirm')} icon="checkmark" loading={busy} onPress={() => void run(() => backend.confirmResult(match.id), t(firstStep ? 'verify.firstConfirmedToast' : 'verify.confirmedToast'), firstStep ? 'other' : 'confirmed').then((ok) => ok && onConfirmed?.())} style={{ flex: 1 }} testID="confirm-result" />
               <Button title={t('verify.reject')} icon="flag-outline" variant="secondary" onPress={() => setRejecting(true)} style={{ flex: 1 }} testID="reject-result" />
             </View>
           )}

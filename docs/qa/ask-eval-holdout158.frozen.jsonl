@@ -1,0 +1,12 @@
+{"id": "holdout158-01", "cat": "holdout158", "lang": "en", "as": "aarav", "q": "Juhu's most recent game?", "expect": {"tools": ["live_score"], "contains": ["Which one"]}}
+{"id": "holdout158-02", "cat": "holdout158", "lang": "en", "as": "aarav", "q": "display Juhu", "expect": {"contains": ["Which one"]}}
+{"id": "holdout158-03", "cat": "holdout158", "lang": "hi", "as": "aarav", "q": "Juhu team ke baare mein batao", "expect": {"contains": ["आप किसकी बात"]}}
+{"id": "holdout158-04", "cat": "holdout158", "lang": "en", "as": "aarav", "q": "how has Juhu T02 fared", "expect": {"tools": ["live_score"], "contains": ["Latest match"]}}
+{"id": "holdout158-05", "cat": "holdout158", "lang": "en", "as": "aarav", "q": "what are a skipper's duties?", "expect": {"refusal": null, "contains": ["creates a team is its captain"]}}
+{"id": "holdout158-06", "cat": "holdout158", "lang": "en", "as": "aarav", "q": "is captaincy a member-only role?", "expect": {"refusal": null, "contains": ["creates a team is its captain"]}}
+{"id": "holdout158-07", "cat": "holdout158", "lang": "hi", "as": "aarav", "q": "captain ki zimmedari kya hai?", "expect": {"refusal": null, "contains": ["कप्तान होता है"]}}
+{"id": "holdout158-08", "cat": "holdout158", "lang": "en", "as": "aarav", "q": "their captain rejected the score – will an admin overrule it?", "expect": {"refusal": null, "notContains": ["creates a team is its captain"]}}
+{"id": "holdout158-09", "cat": "holdout158", "lang": "en", "as": "aarav", "q": "I want to resign as skipper, how?", "expect": {"refusal": null, "contains": ["no button to step down"]}}
+{"id": "holdout158-10", "cat": "holdout158", "lang": "en", "as": "aarav", "q": "swap our skipper for Dev right away", "expect": {"refusal": "write", "noTools": true}}
+{"id": "holdout158-11", "cat": "holdout158", "lang": "en", "as": "aarav", "q": "Juhu T03", "expect": {"contains": ["Juhu T03 has"]}}
+{"id": "holdout158-12", "cat": "holdout158", "lang": "en", "as": "aarav", "q": "Zanzibar Zebras", "expect": {"idk": true}}

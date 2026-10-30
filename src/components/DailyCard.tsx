@@ -95,7 +95,14 @@ function DailyBody({ item, lang, title, onNext }: { item: DailyItem; lang: strin
         ) : null}
       </PressableScale>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
-        {k.day ? <Text style={[{ color: tk.text, fontSize: 13 }, k.f.bold]}>{t('daily.tapNext')} →</Text> : <View />}
+        {/* 1.5.9 (Tester, daily quote): the Day "Tap for next" label sat outside the card's button, so tapping the words
+            themselves did nothing. It now shows the next item too; it is not a second focus stop / screen-reader button
+            (the card above is the one button, with its "next" hint). */}
+        {k.day ? (
+          <Text onPress={onNext} accessible={false} importantForAccessibility="no" {...({ tabIndex: -1, 'aria-hidden': true } as object)} suppressHighlighting style={[{ color: tk.text, fontSize: 13, minHeight: 44, textAlignVertical: 'center', lineHeight: 44 }, k.f.bold]} testID="daily-tap-next">
+            {t('daily.tapNext')} →
+          </Text>
+        ) : <View />}
         <PressableScale
           onPress={() => void shareOrCopy(shareMessage(item, lang))}
           accessibilityRole="button"

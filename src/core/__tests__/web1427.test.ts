@@ -9,5 +9,6 @@ it('public/index.html starts on the Day / Night splash background of app.config.
   expect(cfg).toContain("backgroundColor: '#1E2A44'");
   expect(html).toMatch(/body \{\s*background-color: #FFFAF3;/);
   expect(html).toMatch(/prefers-color-scheme: dark\) \{\s*html,\s*body \{\s*background-color: #1E2A44;/);
-  expect(html).toContain('<div id="root"></div>');
+  // 1.5.9 (F158-7): #root now holds the boot logo until the first render replaces it
+  expect(html).toMatch(/<div id="root"><div id="vl-boot" aria-hidden="true"><img src="\/boot-logo.png"/);
 });

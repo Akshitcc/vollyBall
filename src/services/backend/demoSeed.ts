@@ -175,7 +175,8 @@ export function makeSeed(now = Date.now()): DemoDB {
     color: '#6A1B9A',
     captainId: 'seed19',
     memberIds: ids.slice(18, 26), // 8 players (R136-20)
-    subIds: [],
+    // 1.5.9 (Tester F158-12): 6 starters + the 2 bench players as subs – with no subs it read "8/6 starters"
+    subIds: ids.slice(24, 26),
     pendingPhones: [],
     city: 'Gurugram',
     createdAt: now - 15 * DAY,
@@ -333,7 +334,8 @@ export function makeSeed(now = Date.now()): DemoDB {
   // production bundles – metro.config.js DEMO_STUBS, checked by scripts/check-strip.js – and never written to a real
   // backend). GU11: the scorer was handed over from a team-B player (scorerReassign.from on B, creator on A) – nobody
   // can confirm; a scorer repair fixes it. Captain mismatch: team B's captain is a team-A player – only a captain repair
-  // (a team-B player) fixes it. Both scheduled, so the repair card shows on the admin review list and the match page.
+  // (a team-B player) fixes it. Both scheduled: the repair card shows on the match page (1.5.9, F158-11: the admin
+  // review list holds played matches only, so these two are no longer listed there as future "flagged" matches).
   const legacyGu11: Match = {
     ...mk('match_demo_gu11', INDOOR_RULES, [], { status: 'scheduled' }),
     status: 'scheduled',

@@ -40,11 +40,19 @@ export function decideTeamUpdate(before: TeamDoc, after: TeamDoc, viewer: Identi
     if (added.some((p) => !isValidE164(p))) {
       throw new HttpError(400, INVALID_PHONE_CODE, `Invalid request: pendingPhones – ${INVALID_PHONE_MESSAGE}`, { field: 'pendingPhones' });
     }
-    if (added.some((p) => !registered.has(p))) throw forbidden('teams.update.invitesOnlyRegistered', "This number isn't on VolleyLive yet. Ask them to register first.");
+    // 1.5.9 (Tester F158-2): no "not registered" answer here any more – it made every invite a free test of whether a
+    // number has an account. A valid number is invited either way (the invite waits for that number to sign up; only a
+    // registered player is notified). The app still looks the number up first (counted, GET /users/by-phone) and
+    // tells the captain when there is no account. `registered` is kept for the notification.
+    void registered;
     // PRD limits (not expressible in the rules language):
     if (minus(after.memberIds, before.memberIds).length) throw forbidden(rule, 'Players join by accepting an invite; the captain cannot add them directly');
     if (minus(after.subIds, after.memberIds).length) throw forbidden(rule, 'Subs must be team members');
     if (after.subIds.length > MAX_SUBS) throw forbidden(rule, `At most ${MAX_SUBS} subs`);
+    // 1.5.9 (Tester F158-12, "8/6 starters"): never more than TEAM_SIZE starters; an older team already over it can
+    // still be edited as long as the change doesn't add starters (moving someone to subs fixes it)
+    const startersOf = (t: TeamDoc) => t.memberIds.filter((m) => !t.subIds.includes(m)).length;
+    if (startersOf(after) > TEAM_SIZE && startersOf(after) > startersOf(before)) throw forbidden(rule, `At most ${TEAM_SIZE} starters; the rest are subs`);
     if (after.memberIds.length + after.pendingPhones.length > MAX_MEMBERS) throw forbidden(rule, `Members plus pending invites cannot exceed ${MAX_MEMBERS}`);
     if (new Set(after.pendingPhones).size !== after.pendingPhones.length) throw badRequest('Duplicate invite');
     return 'captain';

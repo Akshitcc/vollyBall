@@ -61,11 +61,11 @@ export function serverToolHost(s: Services, viewer: Identity): ToolHost {
       return (await matches.loadMatches(s, s.db, ids, viewer)) as unknown as Match[];
     },
     async teamMatches(q) {
-      // 1.5.7 (F156-5): a named team outside the window – its own finished matches, same viewer-scoped loader
-      const ws = q.toLocaleLowerCase().split(/\s+/).filter((w) => [...w].length >= 3).slice(0, 4);
-      if (!ws.length) return [];
-      const ids = await matches.listMatchIds(s.db, { status: ['finished'], byFinished: true, sideNameLike: ws, limit: 100 });
-      return (await matches.loadMatches(s, s.db, ids, viewer)) as unknown as Match[];
+      // 1.5.7 (F156-5) / 1.5.8 (F157-1): a named team outside the window – side names first (exact → prefix → all words →
+      // any word), then each name's latest finished matches, through the same viewer-scoped loader
+      const { names } = await matches.finishedSideNames(s.db, q);
+      const ids = (await Promise.all(names.map((n) => matches.listMatchIds(s.db, { status: ['finished'], byFinished: true, sideNameIs: n, limit: 10 })))).flat();
+      return (await matches.loadMatches(s, s.db, [...new Set(ids)], viewer)) as unknown as Match[];
     },
     myTeams,
     async findTeams(q) {

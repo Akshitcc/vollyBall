@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ScrollView, Text, TextInput, View } from 'react-native';
+import { starKeyProps } from '../components/starKeys';
 import { PressableScale } from '../components/PressableScale';
 import { Button, styles as ui } from '../components/ui';
 import { checkFeedback, FEEDBACK_MAX } from '../core/reviewPrompt';
@@ -50,6 +51,7 @@ export default function FeedbackScreen() {
           <PressableScale
             key={n}
             onPress={() => setStars(n)}
+            {...starKeyProps(n, setStars)}
             accessibilityRole="radio"
             accessibilityState={{ checked: stars === n }}
             accessibilityLabel={t('feedback.starN', { count: n })}

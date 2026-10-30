@@ -77,17 +77,27 @@ export function verifyDoc(raw: Raw, me: string, status: 'confirmed' | 'disputed'
   const fromApproved = old.status === 'approved' && (old.epoch ?? 0) === (raw.reopenEpoch ?? 0);
   return {
     verification: fromApproved
-      ? clean({ status: 'approved', captain, by: me, at: fx.stamp, reason: reason || undefined, reviewedBy: old.reviewedBy, reviewedAt: old.reviewedAt, ...epochOf(raw) })
-      : clean({ status, captain, by: me, at: fx.stamp, reason: reason || undefined, ...epochOf(raw) }),
+      ? clean({ status: 'approved', captain, by: me, at: fx.stamp, reason: reason || undefined, reviewedBy: old.reviewedBy, reviewedAt: old.reviewedAt, first: old.first, ...epochOf(raw) })
+      : clean({ status, captain, by: me, at: fx.stamp, reason: reason || undefined, first: old.first, ...epochOf(raw) }),
     updatedAt: now,
   };
+}
+
+/**
+ * 1.5.8 (Tester F157x-1): the first of two captain confirmations (core verdictStep 'first'): only `verification.first`
+ * is added ({by, at: server time, epoch}); every other verification field stays as it was (firestore.rules firstConfirmOk).
+ */
+export function firstConfirmDoc(raw: Raw, me: string, fx: FxSentinels, now: number): Out {
+  const old = (raw.verification ?? {}) as Raw;
+  const epoch = Number(raw.reopenEpoch ?? 0);
+  return { verification: clean({ status: 'pending', ...old, first: { by: me, at: fx.stamp, epoch } }), updatedAt: now };
 }
 
 /** An admin's approve / void; the captain's answer fields are kept, the verdict written explicitly. */
 export function reviewDoc(raw: Raw, me: string, decision: 'approve' | 'void', captain: string | null, fx: FxSentinels, now: number): Out {
   const old = (raw.verification ?? {}) as Raw;
   return {
-    verification: clean({ by: old.by, at: old.at, reason: old.reason, captain: captain ?? undefined, status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: fx.stamp, ...epochOf(raw) }),
+    verification: clean({ by: old.by, at: old.at, reason: old.reason, first: old.first, captain: captain ?? undefined, status: decision === 'approve' ? 'approved' : 'voided', reviewedBy: me, reviewedAt: fx.stamp, ...epochOf(raw) }),
     updatedAt: now,
   };
 }

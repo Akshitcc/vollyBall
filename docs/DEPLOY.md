@@ -45,6 +45,11 @@ Before submitting:
       like the app?" first and only sending happy users to the store is review gating, which Google Play
       policy forbids. Never offer rewards for reviews.
 - [ ] **C130-1** (sock-puppet opposing captain) – decide; not implemented.
+- [ ] **1.5.9 Firebase private profile (F158-3) – needs your approval:** deploy the 1.5.9 `firestore.rules` and run
+      the profile data migration, in the order in "1.5.9 – Firebase private profile" below. Neither has been run anywhere
+      except the local emulator.
+- [ ] **1.5.9 product call (F158-3):** on Firebase, other players no longer see a player's position / city (owner-only
+      now); the API backend still shows them. Keep, or make position public again (one key in the rules + the app).
 - [ ] Device QA on a real phone (QA R1-02, R11-01 pre-launch report).
 
 ## Release steps (DEV, in order)
@@ -197,6 +202,59 @@ aapt2 dump badging app.apk | head -3        # versionName / versionCode / sdk
 EXPO_PUBLIC_BACKEND=api EXPO_PUBLIC_API_AUTH=otp EXPO_PUBLIC_STRIP_DEMO=1 APP_VARIANT=production \
   EXPO_PUBLIC_API_URL=https://api.example.com npx expo export -p web && npm run check:strip
 ```
+
+## Build toolchain: Node pinned to Unicode 16.0 (1.5.8)
+
+The generated email allow lists (`src/core/emailChars.ts`, `src/core/emailCharsWide.ts` and the `// <email-letters>`
+block in `firestore.rules`, from `scripts/gen-email-chars.js`) depend on the Node/ICU Unicode version. They were
+generated with **Unicode 16.0**. Node **24.13.1 and later** (ICU 78.2, incl. the box's 24.22.x) report **Unicode 17.0**:
+there the "generator is up to date" checks fail (jest fixes143, rules-tests V143-6), and the jest one **rewrites the
+generated files**, so a build would ship different (slightly wider) lists.
+
+- 1.5.8 is built with **official Node v24.13.0** (ICU 77.1, Unicode 16.0, ABI `modules` 137 = same as the system 24.x),
+  from nodejs.org/dist, `node-v24.13.0-linux-x64.tar.xz` checked against that release's `SHASUMS256.txt`, unpacked to
+  `/home/box/tools/node-v24.13.0-linux-x64/`. v24.13.0 is the newest 24.x with Unicode 16.0 (checked: 24.11.1, 24.12.0,
+  24.13.0 = 16.0; 24.13.1, 24.14.0, 24.15.0 = 17.0). The system node is unchanged.
+- `scripts/finish158.sh` puts that `bin` first on `PATH` and **fails at start-up** unless `node -p process.versions.unicode`
+  is `16.0`; it logs the node / npm versions to `pipeline.log`. Native modules were rebuilt under it (`npm rebuild` in
+  the app, `server`, `rules-tests` and `scripts/shots`).
+- Anyone building or running the suites by hand (or in CI / EAS): use a Node with Unicode 16.0 (≤ 24.13.0 on the 24 line),
+  or the checks fail and jest rewrites the lists. **Open (Akshit):** moving to Unicode 17 is a deliberate change – run the
+  generator, review the widened letter set, deploy the rules and the app together (`emailOk` above).
+
+## 1.5.9 – Firebase private profile (Tester F158-3) – NEEDS AKSHIT'S APPROVAL
+Only for the Firebase backend (the API / MySQL backend needs nothing: its by-phone lookup already answers id, name and
+photo only, and phone numbers never leave the server). Nothing below has been run on a real project.
+
+What changes: users/{uid} (readable by every signed-in user) now holds only id, name, photoURL, firstName, lastName,
+createdAt, updatedAt. The mobile number, playing position and city live in users/{uid}/private/profile, which only
+the owner can read or write (admins too are refused – no admin screen needs them). The phone lookup is
+phoneIndex/{phone} → { uid } only, and each lookup must first be counted in phoneLookups/{uid} (rules: at most 60 per
+rolling hour per account; the app also throttles: burst 30, 10 / minute). Team invites need a counted lookup of the
+invited number. **Limit:** Firestore rules can't see the caller's IP address, so there is no per-IP limit on
+Firebase (the API backend has one); a per-IP limit there would need a Cloud Function in front of the lookup.
+
+Order (each step reversible until the old fields are deleted):
+1. Back up Firestore (`gcloud firestore export gs://<bucket>/pre-159`).
+2. The 1.5.9 app and the 1.5.9 rules go live TOGETHER – they don't mix with 1.5.8 either way: under the 1.5.8 rules a
+   1.5.9 app can't write private/profile or count a lookup (profile save and add-by-number fail), and under the 1.5.9
+   rules a 1.5.8 app can't save a profile (its public doc carries phone / position / city) or look a number up. If no
+   1.5.8 build is in users' hands yet (the Play listing is still on the checklist above), this is simply "deploy these
+   rules with this app". If one is: force-update to 1.5.9, then deploy the rules.
+   The 1.5.9 app reads the private doc with a fallback to the legacy public fields, and moves its own user's fields on
+   the next sign-in (moveLegacyProfile).
+3. Deploy the rules: `firebase deploy --only firestore:rules --project <id>` (with your own login).
+4. Dry run of the migration, then apply (your own Application Default Credentials; the project id typed twice;
+   FIRESTORE_EMULATOR_HOST unset):
+   `node scripts/admin/migrate-private-profiles.js --project <id> --real-project <id>` then the same with `--apply`.
+   It creates private/profile (never overwrites one), moves a legacy pushToken to pushTokens/{uid} when that doc is
+   missing, deletes phone / position / city / pushToken from the public doc, never prints numbers or tokens, and
+   lists – without touching – any other non-public key (the rules would refuse that user's next save until it is
+   removed) and any doc with no number and no private doc (check by hand).
+5. Check: the dry run reports 0 to migrate.
+Rollback: redeploy the 1.5.8 rules (public docs keep working; the private docs are simply unused) and, if the fields
+were already deleted, restore them from the step-1 export.
+Tested: locally on the emulator only (scripts/admin/test-migrate-private-profiles.js; rules-tests "1.5.9 (Tester F158-3)").
 
 ## 1.4.6 – one lifecycle table (QA V145)
 

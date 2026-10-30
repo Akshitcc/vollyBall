@@ -34,6 +34,7 @@ export const DEFAULT_RATE_LIMITS: RateLimits = Object.freeze({
 }) as RateLimits;
 
 export const RATE_LIMITED = 'rate_limited';
+const LIFTED_RULE: RateRule = Object.freeze({ burst: 1e6, perMinute: 1e6 });
 
 export class RateLimiter {
   private buckets = new Map<string, { tokens: number; at: number }>();
@@ -48,6 +49,12 @@ export class RateLimiter {
   ) {
     this.limits = { terms: { ...limits.terms }, verify: { ...limits.verify }, matchWrite: { ...limits.matchWrite } };
   }
+
+  /**
+   * 1.5.9: simulations only (tests/auditHelpers liftLimits) – named rules passed by the caller (phone lookups, invites,
+   * pincode) are lifted too. Never set by the app; production limiters always keep it false.
+   */
+  liftNamed = false;
 
   /** Forget every count (tests). */
   reset() {
@@ -93,7 +100,7 @@ export class RateLimiter {
    * take the API down: the request falls back to this process's in-memory bucket (logged as a warning).
    */
   async takeShared(id: string, bucket: RateBucket | string, rule?: RateRule): Promise<number> {
-    const r = rule ?? this.limits[bucket as RateBucket];
+    const r = rule && this.liftNamed ? LIFTED_RULE : rule ?? this.limits[bucket as RateBucket];
     if (this.store) {
       try {
         return await this.store.take(`${bucket}:${id}`, r);

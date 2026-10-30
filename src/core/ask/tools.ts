@@ -185,6 +185,18 @@ export function pickTeam(q: string, ms: readonly Match[]): { matches: Match[]; a
   if (close.length > 1) return { matches: [], ambiguous: close.map((t) => t.name).slice(0, 6), exact: false };
   return { matches: byDate(ranked[0].matches), ambiguous: [], exact: false };
 }
+/**
+ * 1.5.8 (Tester F157-2): rank team NAMES (match sides and registered teams, also teams with no matches) for a query:
+ * an exact case-insensitive name → that one; else every name within AMBIG_GAP of the best score (≥ NAME_MIN).
+ */
+export function rankTeamNames(q: string, names: readonly string[]): { exact: string | null; close: string[] } {
+  const nq = normName(q);
+  const uniq = [...new Map(names.filter((x) => normName(x)).map((x) => [normName(x), x])).values()];
+  const ex = uniq.find((x) => normName(x) === nq);
+  if (ex) return { exact: ex, close: [ex] };
+  const scored = uniq.map((x) => ({ x, s: nameScore(q, x) })).filter((e) => e.s >= NAME_MIN).sort((a, b) => b.s - a.s);
+  return { exact: null, close: scored.length ? scored.filter((e) => e.s >= scored[0].s - AMBIG_GAP).map((e) => e.x).slice(0, 6) : [] };
+}
 const ambiguousTeam = (q: string, names: string[]) => ({ data: { team: q, live: [], total: 0, ambiguous: names }, cards: [] as AskCard[] });
 
 // ---------- labels (EN / HI) ----------
@@ -274,7 +286,9 @@ const IMPL: Record<AskToolName, Impl> = {
     const q = String(args.team);
     const pool = [...(await host.myTeams()), ...(await host.findTeams(q))];
     const uniq = [...new Map(pool.map((t) => [t.id, t])).values()];
-    const best = bestByName(q, uniq, (t) => t.name);
+    // 1.5.8 (F157-2): exact name first, else every team within the ambiguity gap of the best → "which team?"
+    const rk = rankTeamNames(q, uniq.map((t) => t.name));
+    const best = rk.exact ? uniq.filter((t) => normName(t.name) === normName(rk.exact!)).slice(0, 1) : uniq.filter((t) => rk.close.some((c) => normName(c) === normName(t.name)));
     if (!best.length) return { data: { found: 0 }, cards: [] };
     if (best.length > 1) return { data: { found: best.length, candidates: best.slice(0, 5).map((t) => t.name) }, cards: [{ type: 'list', kind: 'teams', items: best.slice(0, ASK_CARD_ROWS).map((t) => ({ id: t.id, title: t.name })) }] };
     const t = best[0];
@@ -322,6 +336,13 @@ const IMPL: Record<AskToolName, Impl> = {
         picked = pickTeam(q, pool);
       }
       if (picked.ambiguous.length) return ambiguousTeam(q, picked.ambiguous);
+      // 1.5.8 (F157-2): registered teams count too, also ones with no matches ("Juhu" → Juhu Jets / Juhu Jaguars)
+      if (!picked.exact) {
+        const regs = (await host.findTeams(q)).map((t) => t.name);
+        const sides = picked.matches[0] ? [picked.matches[0].teamA.name, picked.matches[0].teamB.name].filter((x) => nameScore(q, x) >= NAME_MIN) : [];
+        const rk = rankTeamNames(q, [...sides, ...regs]);
+        if (!rk.exact && rk.close.length > 1) return ambiguousTeam(q, rk.close);
+      }
       const m = picked.matches[0];
       if (m) {
         const sets = (m.summary?.setScores ?? []).map((x) => `${x.a}-${x.b}`);

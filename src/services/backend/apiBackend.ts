@@ -23,7 +23,7 @@ import type { Challenge, ChallengeStatus, Court, Match, MatchPhoto, Team, Tourna
 import type { AbandonAnswer, ResolveAction } from '../../core/abandon';
 import { API_DEV_AUTH, API_OTP_AUTH, API_URL, DEMO_OTP } from '../config';
 import { IDEMPOTENCY_KEY_RE, inviteState, PHOTO_WRONG_ACCOUNT, type InviteState } from './types';
-import type { AuthUser, Backend, FeedbackItem, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, PhoneVerifier, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
+import type { AuthUser, Backend, PhoneLookupUser, FeedbackItem, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, PhoneVerifier, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
 import type { TermsAcceptance } from '../../core/terms';
 import { CodedError } from '../../core/codedError';
 import { readPhoto } from '../photoFile';
@@ -459,7 +459,7 @@ export class ApiBackend implements Backend {
     return out;
   }
   findUserByPhone(phone: string) {
-    return this.getOrNull<UserProfile>(`/users/by-phone/${encodeURIComponent(phone)}`);
+    return this.getOrNull<PhoneLookupUser>(`/users/by-phone/${encodeURIComponent(phone)}`);
   }
   /** Reads + checks the photo on the client (services/photoFile.ts), then POSTs it with its sniffed type. */
   private async upload<T>(path: string, localUri: string, headers?: Record<string, string>) {

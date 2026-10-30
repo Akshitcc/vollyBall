@@ -170,6 +170,7 @@ export default function TeamPage() {
         {/* 1.5.0 (F1428-3): unconfirmed results don't count yet – say so instead of hiding them silently */}
         {/* 1.5.1 (Tester F150-2): each open result by its real state; voided results are not counted at all */}
         {rec.awaiting ? <Body muted size={12} style={{ marginTop: 8 }} testID="team-stats-pending">{t('dn.pendingResults', { count: rec.awaiting })}</Body> : null}
+        {rec.awaitingSecond ? <Body muted size={12} style={{ marginTop: 4 }} testID="team-stats-awaiting-second">{t('dn.awaitingSecondResults', { count: rec.awaitingSecond })}</Body> : null}
         {rec.review ? <Body muted size={12} style={{ marginTop: 4 }} testID="team-stats-review">{t('dn.reviewResults', { count: rec.review })}</Body> : null}
         {rec.reviewAwaiting ? <Body muted size={12} style={{ marginTop: 4 }} testID="team-stats-review-awaiting">{t('dn.reviewAwaitingResults', { count: rec.reviewAwaiting })}</Body> : null}
         {rec.disputed ? <Body muted size={12} style={{ marginTop: 4 }} testID="team-stats-disputed">{t('dn.disputedResults', { count: rec.disputed })}</Body> : null}
@@ -185,7 +186,9 @@ export default function TeamPage() {
       <Row style={{ marginTop: 20, marginBottom: 8 }}>
         <Display size={20} style={{ flex: 1 }} accessibilityRole="header">{t('team.startingSix')}</Display>
         <Body muted size={12}>
-          {t('team.summary', { starters: starters.length, size: TEAM_SIZE, subs: subs.length })}
+          {starters.length > TEAM_SIZE
+            ? t('team.summaryOver', { starters: starters.length, size: TEAM_SIZE, subs: subs.length, extra: starters.length - TEAM_SIZE })
+            : t('team.summary', { starters: starters.length, size: TEAM_SIZE, subs: subs.length })}
           {team.pendingPhones.length ? t('team.invitedCount', { count: team.pendingPhones.length }) : ''}
         </Body>
       </Row>

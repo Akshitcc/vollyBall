@@ -12,3 +12,4 @@ Backups: volleylive-latest.apk.bak52, volleylive.zip.bak66, backups/volleylive-1
 - [x] fixes157chat bubble test (EN + HI, API + demo host) 30/30.
 - [x] app.config.ts 1.5.7 / 52.
 - [x] Pipeline START=1 STOP_AFTER_SCAN=1: suites ok (jest 2514/173, server 560, rules 226, policy, tz), eval 354/358, scan 268/0/0. RELEASE-1.5.7 written.
+- [x] Pipeline START=4: test_mkzip all passed, zip 685 files, APK vc52 / 1.5.7, same cert fac61745…033b9c, shas verified (/workspace/volleylive-1.5.7-shas.txt).

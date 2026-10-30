@@ -149,12 +149,19 @@ describe('1.5.0 ask: limits, refusals and injection', () => {
 describe('1.5.0 ask: rate limit + audit (no secrets)', () => {
   it('the 21st quick question is 429 rate_limited and audited', async () => {
     h.s.rateLimiter?.reset();
-    let last = 0;
-    for (let i = 0; i < 21; i++) last = (await h.as(PRIYA).post('/api/ask/chat').send({ question: 'live score', lang: 'en' })).status;
-    assert.equal(last, 429);
-    const a = await h.db('ask_audit').where({ user_id: PRIYA.uid, outcome: 'rate_limited' }).count({ n: '*' });
-    assert.ok(Number(a[0].n) >= 1);
-    h.s.rateLimiter?.reset();
+    // 1.5.9: the test-only liftNamed switch (auditHelpers.liftLimits) would disable the Ask limit this test checks.
+    const lifted = h.s.rateLimiter?.liftNamed ?? false;
+    if (h.s.rateLimiter) h.s.rateLimiter.liftNamed = false;
+    try {
+      let last = 0;
+      for (let i = 0; i < 21; i++) last = (await h.as(PRIYA).post('/api/ask/chat').send({ question: 'live score', lang: 'en' })).status;
+      assert.equal(last, 429);
+      const a = await h.db('ask_audit').where({ user_id: PRIYA.uid, outcome: 'rate_limited' }).count({ n: '*' });
+      assert.ok(Number(a[0].n) >= 1);
+    } finally {
+      if (h.s.rateLimiter) h.s.rateLimiter.liftNamed = lifted;
+      h.s.rateLimiter?.reset();
+    }
   });
   it('audit rows: masked question, tools + args, provider, latency – no phone, no key (1.5.3: no unsalted hash)', async () => {
     const q = `my stats, my number is ${CHALLENGE_MSG_PHONE}`;

@@ -32,6 +32,26 @@ async function updateDoc(ref, data, ...rest) {
   if (data.status === 'finished' && !('wasWon' in data)) extra.wasWon = true;
   return rawUpdateDoc(ref, { ...data, ...extra });
 }
+// 1.5.9 (Tester F158-3): a profile save as the app does it (firebaseBackend saveProfile) – the public fields on
+// users/{uid}, phone / position / city on the owner-only users/{uid}/private/profile, in one batch.
+const PRIVATE_PROFILE_KEYS = ['phone', 'position', 'city'];
+function putUser(db, uid, data) {
+  const pub = {};
+  const priv = {};
+  for (const [k, v] of Object.entries(data)) (PRIVATE_PROFILE_KEYS.includes(k) ? priv : pub)[k] = v;
+  const b = writeBatch(db);
+  b.set(doc(db, `users/${uid}/private/profile`), priv);
+  b.set(doc(db, `users/${uid}`), pub);
+  return b.commit();
+}
+// 1.5.9 (F158-3): count a lookup as the app does (firebaseBackend countLookup): same window n + 1, else a new window.
+async function lookup(db, uid, phone) {
+  const ref = doc(db, `phoneLookups/${uid}`);
+  const cur = await getDoc(ref);
+  const d = cur.exists() ? cur.data() : null;
+  if (d && d.q === phone) return;
+  return setDoc(ref, d ? { q: phone, n: d.n + 1, since: d.since } : { q: phone, n: 1, since: serverTimestamp() });
+}
 const hostPort = (v, port) => (v ? { host: v.split(':')[0], port: Number(v.split(':')[1]) } : { host: '127.0.0.1', port });
 const PHONES = { cap: '+919000000001', bob: '+919000000002', eve: '+919000000003' };
 const ctx = (uid) => env.authenticatedContext(uid, { phone_number: PHONES[uid] });
@@ -135,17 +155,21 @@ beforeEach(async () => {
 
 describe('users & phone index', () => {
   test('can create own profile with own verified phone', async () => {
-    await assertSucceeds(setDoc(doc(ctx('bob').firestore(), 'users/bob'), { name: 'Bob', phone: PHONES.bob }));
+    await assertSucceeds(putUser(ctx('bob').firestore(), 'bob', { name: 'Bob', phone: PHONES.bob }));
   });
   test('cannot claim another number', async () => {
-    await assertFails(setDoc(doc(ctx('bob').firestore(), 'users/bob'), { name: 'Bob', phone: PHONES.eve }));
+    await assertFails(putUser(ctx('bob').firestore(), 'bob', { name: 'Bob', phone: PHONES.eve }));
     await assertFails(setDoc(doc(ctx('bob').firestore(), `phoneIndex/${PHONES.eve}`), { uid: 'bob' }));
   });
-  test('phone lookup is get-only', async () => {
+  test('phone lookup is get-only (1.5.9: and counted)', async () => {
     const db = ctx('bob').firestore();
     await assertSucceeds(setDoc(doc(db, `phoneIndex/${PHONES.bob}`), { uid: 'bob' }));
-    await assertSucceeds(getDoc(doc(ctx('eve').firestore(), `phoneIndex/${PHONES.bob}`)));
-    await assertFails(getDocs(collection(ctx('eve').firestore(), 'phoneIndex')));
+    await assertSucceeds(getDoc(doc(db, `phoneIndex/${PHONES.bob}`))); // your own entry
+    const eve = ctx('eve').firestore();
+    await assertFails(getDoc(doc(eve, `phoneIndex/${PHONES.bob}`))); // not counted yet
+    await assertSucceeds(lookup(eve, 'eve', PHONES.bob));
+    await assertSucceeds(getDoc(doc(eve, `phoneIndex/${PHONES.bob}`)));
+    await assertFails(getDocs(collection(eve, 'phoneIndex')));
   });
   test('push tokens are private', async () => {
     await assertSucceeds(setDoc(doc(ctx('bob').firestore(), 'pushTokens/bob'), { token: 'x' }));
@@ -159,13 +183,13 @@ describe('phone numbers: Indian mobiles only, ^\\+91[6-9]\\d{9}$ (QA G6)', () =>
   test('profile and phone index: deny malformed numbers (even when the token carries them)', async () => {
     for (const [i, phone] of BAD.entries()) {
       const db = as(`bad${i}`, phone).firestore();
-      await assertFails(setDoc(doc(db, `users/bad${i}`), { name: 'Bad', phone }));
+      await assertFails(putUser(db, `bad${i}`, { name: 'Bad', phone }));
       await assertFails(setDoc(doc(db, `phoneIndex/${phone}`), { uid: `bad${i}` }));
     }
   });
   test('profile and phone index: allow a valid number', async () => {
     const db = as('good', '+916000000001').firestore();
-    await assertSucceeds(setDoc(doc(db, 'users/good'), { name: 'Good', phone: '+916000000001' }));
+    await assertSucceeds(putUser(db, 'good', { name: 'Good', phone: '+916000000001' }));
     await assertSucceeds(setDoc(doc(db, 'phoneIndex/+916000000001'), { uid: 'good' }));
   });
   test('invites: deny a malformed number even if it is in phoneIndex; allow a valid registered one', async () => {
@@ -174,13 +198,128 @@ describe('phone numbers: Indian mobiles only, ^\\+91[6-9]\\d{9}$ (QA G6)', () =>
       await setDoc(doc(c.firestore(), `phoneIndex/${PHONES.eve}`), { uid: 'eve' });
     });
     await assertFails(updateDoc(doc(ctx('cap').firestore(), 'teams/t1'), { pendingPhones: arrayUnion('+9198765432101') }));
+    await lookup(ctx('cap').firestore(), 'cap', PHONES.eve);
     await assertSucceeds(updateDoc(doc(ctx('cap').firestore(), 'teams/t1'), { pendingPhones: arrayUnion(PHONES.eve) }));
+  });
+});
+
+describe('1.5.9 (Tester F158-3): private profile, public profile, counted phone lookups', () => {
+  const rulesSrc = fs.readFileSync(path.join(__dirname, '../firestore.rules'), 'utf8');
+  test('the owner can read and write the private profile; nobody else can', async () => {
+    await assertSucceeds(putUser(ctx('bob').firestore(), 'bob', { name: 'Bob', phone: PHONES.bob, position: 'setter', city: 'Delhi' }));
+    await assertSucceeds(getDoc(doc(ctx('bob').firestore(), 'users/bob/private/profile')));
+    await assertFails(getDoc(doc(ctx('eve').firestore(), 'users/bob/private/profile')));
+    await assertFails(getDocs(collection(ctx('eve').firestore(), 'users/bob/private')));
+    await assertFails(setDoc(doc(ctx('eve').firestore(), 'users/bob/private/profile'), { phone: PHONES.eve }));
+    await assertFails(setDoc(doc(ctx('eve').firestore(), 'users/bob/private/profile'), { phone: PHONES.bob }));
+    // the admin claim gives no read either (no admin screen needs the number)
+    await assertFails(getDoc(doc(env.authenticatedContext('adm', { phone_number: '+919000000099', admin: true }).firestore(), 'users/bob/private/profile')));
+    // the public doc stays readable – with the public fields only
+    const pub = await getDoc(doc(ctx('eve').firestore(), 'users/bob'));
+    expect(Object.keys(pub.data()).sort()).toEqual(['name']);
+  });
+  test('a public doc can not hold a private field (phone, position, city, pushToken)', async () => {
+    const db = ctx('bob').firestore();
+    for (const extra of [{ phone: PHONES.bob }, { position: 'setter' }, { city: 'Delhi' }, { pushToken: 'x' }]) {
+      const b = writeBatch(db);
+      b.set(doc(db, 'users/bob/private/profile'), { phone: PHONES.bob });
+      b.set(doc(db, 'users/bob'), { name: 'Bob', ...extra });
+      await assertFails(b.commit());
+    }
+    await assertSucceeds(putUser(db, 'bob', { name: 'Bob', phone: PHONES.bob }));
+    for (const extra of [{ phone: PHONES.bob }, { position: 'setter' }, { city: 'Delhi' }]) await assertFails(updateDoc(doc(db, 'users/bob'), extra));
+  });
+  test('a new public profile needs its private doc with the verified number; private fields checked', async () => {
+    const me = '+919811111113';
+    const db = env.authenticatedContext('zz', { phone_number: me }).firestore(); // no profile yet
+    await assertFails(setDoc(doc(db, 'users/zz'), { name: 'Zed' })); // no private doc
+    await assertFails(putUser(db, 'zz', { name: 'Zed', phone: PHONES.eve }));
+    await assertFails(putUser(db, 'zz', { name: 'Zed', phone: me, position: 'captain' }));
+    await assertFails(putUser(db, 'zz', { name: 'Zed', phone: me, city: 'x'.repeat(81) }));
+    await assertFails(setDoc(doc(db, 'users/zz/private/profile'), { phone: me, dob: '2000-01-01' }));
+    await assertSucceeds(putUser(db, 'zz', { name: 'Zed', phone: me, position: 'libero', city: '' }));
+  });
+  test('a legacy public doc is moved by its owner in one write (phone / position / city out, private doc in)', async () => {
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'users/bob'), { name: 'Bob', phone: PHONES.bob, position: 'setter', city: 'Delhi', pushToken: 'old' }));
+    const db = ctx('bob').firestore();
+    await assertFails(updateDoc(doc(db, 'users/bob'), { name: 'Bob K' })); // still holds private fields
+    const b = writeBatch(db);
+    b.set(doc(db, 'users/bob/private/profile'), { phone: PHONES.bob, position: 'setter', city: 'Delhi', updatedAt: serverTimestamp() });
+    b.update(doc(db, 'users/bob'), { phone: deleteField(), position: deleteField(), city: deleteField(), pushToken: deleteField() });
+    await assertSucceeds(b.commit());
+    await assertSucceeds(updateDoc(doc(db, 'users/bob'), { name: 'Bob K' }));
+  });
+  test('N4: a pre-216 number moves from a legacy public doc into the private doc unchanged, never to a new bad one', async () => {
+    const legacy = '+16505551234';
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'users/old'), { name: 'Old', phone: legacy }));
+    const db = env.authenticatedContext('old', { phone_number: legacy }).firestore();
+    await assertSucceeds(putUser(db, 'old', { name: 'Old Timer', phone: legacy }));
+    await assertSucceeds(putUser(db, 'old', { name: 'Old Timer', phone: legacy, city: 'Delhi' })); // private doc kept the number
+    const fresh = env.authenticatedContext('zz', { phone_number: legacy }).firestore();
+    await assertFails(putUser(fresh, 'zz', { name: 'New', phone: legacy })); // no legacy doc: format required
+  });
+  test('phoneIndex: someone else\'s entry (or "none") only for the counted number; the entry holds the uid only', async () => {
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), `phoneIndex/${PHONES.bob}`), { uid: 'bob' }));
+    const eve = ctx('eve').firestore();
+    await assertFails(getDoc(doc(eve, `phoneIndex/${PHONES.bob}`)));
+    await assertFails(getDoc(doc(eve, 'phoneIndex/+919811111111')));
+    await assertSucceeds(lookup(eve, 'eve', '+919811111111'));
+    await assertSucceeds(getDoc(doc(eve, 'phoneIndex/+919811111111'))); // "not registered" – counted
+    await assertFails(getDoc(doc(eve, `phoneIndex/${PHONES.bob}`)));
+    await assertSucceeds(lookup(eve, 'eve', PHONES.bob));
+    const got = await getDoc(doc(eve, `phoneIndex/${PHONES.bob}`));
+    expect(got.data()).toEqual({ uid: 'bob' });
+    await assertFails(setDoc(doc(ctx('bob').firestore(), `phoneIndex/${PHONES.bob}`), { uid: 'bob', name: 'Bob' }));
+  });
+  test('phoneLookups: own doc only, +1 per new number, at most the limit per window, no reset inside the window', async () => {
+    const lim = Number(/function phoneLookupLimit\(\) \{ return (\d+); \}/.exec(rulesSrc)[1]);
+    const db = ctx('eve').firestore();
+    const ref = doc(db, 'phoneLookups/eve');
+    await assertFails(setDoc(doc(db, 'phoneLookups/bob'), { q: PHONES.bob, n: 1, since: serverTimestamp() }));
+    await assertFails(setDoc(ref, { q: PHONES.bob, n: 0, since: serverTimestamp() }));
+    await assertFails(setDoc(ref, { q: PHONES.bob, n: 1, since: new Date() })); // client time
+    await assertFails(setDoc(ref, { q: '+9198765432101', n: 1, since: serverTimestamp() }));
+    await assertSucceeds(setDoc(ref, { q: PHONES.bob, n: 1, since: serverTimestamp() }));
+    const since = (await getDoc(ref)).data().since;
+    await assertFails(setDoc(ref, { q: PHONES.cap, n: 3, since })); // must count by one
+    await assertFails(setDoc(ref, { q: PHONES.cap, n: 1, since: serverTimestamp() })); // no new window yet
+    await assertFails(deleteDoc(ref));
+    await assertFails(getDoc(doc(ctx('bob').firestore(), 'phoneLookups/eve')));
+    await assertFails(getDocs(collection(db, 'phoneLookups')));
+    // up to the limit
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'phoneLookups/eve'), { q: PHONES.bob, n: lim - 1, since }));
+    await assertSucceeds(setDoc(ref, { q: PHONES.cap, n: lim, since }));
+    await assertFails(setDoc(ref, { q: '+919811111111', n: lim + 1, since }));
+    await assertFails(setDoc(ref, { q: '+919811111111', n: 1, since: serverTimestamp() }));
+    // an old window may be replaced by a new one
+    const { Timestamp } = require('firebase/firestore');
+    await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'phoneLookups/eve'), { q: PHONES.bob, n: lim, since: Timestamp.fromMillis(Date.now() - 3601 * 1000) }));
+    await assertSucceeds(setDoc(ref, { q: '+919811111111', n: 1, since: serverTimestamp() }));
+  });
+  test('a team invite needs the number to be the captain\'s current counted lookup', async () => {
+    await env.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), `phoneIndex/${PHONES.eve}`), { uid: 'eve' });
+      await setDoc(doc(c.firestore(), 'phoneIndex/+919811111112'), { uid: 'zz' });
+    });
+    const cap = ctx('cap').firestore();
+    await assertSucceeds(lookup(cap, 'cap', '+919811111112'));
+    await assertFails(updateDoc(doc(cap, 'teams/t1'), { pendingPhones: arrayUnion(PHONES.eve) })); // another number counted
+    await assertSucceeds(lookup(cap, 'cap', PHONES.eve));
+    await assertSucceeds(updateDoc(doc(cap, 'teams/t1'), { pendingPhones: arrayUnion(PHONES.eve) }));
+  });
+  test('the rules window equals src/core/phoneLookup.ts PHONE_LOOKUP_RULES', () => {
+    const core = fs.readFileSync(path.join(__dirname, '../src/core/phoneLookup.ts'), 'utf8');
+    const m = /PHONE_LOOKUP_RULES = Object\.freeze\(\{ limit: (\d+), windowS: (\d+) \}\)/.exec(core);
+    expect(rulesSrc).toContain(`function phoneLookupLimit() { return ${m[1]}; }`);
+    expect(rulesSrc).toContain(`function phoneLookupWindowS() { return ${m[2]}; }`);
   });
 });
 
 describe('teams: only captains edit', () => {
   test('captain can invite a registered number', async () => {
     await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), `phoneIndex/${PHONES.eve}`), { uid: 'eve' }));
+    await assertFails(updateDoc(doc(ctx('cap').firestore(), 'teams/t1'), { pendingPhones: arrayUnion(PHONES.eve) })); // 1.5.9: not looked up
+    await lookup(ctx('cap').firestore(), 'cap', PHONES.eve);
     await assertSucceeds(updateDoc(doc(ctx('cap').firestore(), 'teams/t1'), { pendingPhones: arrayUnion(PHONES.eve) }));
   });
   test('captain cannot invite an unregistered number', async () => {
@@ -449,7 +588,15 @@ describe('input validation (QA input-validation audit G1–G19, retest N4)', () 
     await assertFails(newMatch(base({ events: [{ type: 'point', side: 'A', at: Date.now() }] })));
     await assertFails(newMatch(base({ rules: { ...RULES, pointsPerSet: 0 } })));
     await assertFails(newMatch(base({ rules: { ...RULES, pointsPerSet: 1000 } })));
+    // 1.5.8 (Tester F157x-2): no absurd sets – points per set >= 5, win by 1 or 2
+    await assertFails(newMatch(base({ rules: { ...RULES, pointsPerSet: 4 } })));
+    await assertFails(newMatch(base({ rules: { ...RULES, winBy: 3 } })));
+    await assertFails(newMatch(base({ rules: { ...RULES, bestOf: 2 } })));
     await assertFails(newMatch(base({ rules: { ...RULES, bestOf: 4 } })));
+    // 1.5.9 (Tester F158-1): the deciding set's target too (5..99); decidingSwitchAt stays within it
+    for (const d of [1, 4]) await assertFails(newMatch(base({ rules: { ...RULES, bestOf: 3, decidingSetPoints: d, decidingSwitchAt: null } })));
+    await assertSucceeds(newMatch(base({ rules: { ...RULES, bestOf: 3, decidingSetPoints: 5, decidingSwitchAt: 3 } })));
+    await assertFails(newMatch(base({ rules: { ...RULES, decidingSetPoints: 100 } })));
     await assertFails(newMatch(base({ rules: { ...RULES, decidingSwitchAt: 20 } }))); // > decidingSetPoints
     await assertFails(newMatch(base({ rules: { ...RULES, extra: 1 } })));
   });
@@ -478,25 +625,25 @@ describe('input validation (QA input-validation audit G1–G19, retest N4)', () 
 
   test('G3 photo URLs: https on this project’s storage host, own folder only', async () => {
     const db = ctx('bob').firestore();
-    await assertSucceeds(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, photoURL: photoUrl('avatars/bob/a.jpg') }));
-    await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, photoURL: 'https://evil.example/a.jpg' }));
-    await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, photoURL: 'javascript:alert(1)' }));
-    await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, photoURL: photoUrl('avatars/eve/a.jpg') }));
-    await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, photoURL: photoUrl('avatars/bob/a.jpg', 'other-project.appspot.com') }));
+    await assertSucceeds(putUser(db, 'bob', { name: 'Bob', phone: PHONES.bob, photoURL: photoUrl('avatars/bob/a.jpg') }));
+    await assertFails(putUser(db, 'bob', { name: 'Bob', phone: PHONES.bob, photoURL: 'https://evil.example/a.jpg' }));
+    await assertFails(putUser(db, 'bob', { name: 'Bob', phone: PHONES.bob, photoURL: 'javascript:alert(1)' }));
+    await assertFails(putUser(db, 'bob', { name: 'Bob', phone: PHONES.bob, photoURL: photoUrl('avatars/eve/a.jpg') }));
+    await assertFails(putUser(db, 'bob', { name: 'Bob', phone: PHONES.bob, photoURL: photoUrl('avatars/bob/a.jpg', 'other-project.appspot.com') }));
     await assertFails(addPhoto(ctx('p1').firestore(), 'm1', { uploadedBy: 'p1', url: 'https://evil.example/x.jpg' }));
     await assertFails(addPhoto(ctx('p1').firestore(), 'm1', { uploadedBy: 'p1', url: photoUrl('matches/m1/cap/1.jpg') }));
   });
 
   test('G7 profiles: allowed keys, trimmed names 2–60 (Hindi ok), city ≤ 80, no role field', async () => {
     const db = ctx('bob').firestore();
-    await assertSucceeds(setDoc(doc(db, 'users/bob'), { name: 'आरव शर्मा', phone: PHONES.bob, city: 'नई दिल्ली' }));
-    await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, role: 'admin' }));
-    await assertFails(setDoc(doc(db, 'users/bob'), { name: ' Bob', phone: PHONES.bob }));
-    await assertFails(setDoc(doc(db, 'users/bob'), { name: 'B', phone: PHONES.bob }));
-    await assertFails(setDoc(doc(db, 'users/bob'), { name: 'x'.repeat(61), phone: PHONES.bob }));
-    await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bo\u200Bb\u202E', phone: PHONES.bob }));
-    await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, city: '   ' })); // B3: stored as '' by the app
-    await assertSucceeds(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, city: '' }));
+    await assertSucceeds(putUser(db, 'bob', { name: 'आरव शर्मा', phone: PHONES.bob, city: 'नई दिल्ली' }));
+    await assertFails(putUser(db, 'bob', { name: 'Bob', phone: PHONES.bob, role: 'admin' }));
+    await assertFails(putUser(db, 'bob', { name: ' Bob', phone: PHONES.bob }));
+    await assertFails(putUser(db, 'bob', { name: 'B', phone: PHONES.bob }));
+    await assertFails(putUser(db, 'bob', { name: 'x'.repeat(61), phone: PHONES.bob }));
+    await assertFails(putUser(db, 'bob', { name: 'Bo\u200Bb\u202E', phone: PHONES.bob }));
+    await assertFails(putUser(db, 'bob', { name: 'Bob', phone: PHONES.bob, city: '   ' })); // B3: stored as '' by the app
+    await assertSucceeds(putUser(db, 'bob', { name: 'Bob', phone: PHONES.bob, city: '' }));
   });
   test('G7 teams and courts: names, keys, coordinates', async () => {
     const db = ctx('bob').firestore();
@@ -522,6 +669,10 @@ describe('input validation (QA input-validation audit G1–G19, retest N4)', () 
     await assertFails(setDoc(doc(db, 'tournaments/past'), tour({ startDate: Date.now() - DAY, endDate: Date.now() + DAY })));
     await assertFails(setDoc(doc(db, 'tournaments/dup'), tour({ teams: ['t1', 't1'].map((id) => ({ id, name: id, color: '#123456' })) })));
     await assertFails(setDoc(doc(db, 'tournaments/nm'), tour({ name: 'Cu' })));
+    // 1.5.8 (QA V1426-3): at most 496 fixtures (a 32-team league, the app's real maximum; was 2000)
+    const fx = (n) => Array.from({ length: n }, (_, i) => ({ id: `f${i}`, home: 't1', away: 't2', round: 1 }));
+    await assertSucceeds(setDoc(doc(db, 'tournaments/fx496'), tour({ fixtures: fx(496) })));
+    await assertFails(setDoc(doc(db, 'tournaments/fx497'), tour({ fixtures: fx(497) })));
   });
 
   test('G9 / G19 challenges: not in the past; names are the team documents’ names', async () => {
@@ -542,9 +693,9 @@ describe('input validation (QA input-validation audit G1–G19, retest N4)', () 
       await setDoc(doc(c.firestore(), `phoneIndex/${legacy}`), { uid: 'old' });
     });
     const db = env.authenticatedContext('old', { phone_number: legacy }).firestore();
-    await assertSucceeds(setDoc(doc(db, 'users/old'), { name: 'Old Timer', phone: legacy, city: 'Delhi' }));
+    await assertSucceeds(putUser(db, 'old', { name: 'Old Timer', phone: legacy, city: 'Delhi' }));
     await assertSucceeds(setDoc(doc(db, `phoneIndex/${legacy}`), { uid: 'old' })); // its own entry, rewritten
-    await assertFails(setDoc(doc(db, 'users/old'), { name: 'Old', phone: '+447700900123' }));
+    await assertFails(putUser(db, 'old', { name: 'Old', phone: '+447700900123' }));
   });
 });
 
@@ -1064,7 +1215,7 @@ describe('1.3.0: T&C gate, anti-fraud, baseline holes', () => {
   });
   test('TC-07: without acceptance every write is denied (profile, phone index, team, match, photo, upload)', async () => {
     const db = fresh().firestore();
-    await assertFails(setDoc(doc(db, 'users/fresh'), { name: 'Fresh', phone: '+919555500001' }));
+    await assertFails(putUser(db, 'fresh', { name: 'Fresh', phone: '+919555500001' }));
     await assertFails(setDoc(doc(db, 'phoneIndex/+919555500001'), { uid: 'fresh' }));
     await assertFails(setDoc(doc(db, 'teams/tf'), { name: 'Fresh', captainId: 'fresh', memberIds: ['fresh'], subIds: [], pendingPhones: [] }));
     await assertFails(setDoc(doc(db, 'courts/c1'), { name: 'Court', location: PLACE, surface: 'indoor', addedBy: 'fresh' }));
@@ -1085,17 +1236,17 @@ describe('1.3.0: T&C gate, anti-fraud, baseline holes', () => {
     await assertFails(deleteDoc(t));
     await assertFails(getDoc(doc(ctx('eve').firestore(), 'terms/fresh')));
     await assertSucceeds(getDoc(t));
-    await assertSucceeds(setDoc(doc(db, 'users/fresh'), { name: 'Fresh', phone: '+919555500001' }));
+    await assertSucceeds(putUser(db, 'fresh', { name: 'Fresh', phone: '+919555500001' }));
     // an OLDER stored version is gated and can move forward
     await env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'terms/bob'), { version: '2025-old', acceptedAt: new Date() }));
-    await assertFails(setDoc(doc(ctx('bob').firestore(), 'users/bob'), { name: 'Bob', phone: PHONES.bob }));
+    await assertFails(putUser(ctx('bob').firestore(), 'bob', { name: 'Bob', phone: PHONES.bob }));
     await assertSucceeds(setDoc(doc(ctx('bob').firestore(), 'terms/bob'), { version: TERMS_VERSION, acceptedAt: serverTimestamp() }));
-    await assertSucceeds(setDoc(doc(ctx('bob').firestore(), 'users/bob'), { name: 'Bob', phone: PHONES.bob }));
+    await assertSucceeds(putUser(ctx('bob').firestore(), 'bob', { name: 'Bob', phone: PHONES.bob }));
   });
   test('TC-08/WL-03/WL-04: profile can not carry T&C, points, bonus or wallet fields; no wallet/ledger/redeem collections', async () => {
     const db = ctx('bob').firestore();
     for (const extra of [{ termsVersion: TERMS_VERSION }, { termsAcceptedAt: 1 }, { balance: 9999 }, { points: 5 }, { bonus: 100 }])
-      await assertFails(setDoc(doc(db, 'users/bob'), { name: 'Bob', phone: PHONES.bob, ...extra }));
+      await assertFails(putUser(db, 'bob', { name: 'Bob', phone: PHONES.bob, ...extra }));
     for (const p of ['wallets/bob', 'ledger/x', 'redemptions/x', 'payouts/x', 'bonuses/bob'])
       await assertFails(setDoc(doc(db, p), { amount: 100, uid: 'bob' }));
   });
@@ -1289,7 +1440,7 @@ describe('1.3.7: registration fields, team size, admin approval (F135-1)', () =>
   });
   test('public profile: first/last name checked like the app (Latin + Devanagari, 2–40)', async () => {
     const db = ctx('bob').firestore();
-    const put = (over) => setDoc(doc(db, 'users/bob'), { name: 'Bob Kumar', phone: PHONES.bob, ...over });
+    const put = (over) => putUser(db, 'bob', { name: 'Bob Kumar', phone: PHONES.bob, ...over });
     for (const ok of [{ firstName: 'Bob', lastName: 'Kumar' }, { firstName: 'अक्षित', lastName: 'कुमार' }, { firstName: "D'Souza", lastName: 'Jean-Luc' }, { firstName: 'José', lastName: 'Ng' }])
       await assertSucceeds(put(ok));
     for (const bad of ['B', '   ', 'R2D2', 'a'.repeat(41), "--", 'Ra--hul', 'Rahul-', 'राहुल१', '😀Bob', 'A×B'])
@@ -1317,7 +1468,7 @@ describe('1.3.7: registration fields, team size, admin approval (F135-1)', () =>
   });
   test('1.3.6 retest (R136-8/9/10): ZWJ/ZWNJ inside Devanagari, no trailing separators, clean lower-case email, an out-of-range DOB already saved can be re-saved', async () => {
     const db = ctx('bob').firestore();
-    const put = (firstName) => setDoc(doc(db, 'users/bob'), { name: 'Bob Kumar', phone: PHONES.bob, firstName, lastName: 'Kumar' });
+    const put = (firstName) => putUser(db, 'bob', { name: 'Bob Kumar', phone: PHONES.bob, firstName, lastName: 'Kumar' });
     await assertSucceeds(put('क्\u200Dष'));
     await assertSucceeds(put('श्\u200Cरी'));
     for (const bad of ['Bob\u200D', '\u200Dक', 'Bo\u200Cb', 'क\u200D', 'क्\u094Dष', "Bob'", 'Bob-']) await assertFails(put(bad));
@@ -1389,6 +1540,55 @@ describe('1.3.7: registration fields, team size, admin approval (F135-1)', () =>
     await assertSucceeds(updateDoc(f1(admin()), { verification: { status: 'approved', by: 'eve', at: new Date(now - 5000), reason: 'wrong', captain: 'rejected', reviewedBy: 'adm', reviewedAt: serverTimestamp() } }));
     await seedDone(null);
     await assertFails(updateDoc(f1('eve'), { verification: { status: 'confirmed', captain: 'rejected', by: 'eve', at: serverTimestamp() } }));
+    await assertSucceeds(updateDoc(f1('eve'), { verification: { status: 'confirmed', captain: 'confirmed', by: 'eve', at: serverTimestamp() } }));
+  });
+  // 1.5.8 (Tester F157x-1, Medium): created and scored by someone on neither roster ('zz') -> both captains confirm
+  const seedNeutral = (verification) => env.withSecurityRulesDisabled((c) => setDoc(doc(c.firestore(), 'matches/f1'), matchDoc({ teamId: 't1', ids: T1 }, { teamId: 't2', ids: T2 }, {
+    createdBy: 'zz', scorerId: 'zz', participantIds: ordered(T1, T2, ['zz']),
+    status: 'finished', events: log(75), summary: won3, finishedAt: now - 60000, finishedServerAt: new Date(now - 60000),
+    startedServerAt: new Date(now - 120000), playerOfMatchId: 'p1', createdAt: now, updatedAt: now, ...(verification ? { verification } : {}),
+  })));
+  const first = (who) => ({ by: who, at: serverTimestamp(), epoch: 0 });
+  const storedFirst = async () => {
+    let out = null;
+    await env.withSecurityRulesDisabled(async (c) => { out = (await getDoc(doc(c.firestore(), 'matches/f1'))).data().verification.first; });
+    return out;
+  };
+  test('F157x-1: a neutral creator needs BOTH captains; one confirm stays pending, the other can still reject', async () => {
+    await seedNeutral(null);
+    // one captain alone can't make it count
+    await assertFails(updateDoc(f1('eve'), { verification: { status: 'confirmed', captain: 'confirmed', by: 'eve', at: serverTimestamp() } }));
+    // the first confirm only adds `first` (status stays pending, no verdict)
+    await assertFails(updateDoc(f1('eve'), { verification: { status: 'confirmed', first: first('eve') } }));
+    await assertFails(updateDoc(f1('eve'), { verification: { status: 'pending', first: first('cap') } })); // someone else's name
+    await assertFails(updateDoc(f1('q1'), { verification: { status: 'pending', first: first('q1') } })); // not a captain
+    await assertFails(updateDoc(f1('zz'), { verification: { status: 'pending', first: first('zz') } })); // the creator / scorer
+    await assertSucceeds(updateDoc(f1('eve'), { verification: { status: 'pending', first: first('eve') } }));
+    const stored = await storedFirst();
+    // again / overwritten: refused
+    await assertFails(updateDoc(f1('cap'), { verification: { status: 'pending', first: first('cap') } }));
+    // the first confirmer can't give the verdict too
+    await assertFails(updateDoc(f1('eve'), { verification: { status: 'confirmed', captain: 'confirmed', by: 'eve', at: serverTimestamp(), first: stored } }));
+    await assertFails(updateDoc(f1('eve'), { verification: { status: 'disputed', captain: 'rejected', by: 'eve', at: serverTimestamp(), first: stored } }));
+    // the other captain: `first` must be kept as it was
+    await assertFails(updateDoc(f1('cap'), { verification: { status: 'disputed', captain: 'rejected', by: 'cap', at: serverTimestamp() } }));
+    await assertSucceeds(updateDoc(f1('cap'), { verification: { status: 'disputed', captain: 'rejected', by: 'cap', at: serverTimestamp(), first: stored } }));
+    // or confirms -> counts
+    await seedNeutral({ status: 'pending', first: { by: 'eve', at: new Date(now - 1000), epoch: 0 } });
+    const kept = await storedFirst();
+    await assertSucceeds(updateDoc(f1('cap'), { verification: { status: 'confirmed', captain: 'confirmed', by: 'cap', at: serverTimestamp(), first: kept } }));
+    // a reject straight away (no first confirm) is still allowed
+    await seedNeutral(null);
+    await assertSucceeds(updateDoc(f1('cap'), { verification: { status: 'disputed', captain: 'rejected', by: 'cap', at: serverTimestamp() } }));
+  });
+  test('F157x-1: an admin review keeps `first`; a creator on one side keeps the one-captain flow', async () => {
+    await seedNeutral({ status: 'pending', first: { by: 'eve', at: new Date(now - 1000), epoch: 0 } });
+    const kept = await storedFirst();
+    await assertFails(updateDoc(f1(admin()), { verification: { status: 'approved', reviewedBy: 'adm', reviewedAt: serverTimestamp() } }));
+    await assertSucceeds(updateDoc(f1(admin()), { verification: { status: 'approved', reviewedBy: 'adm', reviewedAt: serverTimestamp(), first: kept } }));
+    // creator cap on team A: eve alone confirms (unchanged), and can't use the two-step write
+    await seedDone(null);
+    await assertFails(updateDoc(f1('eve'), { verification: { status: 'pending', first: first('eve') } }));
     await assertSucceeds(updateDoc(f1('eve'), { verification: { status: 'confirmed', captain: 'confirmed', by: 'eve', at: serverTimestamp() } }));
   });
 });
@@ -1590,7 +1790,7 @@ describe('1.3.9: tester findings V138-3 / V138-4', () => {
   });
 
   test('V138-4: names allow ZWNJ/ZWJ only between two Devanagari characters; other hidden characters refused', async () => {
-    const name = (n) => setDoc(doc(ctx('bob').firestore(), 'users/bob'), { name: n, phone: PHONES.bob });
+    const name = (n) => putUser(ctx('bob').firestore(), 'bob', { name: n, phone: PHONES.bob });
     await assertSucceeds(name('अक्\u200Dषय Rao'));
     await assertSucceeds(name('Bob न\u200Cय'));
     for (const bad of ['Bo\u200Db', 'Bob\u200D', '\u200Dराम', 'रा\u200D m', 'रा\u200C\u200Dम', 'Bo\u00ADb', 'Bo\u2060b', 'Bo\u2062b', 'Bo\u2028b', 'Bo\u0085b', 'Bo\u061Cb', 'Bo\u180Eb'])
@@ -3440,5 +3640,31 @@ describe('1.4.20 support tickets: trim + screenshot name/type', () => {
     await assertFails(uploadBytes(ref(st, `support/cap/a.b-${RUN}.png`), img, { contentType: 'image/png' }));
     await assertSucceeds(uploadBytes(ref(st, `support/cap/ok-${RUN}.webp`), img, { contentType: 'image/webp' }));
     await assertSucceeds(uploadBytes(ref(st, `support/cap/ok-${RUN}.jpg`), img, { contentType: 'image/jpeg' }));
+  });
+});
+
+describe('1.5.9 F158-12: never more than 6 starters', () => {
+  const m8 = ['cap', 's1', 's2', 's3', 's4', 's5', 's6', 's7'];
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (c) => {
+      await setDoc(doc(c.firestore(), 'teams/t8'), { name: 'Eight', captainId: 'cap', memberIds: m8, subIds: ['s6', 's7'], pendingPhones: [] });
+      await setDoc(doc(c.firestore(), 'teams/t13'), { name: 'Old big', captainId: 'cap', memberIds: [...m8, 'o1', 'o2', 'o3', 'o4'], subIds: [], pendingPhones: [] });
+    });
+  });
+  test('captain: subs -> [] (8 starters) refused; one sub promoted (7) refused; moving a starter to subs ok', async () => {
+    const db = ctx('cap').firestore();
+    await assertFails(updateDoc(doc(db, 'teams/t8'), { subIds: [] }));
+    await assertFails(updateDoc(doc(db, 'teams/t8'), { subIds: ['s7'] }));
+    await assertFails(updateDoc(doc(db, 'teams/t8'), { subIds: arrayRemove('s6') }));
+    await assertSucceeds(updateDoc(doc(db, 'teams/t8'), { subIds: ['s5', 's6', 's7'] }));
+    await assertSucceeds(updateDoc(doc(db, 'teams/t8'), { subIds: ['s6', 's7'] })); // back to 6
+    await assertSucceeds(updateDoc(doc(db, 'teams/t8'), { name: 'Eight!' }));
+  });
+  test('an older team already over 6 can still be edited if no starter is added, and can only shrink', async () => {
+    const db = ctx('cap').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'teams/t13'), { name: 'Old big 2' }));
+    await assertSucceeds(updateDoc(doc(db, 'teams/t13'), { subIds: ['o1', 'o2'] }));
+    await assertFails(updateDoc(doc(db, 'teams/t13'), { subIds: ['o1'] }));
+    await assertSucceeds(updateDoc(doc(db, 'teams/t13'), { subIds: ['o1', 'o2', 'o3'] }));
   });
 });

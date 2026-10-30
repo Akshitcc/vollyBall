@@ -151,6 +151,10 @@ export const HI_QUERY_SYNONYMS: ReadonlyArray<[RegExp, string]> = [
   [/(अंक|अंकों)/u, 'points'],
   [/(लॉग ?इन|साइन ?इन|पासवर्ड|ओटीपी)/u, 'sign in'],
   [/(छोड़|अधूरा)/u, 'abandon'],
+  // 1.5.9 (Tester F158-5): टाइमआउट / टाइम-आउट / टाइम आउट are one word
+  [/(टाइम\s?-?\s?आउट)/u, 'timeout timeouts'],
+  // and the English forms (timeouts / time-outs / time out): the rule note says "time-outs"
+  [/\btime[\s-]?outs?\b/iu, 'timeout timeouts'],
 ];
 /** What a "remove/delete" verb is about: only an account (or nothing named) means account deletion. */
 const HI_REMOVE = /(डिली?ट|डिलिट|हटा|मिटा)/u;
@@ -284,6 +288,18 @@ export const mockProvider: AskProvider = {
   },
 };
 
+/**
+ * 1.5.8 (Tester F157u-3): a source's title in the reader's language. Retrieval may return the other language's chunk
+ * (an English FAQ for a Hindi question); FAQ / rule-note / guide sources are looked up by id in the built-in catalog
+ * (every one has an EN and a HI title). Admin-edited (custom) and other sources keep their own title.
+ */
+export function localSourceTitle(s: Pick<AskSource, 'id' | 'kind' | 'title'>, lang: AskLang): string {
+  const m = /^(faq|rules|guide):(.+)$/.exec(s.id);
+  if (!m) return s.title;
+  const id = m[2];
+  const hit = m[1] === 'faq' ? FAQS.find((f) => f.id === id)?.[lang]?.q : m[1] === 'rules' ? RULE_NOTES.find((r) => r.id === id)?.[lang]?.title : GUIDES.find((g) => g.id === id)?.[lang]?.title;
+  return hit || s.title;
+}
 export const sourceOf = (c: AskChunk): AskSource => ({ id: c.id.replace(/#\d+$/, '').replace(/:(en|hi)$/, ''), kind: c.kind, title: maskPii(c.title), url: c.url }); // 1.5.2 (F151-4): an admin-written title is display text (id / url untouched)
 const idk = (provider: string): AskAnswer => ({ answer: '', sources: [], idk: true, provider });
 

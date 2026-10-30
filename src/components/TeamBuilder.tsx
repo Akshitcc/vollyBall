@@ -15,6 +15,7 @@ import { PhoneInput } from './PhoneInput';
 import { TEAM_COLORS, type MatchPlayer, type UserProfile } from '../core/types';
 import { swatchLabel, translateError } from '../i18n/format';
 import { backend } from '../services/backend';
+import type { PhoneLookupUser } from '../services/backend/types';
 import { colors, contrast, radius, swatchRing } from '../theme';
 import { Avatar, Button, Field, Row, styles as ui } from './ui';
 import { REVEAL_BELOW, RevealOnShow, ScrollRevealContext, useFocusReveal } from './KeyboardAwareScreen';
@@ -59,7 +60,7 @@ export function TeamBuilder({
   const [lookup, setLookup] = useState<Lookup>({ state: 'idle' });
   const seq = useRef(0);
   // 1.4.19: one lookup per number (the typing lookup and a queued Enter share it)
-  const cache = useRef(new Map<string, Promise<UserProfile | null>>());
+  const cache = useRef(new Map<string, Promise<PhoneLookupUser | null>>());
   const lookupOnce = (n: string) => {
     let p = cache.current.get(n);
     if (!p) {

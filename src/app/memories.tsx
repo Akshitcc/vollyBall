@@ -18,6 +18,7 @@ import { useMe } from '../state/AuthContext';
 import { useWatch } from '../state/hooks';
 import { useMemories } from '../state/useMemories';
 import { colors, font, type } from '../theme';
+import { formatDateT } from '../i18n/format'; // 1.5.8 (Tester F157u-5): '29 Oct 2026', locale-aware
 
 /** Finished matches the user may add a photo to, newest first (QA B121-9). */
 export function photoTargets(matches: readonly Match[], uid: string): Match[] {
@@ -77,7 +78,7 @@ export default function MemoriesScreen() {
                 <TeamDot color={m.teamB.color} size={12} style={{ marginRight: 8 }} />
                 <Text style={{ flex: 1, fontWeight: '700', color: colors.text }} numberOfLines={2}>
                   {m.teamA.name} – {m.teamB.name}
-                  {m.finishedAt ? <Text style={{ color: colors.muted, fontWeight: '500' }}>{' · ' + new Date(m.finishedAt).toLocaleDateString()}</Text> : null}
+                  {m.finishedAt ? <Text style={{ color: colors.muted, fontWeight: '500' }}>{' · ' + formatDateT(m.finishedAt)}</Text> : null}
                 </Text>
                 <Ionicons name="chevron-forward" size={18} color={colors.muted} />
               </Pressable>

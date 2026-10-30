@@ -19,6 +19,7 @@ import { SegmentedControl } from '../../components/DayNightKit';
 import { Blob, Body, Display, Glow, LivePill, Over, Sticker, useKit } from '../../components/DNKit';
 import { claimedTournamentMatches, isTournamentAdmin } from '../../core/tournamentAdmin';
 import { confirmAsk } from '../../services/dialogs';
+import { placeLabelT } from '../../i18n/format';
 
 /** 1.5.0 (QA V1428-4): narrower bracket cards – at 360 px the next round starts inside the screen (with the hint). */
 const BRACKET_CARD_W = 168;
@@ -232,7 +233,7 @@ export default function TournamentPage() {
         <Ionicons name="calendar-outline" size={13} color={fg} />
         <Body size={12} color={fg}>{formatDateRangeT(t.startDate, t.endDate)}</Body>
         <Ionicons name="location-outline" size={13} color={fg} />
-        <Body size={12} color={fg} numberOfLines={1} style={{ flexShrink: 1 }}>{t.location.name}</Body>
+        <Body size={12} color={fg} numberOfLines={1} style={{ flexShrink: 1 }}>{placeLabelT(t.location)}</Body>
       </Row>
       <Body size={12} color={fg} style={{ marginTop: 2 }}>{tr(fmtKey)} · {tr('tournaments.teams', { count: t.teams.length })}</Body>
       <Body size={11} color={fg} style={{ marginTop: 4, opacity: 0.9 }}>{describeRulesT(t.rules, tr)}</Body>

@@ -56,6 +56,8 @@ export const MAX_PHOTOS_PER_BATCH = 10;
  * team and members. The API server checks every team.
  */
 export const MAX_TOURNAMENT_TEAMS = 32;
+/** 1.5.8 (QA V1426-3): the most fixtures the app generates – a 32-team league (32*31/2); firestore.rules uses 496 too. */
+export const MAX_TOURNAMENT_FIXTURES = (MAX_TOURNAMENT_TEAMS * (MAX_TOURNAMENT_TEAMS - 1)) / 2;
 /** 1.4.27: the Firestore rules read (get) the team documents of this many tournament teams. */
 export const RULES_TEAM_READS = 10;
 /**

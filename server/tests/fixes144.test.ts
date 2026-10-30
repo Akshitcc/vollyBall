@@ -94,7 +94,7 @@ describe('V143-8: new rules that would end a live match', () => {
     const id = await createMatch(h, { title: 'R', location: null });
     await h.as('cap').put(`/api/matches/${id}/progress`).send({ events: WIN.slice(0, 4) });
     const m = (await h.as('cap').get(`/api/matches/${id}`)).body;
-    const r = await h.as('cap').patch(`/api/matches/${id}`).send({ rules: { ...m.rules, pointsPerSet: 4, decidingSetPoints: 4, decidingSwitchAt: 2 } });
+    const r = await h.as('cap').patch(`/api/matches/${id}`).send({ rules: { ...m.rules, pointsPerSet: 5, decidingSetPoints: 5, decidingSwitchAt: 2  /* 1.5.8 F157x-2: >= 5 */ } });
     assert.deepEqual([r.status, r.body.error], [409, 'match_setup_locked']);
     assert.equal((await h.as('cap').get(`/api/matches/${id}`)).body.status, 'live');
     const r2 = await h.as('cap').patch(`/api/matches/${id}`).send({ rules: { ...m.rules, pointsPerSet: 7, decidingSetPoints: 7, decidingSwitchAt: 2 } });

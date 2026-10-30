@@ -81,16 +81,18 @@ describe('teams (rules: teams/{teamId})', () => {
     assert.equal((await h.as('cap').post('/api/teams').send(base)).status, 201);
   });
 
-  it('captain invites registered numbers only; invited user is notified', async () => {
+  it('captain invites; the answer does not tell whether a number is registered (1.5.9, F158-2); invited user is notified', async () => {
     await register(h, 'cap', 'bob');
     await h.as('bob').put('/api/me/push-tokens').send({ token: 'ExponentPushToken[bob]' });
     const id = await makeTeam();
-    const bad = await h.as('cap').patch(`/api/teams/${id}`).send({ pendingPhones: ['+919888888888'] });
-    assert.equal(bad.status, 403);
-    assert.match(bad.body.message, /isn.t on VolleyLive yet\. Ask them to register first\./);
-    const ok = await h.as('cap').patch(`/api/teams/${id}`).send({ pendingPhones: [PEOPLE.bob.phone] });
+    // 1.5.8 answered 403 "isn't on VolleyLive yet" here – a registered-number oracle. Now the same 200 as below; the
+    // invite waits for that number (the app's counted by-phone lookup is what tells the captain "no account").
+    const unreg = await h.as('cap').patch(`/api/teams/${id}`).send({ pendingPhones: ['+919888888888'] });
+    assert.equal(unreg.status, 200);
+    assert.deepEqual(unreg.body.pendingPhones, ['+919888888888']);
+    const ok = await h.as('cap').patch(`/api/teams/${id}`).send({ pendingPhones: ['+919888888888', PEOPLE.bob.phone] });
     assert.equal(ok.status, 200);
-    assert.deepEqual(ok.body.pendingPhones, [PEOPLE.bob.phone]);
+    assert.deepEqual(ok.body.pendingPhones, ['+919888888888', PEOPLE.bob.phone]);
     await h.flushPush();
     assert.equal(h.push.sent.length, 1);
     assert.equal(h.push.sent[0].to, 'ExponentPushToken[bob]');

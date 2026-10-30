@@ -88,9 +88,9 @@ describe('core/support', () => {
     }
   });
   it('contact links only from valid config; nothing built in', () => {
-    expect(supportContactFrom({})).toEqual({ email: null, whatsapp: null });
-    expect(supportContactFrom({ email: 'not an email', whatsapp: '12' })).toEqual({ email: null, whatsapp: null });
-    expect(supportContactFrom({ email: ' help@example.com ', whatsapp: '+91 98765 43210' })).toEqual({ email: 'help@example.com', whatsapp: '919876543210' });
+    expect(supportContactFrom({})).toEqual({ email: null, whatsapp: null, url: null }); // 1.5.8: + url (F157u-1)
+    expect(supportContactFrom({ email: 'not an email', whatsapp: '12' })).toEqual({ email: null, whatsapp: null, url: null });
+    expect(supportContactFrom({ email: ' help@example.com ', whatsapp: '+91 98765 43210' })).toEqual({ email: 'help@example.com', whatsapp: '919876543210', url: null });
   });
 });
 

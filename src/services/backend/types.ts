@@ -20,6 +20,9 @@ import type {
 
 export type Unsubscribe = () => void;
 
+/** 1.5.8 (F157x-3): the by-phone lookup result. */
+export type PhoneLookupUser = Pick<UserProfile, 'id' | 'name'> & { photoURL: string | null };
+
 export interface AuthUser {
   uid: string;
   phoneNumber: string | null;
@@ -95,7 +98,8 @@ export interface Backend {
   watchProfile(uid: string, cb: (p: UserProfile | null) => void): Unsubscribe;
   saveProfile(p: UserProfile): Promise<void>;
   getProfiles(uids: string[]): Promise<UserProfile[]>;
-  findUserByPhone(phoneE164: string): Promise<UserProfile | null>;
+  /** 1.5.8 (Tester F157x-3): only id, name and photo – what TeamBuilder and the team invite use (no phone etc.). */
+  findUserByPhone(phoneE164: string): Promise<PhoneLookupUser | null>;
   uploadAvatar(uid: string, localUri: string): Promise<string>;
   savePushToken(uid: string, token: string): Promise<void>;
 

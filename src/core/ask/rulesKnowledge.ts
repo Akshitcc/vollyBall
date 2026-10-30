@@ -45,7 +45,7 @@ export const RULE_NOTES: readonly RuleNote[] = [
   { id: 'rule-libero', faq: 'team-positions', tags: ['libero', 'defensive', 'back row', 'लिबेरो'],
     en: { title: 'What is a libero?', text: 'The libero is a defensive specialist in a different-coloured shirt who plays only in the back row. The libero can replace a back-row player freely, but may not attack the ball above net height or block.' },
     hi: { title: 'लिबेरो कौन होता है?', text: 'लिबेरो अलग रंग की जर्सी वाला रक्षात्मक खिलाड़ी है जो सिर्फ़ पिछली पंक्ति में खेलता है। वह पिछली पंक्ति के किसी खिलाड़ी की जगह बिना गिनती के आ सकता है, पर नेट से ऊपर अटैक या ब्लॉक नहीं कर सकता।' } },
-  { id: 'rule-subs-timeouts', tags: ['substitution', 'substitute', 'timeout', 'time-out', 'सब्स्टिट्यूट', 'टाइम-आउट'],
+  { id: 'rule-subs-timeouts', tags: ['substitution', 'substitute', 'timeout', 'timeouts', 'time-out', 'how many timeouts', 'सब्स्टिट्यूट', 'टाइम-आउट', 'टाइमआउट'], // 1.5.9 (F158-5): + the unhyphenated forms
     en: { title: 'How do substitutions and time-outs work?', text: 'In standard indoor rules each team gets a limited number of substitutions per set (six) and two short time-outs per set. A substituted starter can come back only in the place of the player who replaced them.' },
     hi: { title: 'सब्स्टिट्यूशन और टाइम-आउट कैसे होते हैं?', text: 'स्टैंडर्ड इंडोर नियमों में हर टीम को हर सेट में सीमित सब्स्टिट्यूशन (छह) और दो छोटे टाइम-आउट मिलते हैं। बाहर गया शुरुआती खिलाड़ी सिर्फ़ उसी खिलाड़ी की जगह वापस आ सकता है जिसने उसकी जगह ली थी।' } },
   { id: 'rule-in-out', tags: ['in', 'out', 'line', 'ball in', 'ball out', 'antenna', 'इन', 'आउट'],

@@ -19,7 +19,7 @@ import { topics } from '../live/bus';
 import { checkNotPast, checkOrder, MAX_SCHEDULE_AHEAD_MS, scheduleMsOk, TIME_INVALID_CODE, ValidationError } from '../../../src/core/validate';
 import { ABANDON_PENDING, deleteProblem, finishedFreezeProblem, GUARD_MESSAGES, MATCH_DELETE_FORBIDDEN, MATCH_FINISHED, MATCH_RULES_END, MATCH_SETUP_LOCKED, matchOver, SETUP_FIELDS, verdictSetupChanged } from '../../../src/core/matchGuards';
 import { maxEventsOf } from '../../../src/core/lifecycle';
-import { abandonPatch, ABANDON_MESSAGES, answerAbandon, needsAdminAction, planAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../../src/core/abandon';
+import { abandonPatch, ABANDON_MESSAGES, answerAbandon, needsAdminAction, onAdminReviewList, planAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../../src/core/abandon';
 import { CodedError } from '../../../src/core/codedError';
 import { NOT_TOURNAMENT_ADMIN_MESSAGE, tournamentLinkProblem } from '../../../src/core/tournamentAdmin';
 import { FIXTURE_NOT_READY, FIXTURE_TEAMS, fixtureTeamsNow, tournamentOwner } from './tournaments';
@@ -37,7 +37,8 @@ import {
   captainVerdict,
   confirmProblem,
   currentVerification,
-  expectedConfirmer,
+  verdictCaptains,
+  verdictStep,
   isCompleted,
   isTerminal,
   needsReview,
@@ -329,7 +330,7 @@ export async function loadMatches(s: Services, db: Trx, ids: string[], viewer: I
  * scorer, creator, captains); everyone sees the coarse status (QA AF-53).
  */
 function verificationFromRow(
-  r: { id: string; verification_status?: VerificationStatus; verified_by?: string | null; verified_at?: Date | null; dispute_reason?: string | null; captain_verdict?: 'confirmed' | 'rejected' | null; reviewed_by?: string | null; reviewed_at?: Date | null; verdict_epoch?: number | null; scorer_id: string; created_by: string; captain_a?: string | null; captain_b?: string | null },
+  r: { id: string; verification_status?: VerificationStatus; verified_by?: string | null; verified_at?: Date | null; dispute_reason?: string | null; captain_verdict?: 'confirmed' | 'rejected' | null; reviewed_by?: string | null; reviewed_at?: Date | null; verdict_epoch?: number | null; first_confirm?: unknown; scorer_id: string; created_by: string; captain_a?: string | null; captain_b?: string | null },
   viewer: Identity | null,
   parts: { match_id: string; user_id: string }[],
 ): MatchVerification {
@@ -343,7 +344,15 @@ function verificationFromRow(
     reviewedAt: toMs(r.reviewed_at ?? null),
     captain: r.captain_verdict ?? null,
     epoch: Number(r.verdict_epoch ?? 0),
+    // 1.5.8 (F157x-1): the first of two captain confirmations (migration 0029; absent column / NULL = none)
+    first: firstFromRow(r.first_confirm),
   };
+}
+
+function firstFromRow(v: unknown): MatchVerification['first'] {
+  if (v == null) return null;
+  const o = (typeof v === 'string' ? JSON.parse(v) : v) as { by?: unknown; at?: unknown; epoch?: unknown };
+  return typeof o?.by === 'string' && o.by ? { by: o.by, at: typeof o.at === 'number' ? o.at : null, epoch: Number(o.epoch ?? 0) } : null;
 }
 
 export async function getMatch(s: Services, id: string, viewer: Identity | null) {
@@ -853,8 +862,9 @@ export async function setPlayerOfMatch(s: Services, viewer: Identity, id: string
   const m = await getMatch(s, id, viewer);
   publishMatch(s, m, id);
   // 1.3.0: the match is now complete; ask the opposing captain to confirm the result.
-  const confirmer = m ? expectedConfirmer(m) : null;
-  if (m && confirmer) notify(s, [confirmer], '✅ Confirm the result', `${m.teamA.name} vs ${m.teamB.name} – please confirm or reject the score.`, { type: 'match', matchId: m.id });
+  // 1.5.8 (F157x-1): on a two-captain match both captains are asked
+  const confirmers = m ? verdictCaptains(m) : [];
+  if (m && confirmers.length) notify(s, confirmers, '✅ Confirm the result', `${m.teamA.name} vs ${m.teamB.name} – please confirm or reject the score.`, { type: 'match', matchId: m.id });
   return m!;
 }
 
@@ -906,11 +916,17 @@ export async function verifyResult(s: Services, viewer: Identity, id: string, de
     const [m] = await loadMatches(s, trx, [id], { uid: '\u0000internal', phone: null });
     // 1.4.6 (QA V145-2): the verdict of the current re-open epoch only
     const v = currentVerification(m);
-    // Idempotent replay of the same decision by the same captain (QA AF-45).
     const verdict = decision === 'confirmed' ? 'confirmed' : 'rejected';
-    if (v?.by === viewer.uid && (v.status === decision || (v.status === 'approved' && captainVerdict(m) === verdict))) return;
+    // 1.5.8 (Tester F157x-1 Info): a repeated answer is refused with 409 already_reviewed (no silent idempotent 200 –
+    // replaced the 1.3.x AF-45 replay; the client shows the stored state either way)
     const problem = confirmProblem(m, viewer.uid);
     if (problem) throw new HttpError(CONFIRM_STATUS[problem] ?? 403, problem, CONFIRM_MESSAGES[problem]);
+    // 1.5.8 (Tester F157x-1, Medium): a creator / scorer on neither roster -> BOTH captains confirm. The first confirm is
+    // kept in first_confirm and the result stays pending (not counted); the other captain's confirm or reject decides.
+    if (verdictStep(m, decision) === 'first') {
+      await trx('matches').where({ id }).update({ first_confirm: JSON.stringify({ by: viewer.uid, at: Date.now(), epoch: m.reopenEpoch ?? 0 }), updated_at: nowDate() });
+      return;
+    }
     await trx('matches').where({ id }).update({
       // 1.3.7 (F135-1): after an admin cleared the flag the status stays 'approved'; the verdict decides.
       verification_status: v?.status === 'approved' ? 'approved' : decision,
@@ -980,7 +996,7 @@ export async function listFlagged(s: Services, viewer: Identity) {
       .select('id'),
   ]);
   const all = [...new Set([...ids(actions), ...ids(flagged)])];
-  return (await loadMatches(s, s.db, all, viewer)).filter((m) => needsReview(m) || needsAdminAction(m));
+  return (await loadMatches(s, s.db, all, viewer)).filter(onAdminReviewList); // 1.5.9 (F158-11): played matches only
 }
 
 // ---------------- 1.4.5 (QA V144-1/2/3): abandon, consent request, admin resolution ----------------
@@ -1020,7 +1036,7 @@ async function writeAction(trx: Trx, id: string, _m: Match, patch: Partial<Match
   // 1.4.6 (QA V145-2/5/12): re-open epoch (+ the cleared verdict / review), append-only history, request rate limit
   if (patch.reopenEpoch !== undefined) row.reopen_epoch = patch.reopenEpoch ?? 0;
   if (patch.verification === null)
-    Object.assign(row, { verification_status: 'pending', captain_verdict: null, verified_by: null, verified_at: null, dispute_reason: null, reviewed_by: null, reviewed_at: null, verdict_epoch: null });
+    Object.assign(row, { verification_status: 'pending', captain_verdict: null, verified_by: null, verified_at: null, dispute_reason: null, reviewed_by: null, reviewed_at: null, verdict_epoch: null, first_confirm: null });
   if (patch.abandonHistory !== undefined) row.abandon_history = patch.abandonHistory == null ? null : JSON.stringify(patch.abandonHistory);
   if (patch.abandonRequests !== undefined) row.abandon_request_count = patch.abandonRequests ?? 0;
   if (patch.abandonRequestAt !== undefined) row.abandon_request_at = patch.abandonRequestAt ?? null;
@@ -1095,7 +1111,7 @@ export async function repairVerdict(s: Services, viewer: Identity, id: string, f
 }
 
 // ---------------- queries ----------------
-export async function listMatchIds(db: Trx, q: { status?: string[]; participant?: string; tournament?: string; withLocation?: boolean; byFinished?: boolean; sideNameLike?: string[]; limit: number }) {
+export async function listMatchIds(db: Trx, q: { status?: string[]; participant?: string; tournament?: string; withLocation?: boolean; byFinished?: boolean; sideNameLike?: string[]; sideNameIs?: string; limit: number }) {
   // 1.3.9 (V138-11): a player's matches by the match's own date (finished, started, scheduled, created):
   // a confirmation or review bumps updated_at, which must not move an old match to the top
   const query = db('matches').select('matches.id').limit(q.limit);
@@ -1107,6 +1123,10 @@ export async function listMatchIds(db: Trx, q: { status?: string[]; participant?
   if (q.sideNameLike?.length) {
     const ws = q.sideNameLike.slice(0, 4).map((w) => `%${w.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
     query.whereExists((b) => { b.select(db.raw('1')).from('match_sides as ms').whereRaw('ms.match_id = matches.id').andWhere((o) => { for (const w of ws) o.orWhere('ms.name', 'like', w); }); });
+  }
+  if (q.sideNameIs !== undefined) {
+    // 1.5.8 (F157-1): one exact side name (the names come from finishedSideNames)
+    query.whereExists((b) => { b.select(db.raw('1')).from('match_sides as ms').whereRaw('ms.match_id = matches.id').andWhere('ms.name', q.sideNameIs!); });
   }
   if (q.status?.length) query.whereIn('matches.status', q.status);
   if (q.tournament) query.where('matches.tournament_id', q.tournament);
@@ -1153,4 +1173,28 @@ export async function reassignScorer(s: Services, viewer: Identity, id: string, 
   const m = await getMatch(s, id, viewer);
   publishMatch(s, m, id);
   return m!;
+}
+
+const likeEsc = (w: string) => w.replace(/[\\%_]/g, (c) => `\\${c}`);
+/**
+ * 1.5.8 (Tester F157-1): distinct side names of FINISHED matches for a team lookup, best match kind first – exact
+ * (case-insensitive, trimmed), then prefix, then every word (any length, so "Filler F3" keeps "F3"), then any word of 3+
+ * characters. Returns the first non-empty kind. Names only; the caller loads matches through the viewer-scoped loader.
+ */
+export async function finishedSideNames(db: Trx, q: string, limit = 12): Promise<{ kind: 'exact' | 'prefix' | 'all' | 'any'; names: string[] }> {
+  const t = q.trim().toLocaleLowerCase().slice(0, 80);
+  const words = t.split(/\s+/).filter(Boolean).slice(0, 4);
+  const base = () => db('match_sides as ms').join('matches as m', 'm.id', 'ms.match_id').where('m.status', 'finished').distinct('ms.name').limit(limit);
+  const stages: ['exact' | 'prefix' | 'all' | 'any', () => Promise<{ name: string }[]>][] = [
+    ['exact', () => base().whereRaw('LOWER(TRIM(ms.name)) = ?', [t])],
+    ['prefix', () => base().where('ms.name', 'like', `${likeEsc(t)}%`)],
+    ['all', () => { const b = base(); for (const w of words) b.where('ms.name', 'like', `%${likeEsc(w)}%`); return b; }],
+    ['any', () => { const ws = words.filter((w) => [...w].length >= 3); return ws.length ? base().where((o) => { for (const w of ws) o.orWhere('ms.name', 'like', `%${likeEsc(w)}%`); }) : Promise.resolve([]); }],
+  ];
+  if (!t) return { kind: 'any', names: [] };
+  for (const [kind, run] of stages) {
+    const rows = await run();
+    if (rows.length) return { kind, names: rows.map((r) => r.name) };
+  }
+  return { kind: 'any', names: [] };
 }

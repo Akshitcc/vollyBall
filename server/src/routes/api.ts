@@ -37,6 +37,15 @@ export const DAILY_PUBLIC_RATE = { burst: 30, perMinute: 30 };
 const demoLikeFormatOnly = (pin: string) =>
   !PINCODE_RE.test(pin) || (!pincodePrefixOk(pin) && !isApsPincode(pin)) ? { status: 'invalid' as const } : { status: 'unknown' as const };
 export const PINCODE_RATE = Object.freeze({ user: { burst: 10, perMinute: 6 }, ip: { burst: 40, perMinute: 30 } });
+/**
+ * 1.5.8 (Tester F157x-3, Medium): GET /api/users/by-phone – a person adds a squad (up to 2 x 12 players + subs, one
+ * lookup per typed number, cached by the app); a sweep of numbers is refused (429) quickly. Per user, plus a per-IP
+ * backstop (several users behind one NAT) – like the pincode lookup.
+ * 1.5.9: the numbers live in src/core/phoneLookup.ts (the app's own throttle uses them too); a team invite by number
+ * takes from the same two buckets (F158-2).
+ */
+import { PHONE_LOOKUP_RATE } from '../../../src/core/phoneLookup';
+export { PHONE_LOOKUP_RATE };
 import { TERMS_VERSION } from '../../../src/core/terms';
 import { isApsPincode, pincodePrefixOk, PINCODE_RE } from '../../../src/core/registration';
 import {
@@ -132,11 +141,25 @@ export function apiRouter(s: Services): Router {
     if (!ids.length) throw badRequest('ids is required'); // no listing of all users
     res.json(await users.getProfiles(s, me(req), ids));
   }));
+  /** One by-phone lookup (or one invited number, F158-2) from the per-user and per-IP buckets; 429 when either is empty. */
+  const takePhoneLookup = async (req: express.Request, res: express.Response) => {
+    const ipKey = crypto.createHash('sha256').update(String(req.ip ?? '')).digest('hex').slice(0, 32);
+    const wait = Math.max(
+      await limiter.takeShared(me(req).uid, 'phoneLookupUser', PHONE_LOOKUP_RATE.user),
+      await limiter.takeShared(ipKey, 'phoneLookupIp', PHONE_LOOKUP_RATE.ip),
+    );
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
+      throw new HttpError(429, RATE_LIMITED, 'Too many requests. Wait a moment and try again.', { retryAfter: wait });
+    }
+  };
   r.get('/users/by-phone/:phone', h(async (req, res) => {
+    await takePhoneLookup(req, res);
     const phone = parse(phoneE164, req.params.phone);
     const p = await users.findByPhone(s, me(req), phone);
     if (!p) throw notFound('No user with that number');
-    res.json(p);
+    // 1.5.8 (F157x-3): only what the app's two call sites use (TeamBuilder card, team invite): no phone, position, city
+    res.json({ id: p.id, name: p.name, photoURL: p.photoURL ?? null });
   }));
   // 1.3.6: pincode → district/state for the registration form ({ status: ok | invalid | unknown }).
   // 1.3.7 (R136-6): signed-in only (requireAuth on /api; allowed before T&C, the form comes first) and
@@ -200,6 +223,13 @@ export function apiRouter(s: Services): Router {
   r.patch('/teams/:id', h(async (req, res) => {
     const viewer = me(req);
     const patch = parse(teamPatchSchema, req.body);
+    // 1.5.9 (Tester F158-2): every newly invited number costs one by-phone lookup (same per-user / per-IP buckets),
+    // and the answer no longer depends on whether the number is registered (domain/teams.ts decideTeamUpdate).
+    if (patch.pendingPhones) {
+      const [cur] = await teams.loadTeams(s.db, [req.params.id]);
+      const added = cur ? new Set(patch.pendingPhones.filter((p) => !cur.pendingPhones.includes(p))).size : 0;
+      for (let i = 0; i < Math.min(added, teams.MAX_PENDING + 1); i++) await takePhoneLookup(req, res);
+    }
     // A non-captain only sees their own pending number; merge the hidden ones back before diffing.
     const { team } = await teams.changeTeam(s, viewer, req.params.id, (t) => {
       const doc = { name: t.name, color: t.color, captainId: t.captainId, memberIds: t.memberIds, subIds: t.subIds, pendingPhones: t.pendingPhones, city: t.city };

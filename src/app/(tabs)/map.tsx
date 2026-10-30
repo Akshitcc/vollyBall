@@ -8,7 +8,7 @@ import AppMap from '../../components/maps/AppMap';
 import type { MapMarker } from '../../components/maps/types';
 import { formatWhen } from '../../components/MatchCard';
 import { Card, Chip, Empty, LiveBadge, Row, Button } from '../../components/ui';
-import { fitRadiusKm, nearby, type GeoPoint, placeLabel } from '../../core/geo';
+import { fitRadiusKm, nearby, type GeoPoint } from '../../core/geo';
 import type { Court, Match, Tournament } from '../../core/types';
 import { backend } from '../../services/backend';
 import { DEFAULT_AREA_KEY, DEFAULT_CENTER, getLocationFix } from '../../services/location';
@@ -17,6 +17,7 @@ import { formatDateRangeT, formatDistanceT as formatDistance, surfaceLabel } fro
 import { colors, font } from '../../theme';
 import { ScrollView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { placeLabelT } from '../../i18n/format';
 
 /** QA 1.2.1 minor: a fade at the right edge of a sideways chip row, so a cut chip reads as "more". */
 function EdgeFade({ testID }: { testID?: string }) {
@@ -98,7 +99,7 @@ export default function MapScreen() {
     lat: i.location.lat,
     lng: i.location.lng,
     title: i.kind === 'match' ? `${i.m.teamA.name} ${t('common.vs')} ${i.m.teamB.name}` : i.kind === 'tournament' ? `🏆 ${i.t.name}` : `🏐 ${i.c.name}`,
-    subtitle: placeLabel(i.location),
+    subtitle: placeLabelT(i.location),
     color: i.kind === 'match' ? (i.m.status === 'live' ? colors.live : colors.primary) : i.kind === 'tournament' ? colors.mapTournament : colors.success,
   }));
 
@@ -192,7 +193,7 @@ export default function MapScreen() {
               <Text style={{ fontWeight: '900', color: colors.text }}>{formatDistance(i.distanceKm)}</Text>
             </Row>
             <Text style={{ color: colors.muted, fontWeight: '600', marginTop: 4 }} numberOfLines={1}>
-              {placeLabel(i.location)}
+              {placeLabelT(i.location)}
               {i.kind === 'match' && i.m.status === 'scheduled' ? ` · ${formatWhen(i.m.scheduledAt)}` : ''}
               {i.kind === 'tournament' ? ` · ${formatDateRangeT(i.t.startDate, i.t.endDate)}` : ''}
               {i.kind === 'court' ? ` · ${surfaceLabel(i.c.surface, t)}` : ''}

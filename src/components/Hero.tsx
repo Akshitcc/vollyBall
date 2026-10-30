@@ -10,6 +10,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } fr
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 import { useHiFont } from '../theme/useHiFont';
+import { useTheme } from '../theme/ThemeProvider';
 import { colors, elevation, gradients, palette, radius, type, themed } from '../theme';
 import { PressableScale } from './PressableScale';
 
@@ -84,7 +85,11 @@ export function Skeleton({ w, h, r = radius.sm, style }: { w?: number | `${numbe
     if (!reduce) v.value = withRepeat(withTiming(1, { duration: 900 }), -1, true);
   }, [reduce, v]);
   const st = useAnimatedStyle(() => ({ opacity: 1 - 0.45 * v.value }));
-  return <Animated.View style={[{ width: w ?? '100%', height: h, borderRadius: r, backgroundColor: palette.grey200 }, st, style]} />;
+  // 1.5.8 (Tester F157u-2): the theme's raised surface in Night (was a light grey block on the navy background);
+  // Day keeps the soft grey (surface2 is almost the background colour there)
+  const { name, t: k } = useTheme();
+  const bg = name === 'night' ? k.surface2 : palette.grey200;
+  return <Animated.View style={[{ width: w ?? '100%', height: h, borderRadius: r, backgroundColor: bg }, st, style]} testID="skeleton" />;
 }
 
 /** Empty state (design-spec §7): icon tile, what's missing, why it helps, one primary CTA. */

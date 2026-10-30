@@ -444,6 +444,24 @@ export function sideOfPlayer(m: Pick<Match, 'teamA' | 'teamB'>, uid: string): Si
   return null;
 }
 
+/**
+ * 1.5.8 (Tester F157x-1, Medium): a match created / scored by someone on neither roster has TWO verdict captains – the
+ * result counts only after BOTH confirm. One confirmation is kept as `verification.first` (status stays pending); the
+ * other captain then confirms (counts) or rejects (disputed). A creator / scorer on one side: one verdict captain (the
+ * opposing one), unchanged.
+ */
+export const needsBothCaptains = (m: Pick<CountableMatch, 'captains' | 'teamA' | 'teamB' | 'scorerId' | 'createdBy' | 'scorerReassign'>): boolean => verdictCaptains(m).length === 2;
+/** The first captain's confirmation on a two-captain match, in the current re-open epoch (null = none). */
+export function firstConfirm(m: { verification?: MatchVerification | null; reopenEpoch?: number | null }): { by: string; at: number | null } | null {
+  const f = m.verification?.first;
+  if (!f || typeof f.by !== 'string' || !f.by) return null;
+  return (f.epoch ?? 0) === (m.reopenEpoch ?? 0) ? { by: f.by, at: f.at ?? null } : null;
+}
+/** What a captain's decision does: 'first' = the first of two confirmations (stays pending), 'final' = the verdict. */
+export function verdictStep(m: CountableMatch, decision: 'confirmed' | 'disputed'): 'first' | 'final' {
+  return decision === 'confirmed' && needsBothCaptains(m) && !firstConfirm(m) ? 'first' : 'final';
+}
+
 export type ConfirmProblem = 'not_completed' | 'not_captain' | 'scoring_side' | 'already_reviewed' | 'no_captains';
 export const CONFIRM_MESSAGES: Record<ConfirmProblem, string> = {
   not_completed: 'Only a finished match with a Player of the Match can be confirmed',
@@ -476,6 +494,8 @@ export function confirmProblem(m: CountableMatch, uid: string): ConfirmProblem |
   const st = verificationStatus(m);
   // 1.3.8 (V137-1): an answer recorded in the older fields (1.3.6: `by` without a verdict) counts as answered
   if (st !== 'pending' && !(st === 'approved' && captainVerdict(m) === null)) return 'already_reviewed';
+  // 1.5.8 (F157x-1): a captain who already gave the first of two confirmations can't answer again (409); the other can
+  if (firstConfirm(m)?.by === uid) return 'already_reviewed';
   return null;
 }
 
@@ -515,8 +535,11 @@ export function verdictSetupProblem(m: Pick<CountableMatch, 'captains' | 'teamA'
   return null;
 }
 /** Captain who should confirm (for the UI), or null when nobody can. */
-export function expectedConfirmer(m: Pick<CountableMatch, 'captains' | 'teamA' | 'teamB' | 'scorerId' | 'createdBy' | 'scorerReassign'>): string | null {
-  return verdictCaptains(m)[0] ?? null;
+export function expectedConfirmer(m: Pick<CountableMatch, 'captains' | 'teamA' | 'teamB' | 'scorerId' | 'createdBy' | 'scorerReassign'> & { verification?: MatchVerification | null; reopenEpoch?: number | null }): string | null {
+  // 1.5.8 (F157x-1): on a two-captain match, after one confirmed, the one still to confirm
+  const caps = verdictCaptains(m);
+  const f = firstConfirm(m);
+  return (f ? caps.find((c) => c !== f.by) : caps[0]) ?? null;
 }
 
 /** Terminal: abandoned, or completed (finished + POTM). Nothing about the score/status changes after. */

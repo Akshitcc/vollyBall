@@ -11,7 +11,7 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, AppState, View } from 'react-native';
+import { AccessibilityInfo, AppState, Image, Platform, View } from 'react-native';
 import { reduceMotionNow } from '../hooks/useReduceMotion';
 import { applyTheme } from './index';
 import { isThemeSetting, msToNextBoundary, msToNextMinute, resolveTheme, type ThemeName, type ThemeSetting } from './resolve';
@@ -33,6 +33,12 @@ export const useTheme = () => useContext(Ctx);
 /** 1.4.22: exposed so screen tests can render a component in a fixed theme. */
 export const ThemeContext = Ctx;
 
+/** 1.5.9 (F158-7): web – the theme public/index.html's boot script applied before the bundle ran (no flash). */
+export function webBootTheme(): ThemeName | null {
+  if (Platform.OS !== 'web' || typeof document === 'undefined') return null;
+  const v = document.documentElement?.getAttribute?.('data-vl-theme');
+  return v === 'day' || v === 'night' ? v : null;
+}
 export function parseStored(v: string | null): Stored {
   try { const s = v ? JSON.parse(v) : {}; return s && typeof s === 'object' ? s : {}; } catch { return {}; }
 }
@@ -47,7 +53,7 @@ export function ThemeProvider({ uid, children, nowFn = Date.now, readTimeoutMs =
   const [ready, setReady] = useState(false);
   const [setting, setSettingS] = useState<ThemeSetting>('auto');
   const [animate, setAnimateS] = useState(true);
-  const [name, setName] = useState<ThemeName>(() => resolveTheme('auto', new Date(nowFn())));
+  const [name, setName] = useState<ThemeName>(() => webBootTheme() ?? resolveTheme('auto', new Date(nowFn())));
   const [generation, setGeneration] = useState(0);
   const [, setSoft] = useState(0);
   const [now, setNow] = useState(() => new Date(nowFn()));
@@ -161,7 +167,14 @@ export function ThemeProvider({ uid, children, nowFn = Date.now, readTimeoutMs =
 
   const value = useMemo<ThemeCtx>(() => ({ name, t: tokens[name], setting, setSetting, animate, setAnimate, holdTransitions, rallyEnded, now, generation }),
     [name, setting, setSetting, animate, setAnimate, holdTransitions, rallyEnded, now, generation]);
-  if (!ready) return <View style={{ flex: 1, backgroundColor: tokens[name].bg }} testID="theme-loading" />;
+  if (!ready) {
+    // 1.5.9 (F158-7): web – the same logo as the boot screen in public/index.html until the saved setting is read
+    return (
+      <View style={{ flex: 1, backgroundColor: tokens[name].bg, alignItems: 'center', justifyContent: 'center' }} testID="theme-loading">
+        {Platform.OS === 'web' ? <Image source={{ uri: '/boot-logo.png' }} style={{ width: 96, height: 96 }} accessibilityIgnoresInvertColors testID="theme-loading-logo" /> : null}
+      </View>
+    );
+  }
   return (
     <Ctx.Provider value={value}>
       {children(generation)}

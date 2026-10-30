@@ -6,9 +6,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LanguageSwitch } from '../components/LanguageSwitch';
 import { Button } from '../components/ui';
+import { Checkbox } from '../components/Checkbox';
 import { TERMS_IS_DRAFT, TERMS_VERSION } from '../core/terms';
 import { translateError } from '../i18n/format';
 import { signOut } from '../services/session';
@@ -56,19 +57,8 @@ export default function TermsScreen() {
           <Text style={[type.body, { color: colors.text, marginTop: 4 }]}>{t(`terms.${k}Body`)}</Text>
         </View>
       ))}
-      <Pressable
-        onPress={() => setChecked((c) => !c)}
-        accessibilityRole="checkbox"
-        accessibilityState={{ checked }}
-        accessibilityLabel={t('terms.agree')}
-        style={s.check}
-        testID="terms-checkbox"
-      >
-        <View style={[s.box, checked && { backgroundColor: colors.ink, borderColor: colors.ink }]}>
-          {checked ? <Ionicons name="checkmark" size={18} color={colors.white} /> : null}
-        </View>
-        <Text style={[type.body, { color: colors.text, flex: 1 }]}>{t('terms.agree')}</Text>
-      </Pressable>
+      {/* 1.5.9 (F158-8): the shared Checkbox – Space toggles it on web, 'activate' on native */}
+      <Checkbox checked={checked} onChange={setChecked} label={t('terms.agree')} testID="terms-checkbox" />
       {error ? <Text style={[type.body, { color: colors.danger, marginBottom: 8 }]} accessibilityRole="alert">{error}</Text> : null}
       <Button title={t('terms.accept')} icon="checkmark-circle" onPress={accept} loading={busy} disabled={!checked} disabledHint={t('terms.tickFirst')} testID="terms-accept" big />
       <Button title={t('profileForm.differentNumber')} icon="log-out" variant="ghost" onPress={() => void signOut()} testID="terms-sign-out" />

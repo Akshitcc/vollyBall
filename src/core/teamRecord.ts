@@ -6,15 +6,16 @@
  * 1.5.1 (Tester F150-2): `pending` is split by its real state (core/resultStatus): `awaiting` (really waiting for the
  * other captain), `review` (flagged, waiting for an admin – also when the other captain already confirmed), `disputed`
  * (rejected by the other captain) and `potm` (no Player of the Match yet). Voided results are not counted anywhere.
- * `pending` = awaiting + review + disputed + potm (kept for older callers).
+ * 1.5.8 (Tester F157x-1): `awaitingSecond` – a two-captain match one captain confirmed, waiting for the other (not counted).
+ * `pending` = awaiting + awaitingSecond + review + reviewAwaiting + disputed + potm (kept for older callers).
  */
 import { resultStatus } from './resultStatus';
 import type { Match } from './types';
 
-export type TeamRecord = { played: number; won: number; lost: number; winRate: number; pending: number; awaiting: number; review: number; reviewAwaiting: number; disputed: number; potm: number };
+export type TeamRecord = { played: number; won: number; lost: number; winRate: number; pending: number; awaiting: number; awaitingSecond: number; review: number; reviewAwaiting: number; disputed: number; potm: number };
 export function teamRecord(teamId: string, matches: readonly Match[] | null | undefined): TeamRecord {
   let played = 0, won = 0;
-  const open = { awaiting: 0, review: 0, reviewAwaiting: 0, disputed: 0, potm: 0 };
+  const open = { awaiting: 0, awaitingSecond: 0, review: 0, reviewAwaiting: 0, disputed: 0, potm: 0 };
   for (const m of matches ?? []) {
     if (m.status !== 'finished') continue;
     const side = m.teamA.teamId === teamId ? 'A' : m.teamB.teamId === teamId ? 'B' : null;
@@ -27,5 +28,5 @@ export function teamRecord(teamId: string, matches: readonly Match[] | null | un
     played++;
     if (winner === side) won++;
   }
-  return { played, won, lost: played - won, winRate: played ? Math.round((won / played) * 100) : 0, pending: open.awaiting + open.review + open.reviewAwaiting + open.disputed + open.potm, ...open };
+  return { played, won, lost: played - won, winRate: played ? Math.round((won / played) * 100) : 0, pending: open.awaiting + open.awaitingSecond + open.review + open.reviewAwaiting + open.disputed + open.potm, ...open };
 }

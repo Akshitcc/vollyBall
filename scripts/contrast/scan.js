@@ -22,6 +22,8 @@ const ROUTES = [
   '/tournament/new', '/wallet', '/team/team_smashers', '/team/team_blockers', '/tournament/tour_monsoon',
   '/match/match_live', '/match/match_live_set3', '/match/match_old1', '/match/match_beach', '/match/match_finished',
   '/match/match_upcoming', '/match/match_flagged', '/match/match_live_set3/score', '/match/match_live/score', '/match/match_old1/score',
+  // 1.5.8 (Tester F157x-4): the not-found screen (any unknown route)
+  '/no-such-page-158',
 ];
 // [name, route, steps]: each step is a testID to click (first visible), or {text} / {wait}.
 // 1.4.24: openers fixed (QA V1423-3) – photo sheet is `photo-button`, who-scored is `team-panel-A`, the DOB picker is

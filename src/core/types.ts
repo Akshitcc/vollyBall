@@ -270,6 +270,12 @@ export interface MatchVerification {
   captain?: 'confirmed' | 'rejected' | null;
   /** 1.4.6 (QA V145-2): the match's reopenEpoch when this verdict / review was given (missing = 0). */
   epoch?: number | null;
+  /**
+   * 1.5.8 (Tester F157x-1): on a match whose creator and scorer play for neither side, BOTH captains give the verdict
+   * (core/antifraud needsBothCaptains). The first captain's confirmation is kept here while the status stays pending
+   * (not counted); the other captain then confirms (counts) or rejects (disputed). `epoch` = reopenEpoch at the time.
+   */
+  first?: { by: string; at?: number | null; epoch?: number | null } | null;
 }
 
 export interface MatchPhoto {

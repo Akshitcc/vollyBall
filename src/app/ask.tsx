@@ -11,7 +11,7 @@ import { Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { Button, Field } from '../components/ui';
 import { Body, Sticker, useKit } from '../components/DNKit';
 import { AskCards } from '../components/ask/AskCards';
-import { ASK_QUESTION_MAX, ASK_QUESTION_MIN, type AskSource } from '../core/ask';
+import { ASK_QUESTION_MAX, ASK_QUESTION_MIN, localSourceTitle, type AskSource } from '../core/ask';
 import type { AskHistoryItem } from '../core/ask/agent';
 import { clampCodePoints } from '../core/text';
 import { maskPiiStored } from '../core/pii';
@@ -89,7 +89,11 @@ export default function AskScreen() {
     if (!(await confirmAsk(tr('ask.clearBody'), { title: tr('ask.clearTitle'), confirmLabel: tr('ask.clear'), cancelLabel: tr('ask.clearCancel'), destructive: true }))) return;
     try { await backend.clearAskHistory(); setTurns([]); } catch (e) { setTurns((l) => [...l, { key: `e${++seq.current}`, q: '', a: null, error: translateError(e, tr) }]); }
   };
-  const sourceLabel = (s: AskSource) => (s.kind === 'rules' && !faqIdOf(s.url) ? tr('ask.rulesSource', { title: s.title }) : s.kind === 'guide' ? tr('ask.guideSource', { title: s.title }) : s.title);
+  // 1.5.8 (Tester F157u-3): the title in the UI language (core localSourceTitle), not the retrieved chunk's language
+  const sourceLabel = (s: AskSource) => {
+    const title = localSourceTitle(s, lang);
+    return s.kind === 'rules' && !faqIdOf(s.url) ? tr('ask.rulesSource', { title }) : s.kind === 'guide' ? tr('ask.guideSource', { title }) : title;
+  };
 
   const chips = (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 8, paddingVertical: 4 }} testID="ask-suggestions" accessibilityLabel={tr('ask.suggestionsTitle')}>

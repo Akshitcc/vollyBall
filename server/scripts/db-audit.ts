@@ -41,7 +41,7 @@ async function main() {
       const tokens: Record<string, Identity> = {};
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vl-audit-'));
       const big = { burst: 1e6, perMinute: 1e6 };
-      const s = { db, verifier: new StaticTokenVerifier(tokens), storage: new LocalDiskStorage(dir, 'http://audit.local', 'audit-secret-'.repeat(4), 3600), push: new MemoryPushSender(), bus: new LiveBus(), publicBaseUrl: 'http://audit.local', corsOrigins: [], pending: new Set<Promise<unknown>>(), adminUids: new Set<string>(), rateLimiter: new RateLimiter({ terms: big, verify: big, matchWrite: big }) };
+      const s = { db, verifier: new StaticTokenVerifier(tokens), storage: new LocalDiskStorage(dir, 'http://audit.local', 'audit-secret-'.repeat(4), 3600), push: new MemoryPushSender(), bus: new LiveBus(), publicBaseUrl: 'http://audit.local', corsOrigins: [], pending: new Set<Promise<unknown>>(), adminUids: new Set<string>(), rateLimiter: Object.assign(new RateLimiter({ terms: big, verify: big, matchWrite: big }), { liftNamed: true }) };
       const server = http.createServer(createApp(s as never));
       await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
       const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

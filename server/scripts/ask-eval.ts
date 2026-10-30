@@ -1,5 +1,5 @@
 /**
- * Ask VolleyLive eval (1.5.0 set + 1.5.1 + 1.5.2 + 1.5.3 + 1.5.4 + 1.5.5 + 1.5.6 + 1.5.7 additions): runs docs/qa/ask-eval-1.5.7.jsonl against the API on a LOCAL test database with the
+ * Ask VolleyLive eval (1.5.0 set + 1.5.1 + 1.5.2 + 1.5.3 + 1.5.4 + 1.5.5 + 1.5.6 + 1.5.7 + 1.5.8 + 1.5.9 additions): runs docs/qa/ask-eval-1.5.9.jsonl against the API on a LOCAL test database with the
  * seeded world (tests/askFixtures.ts) and the MOCK provider (offline, no key), and scores every item:
  * tools called, text that must / must not appear, I-don't-know, refusals, card types, and – for every item – no phone
  * number or e-mail of anyone in the answer or the cards.
@@ -14,7 +14,7 @@
  * 1.5.3 (F152-1 / F152-2): the PII check also runs the app's own masker over the display text (any digit script,
  * spaced single digits, digit words), `expect.stored` checks the user's newest ask_history / ask_audit rows, and the world
  * has a team named 'Club 9 8 7 6 5 4 3 2 1 0' (captain: the pii user).
- * Writes docs/qa/ask-eval-1.5.7-report.json (pass rate + failures). Exit code 1 below --min (default 0.9).
+ * Writes docs/qa/ask-eval-1.5.9-report.json (pass rate + failures). Exit code 1 below --min (default 0.9).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,8 +29,8 @@ import { ADMIN } from '../tests/helpers';
 
 process.env.TEST_DATABASE_URL ??= 'mysql://root@127.0.0.1:3306/volleylive_askeval_test';
 const ROOT = path.resolve(__dirname, '../..');
-const SET = path.join(ROOT, 'docs/qa/ask-eval-1.5.7.jsonl');
-const REPORT = path.join(ROOT, 'docs/qa/ask-eval-1.5.7-report.json');
+const SET = path.join(ROOT, 'docs/qa/ask-eval-1.5.9.jsonl');
+const REPORT = path.join(ROOT, 'docs/qa/ask-eval-1.5.9-report.json');
 
 export interface EvalItem {
   id: string; cat: string; lang: 'en' | 'hi'; as: string; q: string;
@@ -131,7 +131,7 @@ async function main() {
     const byCat: Record<string, { n: number; pass: number }> = {};
     for (const x of results) { const c = (byCat[x.cat] ??= { n: 0, pass: 0 }); c.n++; if (x.ok) c.pass++; }
     const audit = await h.db('ask_audit').count({ n: '*' });
-    const report = { set: 'docs/qa/ask-eval-1.5.7.jsonl', provider: 'mock', items: results.length, passed, passRate: Number((passed / results.length).toFixed(4)), byCategory: byCat, auditRows: Number(audit[0].n), failures: results.filter((x) => !x.ok) };
+    const report = { set: 'docs/qa/ask-eval-1.5.9.jsonl', provider: 'mock', items: results.length, passed, passRate: Number((passed / results.length).toFixed(4)), byCategory: byCat, auditRows: Number(audit[0].n), failures: results.filter((x) => !x.ok) };
     fs.writeFileSync(REPORT, JSON.stringify(report, null, 2) + '\n');
     console.log(`ask-eval: ${passed}/${results.length} passed (${(100 * passed / results.length).toFixed(1)}%)`);
     for (const [c, v] of Object.entries(byCat)) console.log(`  ${c.padEnd(12)} ${v.pass}/${v.n}`);

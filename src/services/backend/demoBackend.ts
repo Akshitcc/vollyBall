@@ -21,14 +21,15 @@ import { addPoint, computeState, summarize, type Side } from '../../core/scoring
 import { assertTournamentAdmin, claimedTournamentMatches, guardTournamentEdit, NOT_TOURNAMENT_ADMIN, NOT_TOURNAMENT_ADMIN_MESSAGE, TOURNAMENT_LINK_KEYS, tournamentLinkProblem } from '../../core/tournamentAdmin';
 import { assertRoster, TEAM_SIZE_MODES, canonicalParticipants, challengeProblem, isAbandonOnly, PARTICIPANTS_MESSAGE, participantsMatchRoster, ROSTER_MESSAGES, teamCanPlay, TEAM_TOO_SMALL_MESSAGE, tournamentTeamsProblem } from '../../core/roster';
 import type { Challenge, Court, Match, MatchPhoto, Team, Tournament, UserProfile } from '../../core/types';
+import { TEAM_SIZE } from '../../core/types';
 import { DEMO_QA_ADMIN, DemoDB, demoPhotoUrl, demoQaAdminProfile, makeSeed, refreshSeedColours, SEED_PHOTO_SCENES } from './demoSeed';
 import i18next from 'i18next';
 import type { AuthUser, Backend, MatchProgress, NewChallenge, NewCourt, NewMatch, NewTeam, NewTournament, RankingsResult, ReviewDecision, Unsubscribe, UploadOptions, UploadProgress, WalletResult } from './types';
 import { POTM_MESSAGES, potmProblem } from '../../core/potm';
 import { MIN_RANKED_MATCHES, rankPlayers, rowFor } from '../../core/ranking';
-import { byMatchDateDesc, CAPTAIN_MESSAGES, captainsProblem, CONFIRM_MESSAGES, captainVerdict, currentVerification, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
+import { verdictStep, byMatchDateDesc, CAPTAIN_MESSAGES, captainsProblem, CONFIRM_MESSAGES, captainVerdict, currentVerification, confirmProblem, countMatches, countedMatchIdsFor, countedTotals, isCompleted, needsReview, OWN_MATCH_REVIEW, OWN_MATCH_REVIEW_MESSAGE, ownMatchReview, playerWallet, verificationStatus } from '../../core/antifraud';
 import { GUARD_MESSAGES, guardCreate, guardProgress, guardUpdate, MATCH_STATUS_MOVE, verdictSetupChanged, matchOver, rulesEndProblem, stampTimes } from '../../core/matchGuards';
-import { abandonPatch, answerAbandon, needsAdminAction, nextMaxEvents, planAbandon, reportAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../core/abandon';
+import { abandonPatch, answerAbandon, needsAdminAction, onAdminReviewList, nextMaxEvents, planAbandon, reportAbandon, resolvePatch, type AbandonAnswer, type ResolveAction } from '../../core/abandon';
 import { eligibleHandoffAdmins, HANDOVER_MESSAGES, handoverProblem, reassignProblem, reassignRecord } from '../../core/scorerHandoff';
 import { TERMS_NOT_ACCEPTED, TERMS_NOT_ACCEPTED_MESSAGE, TERMS_VERSION, TERMS_VERSION_MISMATCH, termsAccepted, type TermsAcceptance } from '../../core/terms';
 import { checkText } from '../../core/validate';
@@ -372,7 +373,9 @@ export class DemoBackend implements Backend {
   async findUserByPhone(phone: string) {
     assertPhone(phone);
     await delay();
-    return this.visible(Object.values(this.db.users).find((u) => u.phone === phone));
+    // 1.5.8 (F157x-3): only id, name and photo
+    const u = this.visible(Object.values(this.db.users).find((x) => x.phone === phone));
+    return u ? { id: u.id, name: u.name, photoURL: u.photoURL ?? null } : null;
   }
   async uploadAvatar(_uid: string, localUri: string) {
     return localUri; // demo: keep local uri
@@ -403,6 +406,10 @@ export class DemoBackend implements Backend {
     const registered = new Set(Object.values(this.db.users).map((u) => u.phone));
     if (added.some((ph) => !registered.has(ph))) throw new Error("This number isn't on VolleyLive yet. Ask them to register first.");
     patch = checkTeamFields(patch);
+    // 1.5.9 (F158-12): mirror the rules / API – never more than 6 starters (an older team over it may only go down)
+    const startersOf = (x: Pick<Team, 'memberIds' | 'subIds'>) => x.memberIds.filter((m) => !x.subIds.includes(m)).length;
+    const next = { ...t, ...patch };
+    if (startersOf(next) > TEAM_SIZE && startersOf(next) > startersOf(t)) throw new Error(`At most ${TEAM_SIZE} starters; the rest are subs`);
     this.db.teams[id] = { ...t, ...patch, id, nameLower: (patch.name ?? t.name).toLowerCase() };
     this.changed();
   }
@@ -798,11 +805,17 @@ export class DemoBackend implements Backend {
     // 1.4.6 (QA V145-2): only the verdict of the current re-open epoch counts; a new one carries the epoch
     const prev = currentVerification(m);
     const epoch = m.reopenEpoch ?? 0;
+    // 1.5.8 (Tester F157x-1): two-captain match – the first confirmation is kept, the result stays pending
+    if (verdictStep(m, status) === 'first') {
+      this.db.matches[matchId] = { ...m, verification: { ...(m.verification ?? { status: 'pending' }), first: { by: me, at: Date.now(), epoch } }, updatedAt: Date.now() };
+      this.changed();
+      return;
+    }
     const captain = status === 'confirmed' ? ('confirmed' as const) : ('rejected' as const);
     const verification =
       prev?.status === 'approved'
-        ? { ...prev, captain, by: me, at: Date.now(), epoch, ...(reason ? { reason } : {}) }
-        : { status, captain, by: me, at: Date.now(), epoch, ...(reason ? { reason } : {}) };
+        ? { ...prev, captain, by: me, at: Date.now(), epoch, ...(reason ? { reason } : {}), ...(m.verification?.first ? { first: m.verification.first } : {}) }
+        : { status, captain, by: me, at: Date.now(), epoch, ...(reason ? { reason } : {}), ...(m.verification?.first ? { first: m.verification.first } : {}) };
     // 1.3.9 (V138-11): the confirmation time goes to confirmedAt; the match's own times are never touched
     this.db.matches[matchId] = { ...m, verification, ...(status === 'confirmed' ? { confirmedAt: verification.at } : {}), updatedAt: Date.now() };
     this.changed();
@@ -958,7 +971,7 @@ export class DemoBackend implements Backend {
     await this.ready;
     if (!(await this.isAdmin(this.authUser?.uid ?? ''))) return [];
     // 1.4.5: plus abandoned matches waiting for review, finished without a winner, pending abandon requests
-    return Object.values(this.db.matches).filter((m) => needsReview(m) || needsAdminAction(m)).sort((a, b) => (b.finishedAt ?? b.updatedAt ?? 0) - (a.finishedAt ?? a.updatedAt ?? 0));
+    return Object.values(this.db.matches).filter(onAdminReviewList /* 1.5.9 (F158-11): played matches only */).sort((a, b) => (b.finishedAt ?? b.updatedAt ?? 0) - (a.finishedAt ?? a.updatedAt ?? 0));
   }
 
   // ---------- challenges ----------

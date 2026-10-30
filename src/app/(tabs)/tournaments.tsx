@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import { placeLabel } from '../../core/geo';
 import { router } from 'expo-router';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
@@ -11,6 +10,7 @@ import { useWatch } from '../../state/hooks';
 import { formatDateRangeT, tournamentStatusLabel } from '../../i18n/format';
 import { tournamentDisplayStatus } from '../../core/tournament';
 import { colors, font } from '../../theme';
+import { placeLabelT } from '../../i18n/format';
 
 export default function Tournaments() {
   const { t: tr } = useTranslation();
@@ -40,7 +40,7 @@ export default function Tournaments() {
           <Row style={{ marginTop: 4 }}>
             <Ionicons name="location" size={14} color={colors.muted} />
             <Text style={{ color: colors.muted, fontWeight: '600', marginLeft: 4 }} numberOfLines={1}>
-              {placeLabel(t.location)}
+              {placeLabelT(t.location)}
             </Text>
           </Row>
         </Card>

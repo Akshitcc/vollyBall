@@ -9,6 +9,7 @@ import type { Court } from '../../core/types';
 import { backend } from '../../services/backend';
 import { formatDateT, surfaceLabel } from '../../i18n/format';
 import { colors, font } from '../../theme';
+import { placeLabelT } from '../../i18n/format';
 
 /** A court from the Nearby map (fix re-test 204 #3: court pins used to open nothing). */
 export default function CourtPage() {
@@ -39,7 +40,7 @@ export default function CourtPage() {
           <Text style={font.h3} testID="court-surface">
             {surfaceLabel(court.surface, t)}
           </Text>
-          <P muted>{court.location.name}</P>
+          <P muted>{placeLabelT(court.location)}</P>
           <P muted>{formatCoords(court.location)}</P>
           <P muted>{t('court.addedOn', { date: formatDateT(court.createdAt) })}</P>
         </Card>

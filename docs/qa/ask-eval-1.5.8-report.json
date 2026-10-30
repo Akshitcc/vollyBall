@@ -1,0 +1,194 @@
+{
+  "set": "docs/qa/ask-eval-1.5.8.jsonl",
+  "provider": "mock",
+  "items": 386,
+  "passed": 380,
+  "passRate": 0.9845,
+  "byCategory": {
+    "stats": {
+      "n": 11,
+      "pass": 11
+    },
+    "teams": {
+      "n": 10,
+      "pass": 10
+    },
+    "matches": {
+      "n": 8,
+      "pass": 8
+    },
+    "tourn": {
+      "n": 9,
+      "pass": 9
+    },
+    "challenge": {
+      "n": 3,
+      "pass": 3
+    },
+    "leader": {
+      "n": 4,
+      "pass": 4
+    },
+    "rag": {
+      "n": 12,
+      "pass": 12
+    },
+    "idk": {
+      "n": 5,
+      "pass": 5
+    },
+    "private": {
+      "n": 6,
+      "pass": 6
+    },
+    "write": {
+      "n": 7,
+      "pass": 7
+    },
+    "inject": {
+      "n": 8,
+      "pass": 8
+    },
+    "perms": {
+      "n": 2,
+      "pass": 2
+    },
+    "hi": {
+      "n": 10,
+      "pass": 10
+    },
+    "roman": {
+      "n": 10,
+      "pass": 10
+    },
+    "holdout": {
+      "n": 16,
+      "pass": 16
+    },
+    "fix151": {
+      "n": 16,
+      "pass": 16
+    },
+    "holdout151": {
+      "n": 14,
+      "pass": 12
+    },
+    "fix152": {
+      "n": 12,
+      "pass": 12
+    },
+    "holdout152": {
+      "n": 12,
+      "pass": 12
+    },
+    "fix153": {
+      "n": 18,
+      "pass": 18
+    },
+    "holdout153": {
+      "n": 12,
+      "pass": 12
+    },
+    "fix154": {
+      "n": 16,
+      "pass": 16
+    },
+    "holdout154": {
+      "n": 12,
+      "pass": 12
+    },
+    "fix155": {
+      "n": 22,
+      "pass": 22
+    },
+    "holdout155": {
+      "n": 12,
+      "pass": 11
+    },
+    "fix156": {
+      "n": 26,
+      "pass": 26
+    },
+    "holdout156": {
+      "n": 19,
+      "pass": 19
+    },
+    "fix157": {
+      "n": 27,
+      "pass": 27
+    },
+    "holdout157": {
+      "n": 19,
+      "pass": 18
+    },
+    "fix158": {
+      "n": 16,
+      "pass": 16
+    },
+    "holdout158": {
+      "n": 12,
+      "pass": 10
+    }
+  },
+  "auditRows": 386,
+  "failures": [
+    {
+      "id": "holdout151-05",
+      "cat": "holdout151",
+      "ok": false,
+      "fails": [
+        "missing \"6 substitutes\""
+      ],
+      "answer": "I can't share other players' private details such as phone numbers, e-mail addresses or wallets. You can see what a player shares on their profile."
+    },
+    {
+      "id": "holdout151-12",
+      "cat": "holdout151",
+      "ok": false,
+      "fails": [
+        "tool my_matches not called (got live_score)"
+      ],
+      "answer": "Delhi Smashers v Yamuna Blockers: sets 1–1, current set 19–17. 2 live matches in all."
+    },
+    {
+      "id": "holdout155-06",
+      "cat": "holdout155",
+      "ok": false,
+      "fails": [
+        "history lost \"8-6 7-5 9-7 6-4 8-6\"",
+        "audit lost \"8-6 7-5 9-7 6-4 8-6\""
+      ],
+      "answer": "Your last 5 results: Delhi Smashers 3–1 Yamuna Blockers (voided by an admin – does not count); Delhi Smashers 3–0 Yamuna Blockers (disputed – rejected by the ot"
+    },
+    {
+      "id": "holdout157-04",
+      "cat": "holdout157",
+      "ok": false,
+      "fails": [
+        "history: not masked (87654321~0 show my matches)",
+        "history keeps \"87654321\"",
+        "audit: not masked (87654321~0 show my matches)",
+        "audit keeps \"87654321\""
+      ],
+      "answer": "Here are your matches (5)."
+    },
+    {
+      "id": "holdout158-03",
+      "cat": "holdout158",
+      "ok": false,
+      "fails": [
+        "missing \"आप किसकी बात\""
+      ],
+      "answer": "प्रोफ़ाइल > मेरी टीमें > नई टीम। आप कप्तान बन जाते हैं। खिलाड़ियों को उनके मोबाइल नंबर से जोड़ें – सिर्फ़ VolleyLive पर रजिस्टर्ड लोग जोड़े जा सकते हैं, और उन्ह"
+    },
+    {
+      "id": "holdout158-07",
+      "cat": "holdout158",
+      "ok": false,
+      "fails": [
+        "missing \"कप्तान होता है\""
+      ],
+      "answer": "मैच के बाद दूसरी टीम का कप्तान नतीजे की पुष्टि करता है (या समस्या बताता है); ठुकराया गया नतीजा विवादित होता है और एडमिन उसकी समीक्षा करता है। अगर मैच किसी भी टी"
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import { matchDate } from '../core/antifraud';
 import { dataLabel, formatDateT, formatWhenT, matchStatusLabel } from '../i18n/format';
 import { colors, font } from '../theme';
 import { Card, LiveBadge, Row, TeamDot } from './ui';
+import { placeLabelT } from '../i18n/format';
 
 /** Short date-time for cards (follows the chosen language; English output unchanged). */
 export function formatWhen(ts?: number | null) {
@@ -65,7 +66,7 @@ export function MatchCard({ m, extra }: { m: Match; extra?: string }) {
         <Row style={{ marginTop: 6 }}>
           <Ionicons name="location" size={14} color={colors.muted} />
           <Text style={[font.small, { color: colors.muted, marginLeft: 4 }]} numberOfLines={1}>
-            {m.location.name}
+            {placeLabelT(m.location)}
           </Text>
         </Row>
       )}
@@ -108,7 +109,7 @@ export function LiveMatchCard({ m, width = 272 }: { m: Match; width?: number }) 
       <Row style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.hairline }}>
         <Ionicons name="location-outline" size={14} color={colors.muted} />
         <Text style={[font.small, { color: colors.muted, marginLeft: 4, flex: 1 }]} numberOfLines={1}>
-          {m.location?.name ?? ''}
+          {placeLabelT(m.location)}
         </Text>
         <Text style={{ color: colors.primaryText, fontWeight: '700', fontSize: 14 }}>{t('home.watch')}</Text>
       </Row>

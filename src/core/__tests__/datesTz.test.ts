@@ -41,7 +41,8 @@ function tzOffset(ts: number, timeZone: string) {
   const name = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' }).formatToParts(new Date(ts)).find((p) => p.type === 'timeZoneName')!.value;
   const m = name.match(/GMT([+-])(\d{2}):?(\d{2})?/);
   if (!m) return 0;
-  return -(m[1] === '+' ? 1 : -1) * (Number(m[2]) * 60 + Number(m[3] ?? 0));
+  // 1.5.8: newer ICU names UTC "GMT+00:00" (was "GMT"); `|| 0` keeps -0 out (Object.is(-0, 0) is false)
+  return -(m[1] === '+' ? 1 : -1) * (Number(m[2]) * 60 + Number(m[3] ?? 0)) || 0;
 }
 
 describe.each(ZONES)('local dates in %s', (zone) => {
