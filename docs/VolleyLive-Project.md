@@ -233,8 +233,12 @@ More: [Security and privacy](guide/09-security-privacy.md).
 | **F159-2** | On the **Firebase** backend, a 7th player accepting an invite joins as a 7th starter instead of a substitute. | Only Firebase builds (the real build uses the API server). |
 | **F159-3** | The packaging safety check misses some unusual ways of writing a port number in a file. | Developer tooling only. |
 | **F159-4** | The admin **Approve** button acts on one tap, without the "are you sure?" that Void and Repair have. | Admins. |
-| F159-5 – F159-7 | **Not found in the Tester's reports** available to us – the 1.5.9 report lists F159-1 to F159-4 only. Small notes from the same pass: the repair card's "Why:" line is blank, and the Groups "Q" mark shows before any match is played. | – |
+| **F159-5** | Sending a batch of invites in **one** request can get stuck repeating "too many requests" (429) answers. | Only scripts / other API clients – not the app. |
+| **F159-6** | On the **Firebase** backend only, someone accepting an invite into a team that is already full can join as a 7th starter. The API server and demo mode handle it correctly (they make the player a substitute). | Only Firebase builds. |
+| **F159-7** | The packaging safety check (mkzip) misses a few more ways of writing a port number. | Developer tooling only. |
 | V1426-3 | Firebase rules can't enforce the tournament fixture lock (too many look-ups per request); the API server does. | Only Firebase builds. |
+
+> F159-5 to F159-7 come from the Tester's final 1.5.9 message. They describe the same kinds of problem as F159-1 to F159-3 in the Tester's written report, so they may be the same issues under new numbers. Small cosmetic notes from the same pass: the repair card's "Why:" line is blank, and the Groups "Q" mark shows before any match is played.
 
 ---
 
@@ -258,7 +262,7 @@ India's data-protection law (DPDP) and the Play data-safety form. See [Roadmap](
 
 ## 11. Roadmap (what's next)
 
-1. **Fix the small bugs** F159-1 to F159-4 (+ the two cosmetic notes).
+1. **Fix the small bugs** F159-1 to F159-7 (+ the two cosmetic notes).
 2. **Launch prep**: decisions above, production server, Play Store internal testing, then public release.
 3. **In-app account deletion** button.
 4. **Real AI for Ask** once a provider is chosen and tested.
